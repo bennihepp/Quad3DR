@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  
+    <macro name="inertia_sphere" params="mass radius">
+        <inertia ixx="${(2/5) * mass* radius * radius}" ixy="0.0" ixz="0.0"
+                 iyy="${(2/5) * mass* radius * radius}" iyz="0.0"
+                 izz="${(2/5) * mass* radius * radius}" />
+    </macro>
+
+    <macro name="inertial_sphere" params="mass radius">
+      <inertial>
+        <mass value="${mass}" />
+        <origin xyz="0 0 0" />
+        <xacro:inertia_sphere mass="${mass}" radius="${radius}" />
+      </inertial>
+    </macro>
+
+    <macro name="inertia_cuboid" params="mass x_length y_length z_length">
+        <inertia ixx="${(1/12) * mass * (y_length*y_length + z_length*z_length)}" ixy="0.0" ixz="0.0"
+                 iyy="${(1/12) * mass * (x_length*x_length + z_length*z_length)}" iyz="0.0"
+                 izz="${(1/12) * mass * (x_length*x_length + y_length*y_length)}" />
+    </macro>
+
+    <macro name="inertial_cuboid" params="mass x_length y_length z_length">
+      <inertial>
+        <mass value="${mass}" />
+        <origin xyz="0 0 0" />
+        <xacro:inertia_cuboid mass="${mass}" x_length="${x_length}" y_length="${y_length}" z_length="${z_length}" />
+      </inertial>
+    </macro>
+
+    <macro name="inertia_cylinder" params="mass height radius">
+        <inertia ixx="${(1/12) * mass* (3*radius*radius + height*height)}" ixy="0.0" ixz="0.0"
+                 iyy="${(1/12) * mass* radius*radius}" iyz="0.0"
+                 izz="${(1/2) * mass* radius*radius}" />
+    </macro>
+
+    <macro name="inertial_cylinder" params="mass height radius">
+      <inertial>
+        <mass value="${mass}" />
+        <origin xyz="0 0 0" />
+        <xacro:inertia_cylinder mass="${mass}" height="${height}" radius="${radius}" />
+      </inertial>
+    </macro>
+
+</robot>

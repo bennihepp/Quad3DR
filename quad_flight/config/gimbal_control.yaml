@@ -1,0 +1,15 @@
+quadrotor:
+  # Publish all joint states -----------------------------------
+  joint_state_controller:
+    type: joint_state_controller/JointStateController
+    publish_rate: 50
+  
+  # Position Controllers ---------------------------------------
+  gimbal_yaw_controller:
+    type: effort_controllers/JointPositionController
+    joint: gimbal_yaw_joint
+    pid: {p: 10, i: 0.01, d: 0}
+  gimbal_pitch_controller:
+    type: effort_controllers/JointPositionController
+    joint: gimbal_pitch_joint
+    pid: {p: 1, i: 0.0, d: 0.0}

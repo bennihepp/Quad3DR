@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+
+<launch>
+  <include file="$(find quad_flight)/launch/velocity_teleop.launch" />
+  <include file="$(find quad_flight)/launch/position_controller.launch" />
+</launch>

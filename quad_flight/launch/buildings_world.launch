@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+
+<launch>
+  <include file="$(find quad_flight)/launch/start_world.launch">
+   <arg name="world" value="$(find quad_flight)/worlds/buildings.world"/> 
+  </include>
+
+</launch>

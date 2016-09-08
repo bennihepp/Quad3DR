@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+
+<launch>
+  <node name="position_controller" pkg="quad_flight" type="position_controller" output="screen">
+  </node>
+</launch>

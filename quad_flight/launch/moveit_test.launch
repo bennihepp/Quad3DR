@@ -1,0 +1,9 @@
+<launch>
+
+  <include file="$(find pr2_moveit_config)/launch/demo.launch"/>
+
+  <node name="moveit_test" pkg="quad3dr_simulator" type="moveit_test.py" respawn="false" output="screen">
+  </node>
+
+</launch>
+

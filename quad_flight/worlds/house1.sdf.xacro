@@ -1,0 +1,51 @@
+<?xml version="1.0" ?>
+<gazebo version="1.0" xmlns:xacro="http://www.ros.org/wiki/xacro">
+<xacro:macro name="house1" params="name:='House' pose">
+
+  <model name='${name}'>
+    <pose>${pose}</pose>
+    <static>1</static>
+    <link name='link'>
+      <collision name='collision'>
+        <geometry>
+          <mesh>
+            <uri>model://house_1/meshes/house_1.dae</uri>
+          </mesh>
+        </geometry>
+        <max_contacts>10</max_contacts>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <bounce/>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <visual name='visual'>
+        <geometry>
+          <mesh>
+            <uri>model://house_1/meshes/house_1.dae</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <uri>model://house_1/materials/scripts</uri>
+            <uri>model://house_1/materials/textures</uri>
+            <name>House_1/Diffuse</name>
+          </script>
+          <shader type='normal_map_object_space'>
+            <normal_map>House_1_Normal.png</normal_map>
+          </shader>
+        </material>
+      </visual>
+      <self_collide>0</self_collide>
+      <kinematic>0</kinematic>
+      <gravity>1</gravity>
+    </link>
+    <pose>1 -1 0 0 -0 0</pose>
+  </model>
+
+</xacro:macro>
+</gazebo>

@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+
+<robot name="quadrotor" xmlns:xacro="http://ros.org/wiki/xacro">
+
+    <!-- Included URDF Files -->
+    <xacro:include filename="$(find quad_flight)/urdf/quadrotor_base.urdf.xacro" />
+    
+    <!-- Instantiate quadrotor_base_macro once (has no parameters atm) -->
+    <xacro:quadrotor_base_macro />
+
+</robot>
+  

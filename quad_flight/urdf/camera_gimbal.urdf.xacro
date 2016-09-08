@@ -1,0 +1,199 @@
+<?xml version="1.0"?>
+
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  
+  <xacro:include filename="$(find quad_flight)/urdf/utils.xacro" />
+
+  <xacro:property name="PI" value="3.1415926535897931"/>
+
+  <xacro:property name="effort_limit" value="0.5" />
+  <xacro:property name="velocity_limit" value="0.1" />
+  <xacro:property name="damping" value="0.3" />
+  <xacro:property name="friction" value="0.0" />
+  <xacro:property name="gimbal_yaw_min" value="-30" />
+  <xacro:property name="gimbal_yaw_max" value="+30" />
+  <xacro:property name="gimbal_pitch_min" value="-30" />
+  <xacro:property name="gimbal_pitch_max" value="+30" />
+
+  <xacro:property name="mass_base" value="5" />
+  <xacro:property name="mass_gimbal_arm" value="3" />
+  <xacro:property name="mass_gimbal_yaw" value="2" />
+  <xacro:property name="mass_pad" value="1" />
+  <xacro:property name="base_width" value=".05" />
+  <xacro:property name="base_depth" value=".02" />
+  <xacro:property name="base_height" value=".05" />
+  <xacro:property name="gimbal_arm_width" value="0.01" />
+  <xacro:property name="gimbal_arm_length" value="0.05" />
+  <xacro:property name="yaw_joint_width" value="${gimbal_arm_width}" />
+  <xacro:property name="yaw_joint_length" value="0.02" />
+  <xacro:property name="pad_width" value="0.02" />
+  <xacro:property name="pad_height" value="0.02" />
+  <xacro:property name="pad_depth" value="0.005" />
+
+  <xacro:macro name="camera_gimbal" params="parent gimbal_yaw_min gimbal_yaw_max gimbal_pitch_min gimbal_pitch_max xyz">
+
+    <xacro:include filename="$(find quad_flight)/urdf/materials.xacro" />
+
+    <joint name="gimbal_base_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="gimbal_base"/>
+      <origin xyz="${xyz}"/>
+      <axis xyz="0 0 1" />
+    </joint>
+
+    <link name="gimbal_base">
+      <!-- Base -->
+      <!-- <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="${base_depth} ${base_width} ${base_height}"/>
+        </geometry>
+      </collision> -->
+
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="${base_depth} ${base_width} ${base_height}"/>
+        </geometry>
+        <material name="orange"/>
+      </visual>
+
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="${mass_base}"/>
+        <xacro:inertia_cuboid mass="${mass_base}" x_length="${base_depth}" y_length="${base_width}" z_length="${base_height}" />
+      </inertial>
+
+      <!-- Cylinder -->
+      <!-- <collision>
+        <origin xyz="${base_depth/2 + gimbal_arm_length/2} 0 ${base_height/2 - gimbal_arm_width/2}" rpy="0 0 0"/>
+        <geometry>
+          <box size="${gimbal_arm_length} ${gimbal_arm_width} ${gimbal_arm_width}" />
+        </geometry>
+      </collision> -->
+
+      <visual>
+        <origin xyz="${base_depth/2 + gimbal_arm_length/2} 0 ${base_height/2 - gimbal_arm_width/2}" rpy="0 0 0"/>
+        <geometry>
+          <box size="${gimbal_arm_length} ${gimbal_arm_width} ${gimbal_arm_width}" />
+        </geometry>
+        <material name="red"/>
+      </visual>
+
+      <inertial>
+        <origin xyz="${base_depth/2 + gimbal_arm_length/2} 0 ${base_height/2 - gimbal_arm_width/2}" rpy="0 0 0"/>
+        <mass value="${mass_gimbal_arm}"/>
+        <xacro:inertia_cuboid mass="${mass_gimbal_arm}" x_length="${gimbal_arm_length}" y_length="${gimbal_arm_width}" z_length="${gimbal_arm_width}" />
+      </inertial>
+    </link>
+
+    <joint name="gimbal_yaw_joint" type="revolute">
+      <parent link="gimbal_base"/>
+      <child link="gimbal_yaw"/>
+      <origin xyz="${base_depth/2 + gimbal_arm_length - yaw_joint_width/2} 0 ${base_height/2 - gimbal_arm_width}"/>
+      <axis xyz="0 0 1"/>
+      <dynamics damping="${damping}" friction="${friction}"/>
+      <limit effort="${effort_limit}" velocity="${velocity_limit}" lower="${-90 / 180. * PI}" upper="${+90 / 180. * PI}" />
+      <!-- <limit effort="${effort_limit}" velocity="${velocity_limit}" lower="${gimbal_yaw_min / 180. * PI}" upper="${gimbal_yaw_max / 180. * PI}" /> -->
+    </joint>
+
+    <link name="gimbal_yaw">
+      <inertial>
+        <origin xyz="0 0 ${-yaw_joint_length/2}" rpy="0 0 ${0.5*PI}"/>
+        <mass value="${mass_gimbal_yaw}"/>
+        <!-- <xacro:inertia_sphere mass="${mass_gimbal_yaw}" radius="${gimbal_arm_width}" /> -->
+        <!-- <xacro:inertia_cuboid mass="${mass_gimbal_yaw}" x_length="${pad_width}" y_length="${pad_depth}" z_length="${pad_height}" /> -->
+        <xacro:inertia_cuboid mass="${mass_gimbal_yaw}" x_length="${yaw_joint_width}" y_length="${yaw_joint_width}" z_length="${yaw_joint_length}" />
+      </inertial>
+      <!-- Only for checking the joint -->
+      <visual>
+        <origin xyz="0 0 ${-yaw_joint_length/2}" rpy="0 0 ${0.5*PI}"/>
+        <geometry>
+          <box size="${yaw_joint_width} ${yaw_joint_width} ${yaw_joint_length}" />
+        </geometry>
+        <material name="black"/>
+      </visual>
+    </link>
+
+    <joint name="gimbal_pitch_joint" type="fixed">
+      <parent link="gimbal_yaw"/>
+      <child link="gimbal_pad"/>
+      <!-- <origin xyz="0 0 ${-pad_height/2}"/> -->
+      <origin xyz="0 0 ${-yaw_joint_length}" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+      <!-- <dynamics damping="${damping}" friction="${friction}"/> -->
+      <!-- <limit effort="${effort_limit}" velocity="${velocity_limit}" lower="0" upper="0" /> -->
+      <!-- <limit effort="${effort_limit}" velocity="${velocity_limit}" lower="${gimbal_pitch_min / 180. * PI}" upper="${gimbal_pitch_max / 180. * PI}" /> -->
+    </joint>
+
+    <link name="gimbal_pad">
+      <!-- <collision>
+        <origin xyz="0 0 ${-pad_height/2}" rpy="0 0 0"/>
+        <geometry>
+          <box size="${pad_depth} ${pad_width} ${pad_height}"/>
+        </geometry>
+      </collision> -->
+
+      <visual>
+        <origin xyz="0 0 ${-pad_height/2}" rpy="0 0 0"/>
+        <geometry>
+          <box size="${pad_depth} ${pad_width} ${pad_height}"/>
+        </geometry>
+        <material name="black"/>
+      </visual>
+
+      <inertial>
+        <origin xyz="0 0 ${-pad_height/2}" rpy="0 0 0"/>
+        <mass value="${mass_pad}"/>
+        <xacro:inertia_cuboid mass="${mass_pad}" x_length="${pad_depth}" y_length="${pad_width}" z_length="${pad_height}" />
+      </inertial>
+    </link>
+
+    <transmission name="gimbal_pitch_tran">
+      <type>transmission_interface/SimpleTransmission</type>
+      <joint name="gimbal_pitch_joint">
+        <hardwareInterface>EffortJointInterface</hardwareInterface>
+      </joint>
+      <actuator name="gimbal_pitch_motor">
+        <hardwareInterface>EffortJointInterface</hardwareInterface>
+        <mechanicalReduction>1</mechanicalReduction>
+      </actuator>
+    </transmission>
+
+    <transmission name="gimbal_yaw_tran">
+      <type>transmission_interface/SimpleTransmission</type>
+      <joint name="gimbal_yaw_joint">
+        <hardwareInterface>EffortJointInterface</hardwareInterface>
+      </joint>
+      <actuator name="gimbal_yaw_motor">
+        <hardwareInterface>EffortJointInterface</hardwareInterface>
+        <mechanicalReduction>1</mechanicalReduction>
+      </actuator>
+    </transmission>
+
+    <gazebo>
+      <plugin name="gazebo_ros_control" filename="libgazebo_ros_control.so">
+        <robotNamespace>/quadrotor</robotNamespace>
+        <robotSimType>gazebo_ros_control/DefaultRobotHWSim</robotSimType>
+      </plugin>
+    </gazebo>
+
+    <gazebo reference="gimbal_base">
+      <material>Gazebo/Orange</material>
+    </gazebo>
+
+    <gazebo reference="gimbal_pad">
+      <mu1>0.2</mu1>
+      <mu2>0.2</mu2>
+      <material>Gazebo/Black</material>
+    </gazebo>
+
+    <gazebo reference="gimbal_yaw">
+      <mu1>0.2</mu1>
+      <mu2>0.2</mu2>
+      <material>Gazebo/Orange</material>
+    </gazebo>
+
+  </xacro:macro>
+
+</robot>

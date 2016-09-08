@@ -1,0 +1,61 @@
+<?xml version="1.0"?>
+
+<robot name="quadrotor" xmlns:xacro="http://ros.org/wiki/xacro">
+
+    <!-- <link name="world"/>
+
+    <joint name="fixed" type="fixed">
+        <parent link="world"/>
+        <child link="base_link"/>
+    </joint> -->
+
+    <link name="base_link">
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <mass value="10" />
+        <xacro:inertia_cuboid mass="10" x_length=".3" y_length=".3" z_length=".3" />
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <box size=".3 .3 .3"/>
+        </geometry>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <box size=".3 .3 .3"/>
+        </geometry>
+      </collision>
+    </link>
+    <gazebo reference="base_link">
+      <material>Gazebo/Blue</material>
+      <mu1>1.1</mu1>
+      <mu2>1.1</mu2>
+    </gazebo>
+
+    <!-- <joint name="gimbal_pad_joint" type="revolute">
+      <parent link="gimbal_pad"/>
+      <child link="RGBD_link"/>
+      <origin xyz="0.065 0 -0.02"/>
+      <axis xyz="0 0 1" />
+      <dynamics damping="0" friction="0"/>
+      <limit effort="0" velocity="0" lower="0" upper="0" />
+    </joint> -->
+
+    <!-- Kinect -->
+    <!-- <xacro:include filename="$(find quad_flight)/urdf/depth_camera.urdf.xacro" />
+    <xacro:kinect_camera name="RGBD" /> -->
+
+    <!-- Gimbal -->
+    <xacro:include filename="$(find quad_flight)/urdf/camera_gimbal.urdf.xacro" />
+    <xacro:camera_gimbal parent="base_link" gimbal_yaw_min="-100" gimbal_yaw_max="+100" gimbal_pitch_min="-100" gimbal_pitch_max="+100" xyz="-0.05 0 0.2"/>
+    <!-- <xacro:include filename="$(find quad_flight)/urdf/camera_gimbal2.urdf.xacro" /> -->
+    <!-- <xacro:camera_gimbal2 parent="base_link" /> -->
+
+    <!-- Instantiate quadrotor_base_macro once (has no parameters atm) -->
+    <!-- <xacro:include filename="$(find quad_flight)/urdf/quadrotor_base.urdf.xacro" />
+    <xacro:quadrotor_base_macro /> -->
+
+</robot>
+  

@@ -1,0 +1,154 @@
+<?xml version="1.0"?>
+<robot name="quadrotor" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:property name="effort_limit" value="100.0" />
+  <xacro:property name="velocity_limit" value="0.5" />
+  <xacro:property name="damping" value="0.2" />
+  <xacro:property name="friction" value="0.0" />
+  <xacro:property name="gimbal_yaw_min" value="-30" />
+  <xacro:property name="gimbal_yaw_max" value="+30" />
+  <xacro:property name="gimbal_pitch_min" value="-30" />
+  <xacro:property name="gimbal_pitch_max" value="+30" />
+
+  <xacro:property name="PI" value="3.1415926535897931"/>
+  <xacro:property name="mass_base" value="2" />
+  <xacro:property name="mass_gimbal" value="0.1" />
+  <xacro:property name="mass_camera" value="0.3" />
+  <xacro:property name="base_width" value="0.3" />
+  <xacro:property name="base_height" value=".3" />
+  <xacro:property name="gimbal_arm_radius" value="0.05" />
+  <xacro:property name="gimbal_arm_length" value="0.2" />
+  <xacro:property name="camera_width" value="0.3" />
+  <xacro:property name="camera_height" value="0.1" />
+  <xacro:property name="camera_depth" value="0.1" />
+  <xacro:property name="camera_link" value="0.05" />
+
+  <xacro:include filename="$(find quad_flight)/urdf/quadrotor_test.gazebo" />
+  <xacro:include filename="$(find quad_flight)/urdf/materials.xacro" />
+
+  <link name="gimbal_base">
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+    	<box size="${base_width} ${base_width} ${base_height}"/>
+      </geometry>
+    </collision>
+
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+    	<box size="${base_width} ${base_width} ${base_height}"/>
+      </geometry>
+      <material name="orange"/>
+    </visual>
+
+    <collision>
+      <origin xyz="0 ${base_width/2 + gimbal_arm_length/2} ${base_width/2-gimbal_arm_radius}" rpy="${0.5*PI} 0 0"/>
+      <geometry>
+    	<cylinder radius="${gimbal_arm_radius}" length="${gimbal_arm_length}" />
+      </geometry>
+    </collision>
+
+    <visual>
+      <origin xyz="0 ${base_width/2 + gimbal_arm_length/2} ${base_width/2-gimbal_arm_radius}" rpy="${0.5*PI} 0 0"/>
+      <geometry>
+    	<cylinder radius="${gimbal_arm_radius}" length="${gimbal_arm_length}" />
+      </geometry>
+      <material name="red"/>
+    </visual>
+
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="${mass_base}"/>
+      <inertia
+      ixx="${mass_base / 12.0 * (base_width*base_width + base_height*base_height)}" ixy="0.0" ixz="0.0"
+      iyy="${mass_base / 12.0 * (base_height*base_height + base_width*base_width)}" iyz="0.0"
+      izz="${mass_base / 12.0 * (base_width*base_width + base_width*base_width)}"/>
+    </inertial>
+  </link>
+
+  <joint name="gimbal_yaw_joint" type="revolute">
+    <parent link="gimbal_base"/>
+    <child link="gimbal_yaw"/>
+    <origin xyz="0 ${base_width/2 + gimbal_arm_length} ${base_width/2-gimbal_arm_radius}"/>
+    <axis xyz="0 0 1"/>
+    <dynamics damping="${damping}" friction="${friction}"/>
+    <limit effort="${effort_limit}" velocity="${velocity_limit}" lower="${gimbal_yaw_min/ 180. * PI}" upper="${gimbal_yaw_max/ 180. * PI}" />
+  </joint>
+
+  <link name="gimbal_yaw">
+    <inertial>
+      <origin xyz="0 ${camera_width/2} 0" rpy="${0.5*PI} 0 0"/>
+      <mass value="${mass_gimbal}"/>
+      <inertia
+        ixx="${mass_gimbal / 12.0 * (camera_width*camera_width + camera_height*camera_height)}" ixy="0.0" ixz="0.0"
+        iyy="${mass_gimbal / 12.0 * (camera_height*camera_height + camera_width*camera_width)}" iyz="0.0"
+        izz="${mass_gimbal / 12.0 * (camera_width*camera_width + camera_width*camera_width)}"/>
+    </inertial>
+    <!-- <visual>
+      <origin xyz="0.3 0 ${-gimbal_arm_radius-camera_height/2}" rpy="${0.5*PI} 0 0"/>
+      <geometry>
+    	<box size="${camera_width} ${camera_depth} ${camera_height}"/>
+      </geometry>
+      <material name="black"/>
+    </visual> -->
+  </link>
+
+  <joint name="gimbal_pitch_joint" type="revolute">
+    <parent link="gimbal_yaw"/>
+    <child link="gimbal_pitch"/>
+    <origin xyz="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <dynamics damping="${damping}" friction="${friction}"/>
+    <limit effort="${effort_limit}" velocity="${velocity_limit}" lower="${gimbal_pitch_min/ 180. * PI}" upper="${gimbal_pitch_max/ 180. * PI}" />
+  </joint>
+
+  <link name="gimbal_pitch">
+    <collision>
+      <origin xyz="0 0 0" rpy="${0.5*PI} 0 0"/>
+      <geometry>
+    	<box size="${camera_width} ${camera_depth} ${camera_height}"/>
+      </geometry>
+    </collision>
+
+    <visual>
+      <origin xyz="0 0 0" rpy="${0.5*PI} 0 0"/>
+      <geometry>
+    	<box size="${camera_width} ${camera_depth} ${camera_height}"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+
+    <inertial>
+      <origin xyz="0 0 0" rpy="${0.5*PI} 0 0"/>
+      <mass value="${mass_gimbal}"/>
+      <inertia
+      ixx="${mass_gimbal / 12.0 * (camera_width*camera_width + camera_height*camera_height)}" ixy="0.0" ixz="0.0"
+      iyy="${mass_gimbal / 12.0 * (camera_height*camera_height + camera_width*camera_width)}" iyz="0.0"
+      izz="${mass_gimbal / 12.0 * (camera_width*camera_width + camera_width*camera_width)}"/>
+    </inertial>
+  </link>
+
+  <transmission name="tran1">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="gimbal_pitch_joint">
+      <hardwareInterface>EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="motor1">
+      <hardwareInterface>EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+
+  <transmission name="tran2">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="gimbal_yaw_joint">
+      <hardwareInterface>EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="motor2">
+      <hardwareInterface>EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+
+</robot>
