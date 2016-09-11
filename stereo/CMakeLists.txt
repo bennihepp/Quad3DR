@@ -52,7 +52,6 @@ add_executable(sparse_stereo_test
     src/utilities.cpp
     src/stereo_calibration.cpp
 )
-
 target_link_libraries(sparse_stereo_test
     ${OpenCV_LIBRARIES}
 )
@@ -71,7 +70,6 @@ if("${WITH_ZED}")
       ../video/src/video_source.cpp
       ../video/src/video_source_zed.cpp
   )
-
   target_link_libraries(sparse_stereo_zed
       ${OpenCV_LIBRARIES}
       ${ZED_LIBRARIES}
@@ -81,11 +79,24 @@ if("${WITH_ZED}")
   add_executable(stereo_calibration_tool_zed
       src/stereo_calibration_tool_zed.cpp
       src/utilities.cpp
+      src/stereo_calibration.cpp
       ../video/src/video_source.cpp
       ../video/src/video_source_zed.cpp
   )
-
   target_link_libraries(stereo_calibration_tool_zed
+      ${OpenCV_LIBRARIES}
+      ${ZED_LIBRARIES}
+      ${CUDA_CUDA_LIBRARY} ${CUDA_CUDART_LIBRARY} ${CUDA_npp_LIBRARY}
+  )
+
+  add_executable(stereo_capture_zed
+      src/stereo_capture_zed.cpp
+      src/utilities.cpp
+      src/stereo_calibration.cpp
+      ../video/src/video_source.cpp
+      ../video/src/video_source_zed.cpp
+  )
+  target_link_libraries(stereo_capture_zed
       ${OpenCV_LIBRARIES}
       ${ZED_LIBRARIES}
       ${CUDA_CUDA_LIBRARY} ${CUDA_CUDART_LIBRARY} ${CUDA_npp_LIBRARY}

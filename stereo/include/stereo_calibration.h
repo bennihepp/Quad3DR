@@ -29,8 +29,12 @@ struct StereoCameraCalibration
   StereoCameraCalibration();
   virtual ~StereoCameraCalibration();
 
+  void computeProjectionMatrices();
+
   CameraCalibration left;
   CameraCalibration right;
+
+  cv::Size image_size;
 
   // Matrices as returned from cv::stereoCalibrate
   cv::Mat rotation;

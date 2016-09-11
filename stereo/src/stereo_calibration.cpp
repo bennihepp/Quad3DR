@@ -23,17 +23,35 @@ CameraCalibration::~CameraCalibration()
 }
 
 StereoCameraCalibration::StereoCameraCalibration()
-: rotation(cv::Mat::eye(3, 3, CV_64FC1)),
+: image_size(),
+  rotation(cv::Mat::eye(3, 3, CV_64FC1)),
   translation(cv::Mat::zeros(3, 1, CV_64FC1)),
   essential_matrix(cv::Mat::zeros(3, 3, CV_64FC1)),
   fundamental_matrix(cv::Mat::zeros(3, 3, CV_64FC1)),
-  projection_matrix_left(cv::Mat::eye(3, 4, CV_64FC1)),
-  projection_matrix_right(cv::Mat::eye(3, 4, CV_64FC1))
+  projection_matrix_left(),
+  projection_matrix_right()
 {
 }
 
 StereoCameraCalibration::~StereoCameraCalibration()
 {
+}
+
+void StereoCameraCalibration::computeProjectionMatrices()
+{
+  cv::Mat R1, R2, Q;
+  cv::stereoRectify(
+      left.camera_matrix, left.dist_coeffs,
+      right.camera_matrix, right.dist_coeffs,
+      image_size,
+      rotation, translation,
+      R1, R2,
+      projection_matrix_left, projection_matrix_right,
+      Q
+  );
+  // For debugging
+  std::cout << "projection_matrix_left: " << projection_matrix_left << std::endl;
+  std::cout << "projection_matrix_right: " << projection_matrix_right << std::endl;
 }
 
 } /* namespace stereo */
