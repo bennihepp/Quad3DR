@@ -65,14 +65,22 @@ cv::Mat Utilities::convertToGrayscale(cv::InputArray img)
 cv::Mat Utilities::drawKeypoints(cv::InputArray img, const std::vector<cv::KeyPoint> &keypoints)
 {
   cv::Mat img_with_keypoints;
+#ifdef OPENCV_2_4
+  cv::drawKeypoints(img.getMat(), keypoints, img_with_keypoints, cv::Scalar::all(-1), cv::DrawMatchesFlags::DEFAULT);
+#else
   cv::drawKeypoints(img, keypoints, img_with_keypoints, cv::Scalar::all(-1), cv::DrawMatchesFlags::DEFAULT);
+#endif
   return img_with_keypoints;
 }
 
 cv::Mat Utilities::drawFeatureMatches(cv::InputArray left_img, const std::vector<cv::KeyPoint> &left_keypoints, cv::InputArray right_img, const std::vector<cv::KeyPoint> &right_keypoints, const std::vector<cv::DMatch> &matches)
 {
   cv::Mat match_img;
+#ifdef OPENCV_2_4
+  cv::drawMatches(left_img.getMat(), left_keypoints, right_img.getMat(), right_keypoints, matches, match_img);
+#else
   cv::drawMatches(left_img, left_keypoints, right_img, right_keypoints, matches, match_img);
+#endif
   return match_img;
 }
 

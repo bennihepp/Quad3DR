@@ -4,12 +4,12 @@
 #include <time.h>
 
 #include <opencv2/core.hpp>
-#include <opencv2/core/utility.hpp>
+//#include <opencv2/core/utility.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/calib3d.hpp>
-#include <opencv2/imgcodecs.hpp>
-#include <opencv2/videoio.hpp>
-#include <opencv2/highgui.hpp>
+//#include <opencv2/imgcodecs.hpp>
+//#include <opencv2/videoio.hpp>
+//#include <opencv2/highgui.hpp>
 
 #include <tclap/CmdLine.h>
 #include <video_source_zed.h>
@@ -180,7 +180,11 @@ static void calculateChessboardCorners(
     break;
 
   default:
+#if OPENCV_2_4
+    CV_Error(CV_StsBadArg, "Unknown pattern type\n");
+#else
     CV_Error(cv::Error::StsBadArg, "Unknown pattern type\n");
+#endif
   }
 }
 
@@ -376,6 +380,18 @@ static bool calibrateStereoCamera(
   object_points.resize(image_points_left.size(), object_points[0]);
 
   cv::TermCriteria term_criteria = cv::TermCriteria(cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 30, 1e-6);
+#if OPENCV_2_4
+  total_avg_err = cv::stereoCalibrate(
+      object_points, image_points_left, image_points_right,
+      camera_matrix_left, dist_coeffs_left,
+      camera_matrix_right, dist_coeffs_right,
+      image_size,
+      rotation, translation,
+      essential_matrix, fundamental_matrix,
+      term_criteria,
+      flags | CV_CALIB_FIX_INTRINSIC
+  );
+#else
   total_avg_err = cv::stereoCalibrate(
       object_points, image_points_left, image_points_right,
       camera_matrix_left, dist_coeffs_left,
@@ -386,6 +402,7 @@ static bool calibrateStereoCamera(
       flags | CV_CALIB_FIX_INTRINSIC,
       term_criteria
   );
+#endif
 
   bool ok = cv::checkRange(rotation) && cv::checkRange(translation)
     && cv::checkRange(essential_matrix) && cv::checkRange(fundamental_matrix);

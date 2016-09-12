@@ -4,9 +4,9 @@ include("cmake/CheckC11.cmake")
 set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/Modules/;${CMAKE_MODULE_PATH}")
 
 set(WITH_ZED True CACHE BOOL "Use ZED SDK")
-set(OPENCV_VERSION "3.1" CACHE STRING "OpenCV version")
+set(USE_OPENCV_VERSION "3.1" CACHE STRING "OpenCV version")
 
-find_package(OpenCV ${OPENCV_VERSION} REQUIRED)
+find_package(OpenCV ${USE_OPENCV_VERSION} REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(TCLAP REQUIRED)
 
@@ -23,7 +23,7 @@ if("${WITH_ZED}")
     SET(ZED_FOUND True)
     SET(OPENCV_DIR $ENV{OPENCV_DIR})
     SET(Eigen_INCLUDE_DIRS $ENV{EIGEN_DIR})
-    find_package(OpenCV ${OPENCV_VERSION})
+    find_package(OpenCV ${USE_OPENCV_VERSION})
   else() # Linux
     find_package(ZED 1.0 REQUIRED)
   endif()
@@ -39,6 +39,20 @@ if("${WITH_ZED}")
   find_package(CUDA REQUIRED)
 endif()
 
+# Generate OpenCV preprocessor macro
+if("${OpenCV_VERSION_MAJOR}" EQUAL "3")
+    add_definitions(-DOPENCV_3)
+    if ("${OpenCV_VERSION_MINOR}" EQUAL "1")
+        add_definitions(-DOPENCV_3_1)
+    else()
+        add_definitions(-DOPENCV_3_0)
+    endif()
+elseif("${OpenCV_VERSION_MAJOR}" EQUAL "2")
+    add_definitions(-DOPENCV_2)
+    if ("${OpenCV_VERSION_MINOR}" EQUAL "4")
+        add_definitions(-DOPENCV_2_4)
+    endif()
+endif()
 
 include_directories(
     include/

@@ -10,12 +10,25 @@
 #include <limits>
 #include <thread>
 #include <opencv2/features2d.hpp>
-#include <opencv2/xfeatures2d.hpp>
-#include <opencv2/sfm.hpp>
-#include <opencv2/core/cuda.hpp>
+#if OPENCV_3
+  #include <opencv2/xfeatures2d.hpp>
+  #include <opencv2/sfm.hpp>
+  #include <opencv2/core/cuda.hpp>
+#else
+  #include <opencv2/gpu/gpu.hpp>
+  #include <opencv2/gpu/gpumat.hpp>
+#endif
 
 namespace stereo
 {
+
+
+#if OPENCV_2_4
+  namespace cv_cuda = cv::gpu;
+#else
+  namespace cv_cuda = cv::cuda;
+#endif
+
 
 template <typename T, typename U>
 FeatureDetectorOpenCV<T, U>::FeatureDetectorOpenCV(const cv::Ptr<T> &detector, const cv::Ptr<U> &descriptor_computer)
@@ -51,7 +64,11 @@ void FeatureDetectorOpenCV<T, U>::detectFeatureKeypoints(
     std::vector<cv::KeyPoint> *keypoints_ptr,
     std::vector<cv::Point2d> *points_ptr) const
 {
+#if OPENCV_2_4
+  detector->detect(img.getMat(), *keypoints_ptr);
+#else
   detector->detect(img, *keypoints_ptr);
+#endif
   if (keypoints_ptr->size() > max_num_of_keypoints_)
   {
     keypoints_ptr->resize(max_num_of_keypoints_);
@@ -73,7 +90,8 @@ void FeatureDetectorOpenCV<T, U>::computeFeatureDescriptors(
     std::vector<cv::KeyPoint> *keypoints_ptr,
     cv::OutputArray descriptors) const
 {
-  descriptor_computer->compute(img, *keypoints_ptr, descriptors);
+  cv::Mat descriptors_mat = descriptors.getMat();
+  descriptor_computer->compute(img.getMat(), *keypoints_ptr, descriptors_mat);
 }
 
 template <typename T, typename U>
@@ -157,22 +175,33 @@ void FeatureDetectorOpenCVSurfCuda<T>::detectAndComputeFeatures(
       cv::OutputArray descriptors,
       std::vector<cv::Point2d> *points_ptr) const
 {
-  cv::cuda::GpuMat img_gpu;
-  cv::cuda::GpuMat mask_gpu;
-  cv::cuda::GpuMat keypoints_gpu;
-  cv::cuda::GpuMat descriptors_gpu;
+  cv_cuda::GpuMat img_gpu;
+  cv_cuda::GpuMat mask_gpu;
+  cv_cuda::GpuMat keypoints_gpu;
+  cv_cuda::GpuMat descriptors_gpu;
   Timer timer = Timer();
-  img_gpu.upload(img);
+  cv_cuda::Stream stream;
+#if OPENCV_2_4
+  stream.enqueueUpload(img.getMat(), img_gpu);
+#else
+  img_gpu.upload(img, stream);
+#endif
   timer.stopAndPrintTiming("uploading image to GPU");
   timer = Timer();
-  feature_computer_->operator()(img_gpu, mask_gpu, keypoints_gpu);
+  feature_computer_->operator()(img_gpu, mask_gpu, keypoints_gpu, stream);
   timer.stopAndPrintTiming("detecting keypoints");
   timer = Timer();
-  feature_computer_->operator()(img_gpu, mask_gpu, keypoints_gpu, descriptors_gpu, true);
+  feature_computer_->operator()(img_gpu, mask_gpu, keypoints_gpu, descriptors_gpu, true, stream);
   timer.stopAndPrintTiming("computing descriptors");
   timer = Timer();
-  feature_computer_->downloadKeypoints(keypoints_gpu, *keypoints_ptr);
-  descriptors_gpu.download(descriptors);
+  feature_computer_->downloadKeypoints(keypoints_gpu, *keypoints_ptr, stream);
+#if OPENCV_2_4
+  cv::Mat descriptors_mat = descriptors.create(descriptors_gpu.size(), descriptors_gpu.type());
+  stream.enqueueDownload(descriptors_gpu, descriptors_mat);
+#else
+  descriptors_gpu.download(descriptors, stream);
+#endif
+  stream.waitForCompletion();
   timer.stopAndPrintTiming("downloading keypoints and descriptors from GPU");
   if (points_ptr != nullptr)
   {
@@ -195,17 +224,22 @@ void FeatureDetectorOpenCVSurfCuda<T>::detectAndComputeFeatures(
     std::vector<cv::Point2d> *points_left_ptr,
     std::vector<cv::Point2d> *points_right_ptr) const
 {
-  cv::cuda::GpuMat img_left_gpu;
-  cv::cuda::GpuMat img_right_gpu;
-  cv::cuda::GpuMat mask_gpu;
-  cv::cuda::GpuMat keypoints_left_gpu;
-  cv::cuda::GpuMat keypoints_right_gpu;
-  cv::cuda::GpuMat descriptors_left_gpu;
-  cv::cuda::GpuMat descriptors_right_gpu;
+  cv_cuda::GpuMat img_left_gpu;
+  cv_cuda::GpuMat img_right_gpu;
+  cv_cuda::GpuMat mask_gpu;
+  cv_cuda::GpuMat keypoints_left_gpu;
+  cv_cuda::GpuMat keypoints_right_gpu;
+  cv_cuda::GpuMat descriptors_left_gpu;
+  cv_cuda::GpuMat descriptors_right_gpu;
+  cv_cuda::Stream stream;
   std::thread thread_left([&] ()
   {
     Timer timer = Timer();
+#if OPENCV_2_4
+    stream.enqueueUpload(img_left.getMat(), img_left_gpu);
+#else
     img_left_gpu.upload(img_left);
+#endif
     timer.stopAndPrintTiming("uploading image to GPU");
     timer = Timer();
     feature_computer_->operator()(img_left_gpu, mask_gpu, keypoints_left_gpu, descriptors_left_gpu);
@@ -215,7 +249,13 @@ void FeatureDetectorOpenCVSurfCuda<T>::detectAndComputeFeatures(
 //    timer.stopAndPrintTiming("computing descriptors");
     timer = Timer();
     feature_computer_->downloadKeypoints(keypoints_left_gpu, *keypoints_left_ptr);
+#if OPENCV_2_4
+    descriptors_left.create(descriptors_left_gpu.size(), descriptors_left_gpu.type());
+    cv::Mat descriptors_left_mat = descriptors_left.getMat();
+    stream.enqueueDownload(descriptors_left_gpu, descriptors_left_mat);
+#else
     descriptors_left_gpu.download(descriptors_left);
+#endif
     timer.stopAndPrintTiming("downloading keypoints and descriptors from GPU");
     if (points_left_ptr != nullptr)
     {
@@ -229,7 +269,11 @@ void FeatureDetectorOpenCVSurfCuda<T>::detectAndComputeFeatures(
   std::thread thread_right([&] ()
   {
     Timer timer = Timer();
+#if OPENCV_2_4
+    stream.enqueueUpload(img_right.getMat(), img_right_gpu);
+#else
     img_right_gpu.upload(img_right);
+#endif
     timer.stopAndPrintTiming("uploading image to GPU");
     timer = Timer();
     feature_computer_->operator()(img_right_gpu, mask_gpu, keypoints_right_gpu, descriptors_right_gpu);
@@ -239,7 +283,13 @@ void FeatureDetectorOpenCVSurfCuda<T>::detectAndComputeFeatures(
 //    timer.stopAndPrintTiming("computing descriptors");
     timer = Timer();
     feature_computer_->downloadKeypoints(keypoints_right_gpu, *keypoints_right_ptr);
+#if OPENCV_2_4
+    descriptors_right.create(descriptors_right_gpu.size(), descriptors_right_gpu.type());
+    cv::Mat descriptors_right_mat = descriptors_right.getMat();
+    stream.enqueueDownload(descriptors_right_gpu, descriptors_right_mat);
+#else
     descriptors_right_gpu.download(descriptors_right);
+#endif
     timer.stopAndPrintTiming("downloading keypoints and descriptors from GPU");
     if (points_right_ptr != nullptr)
     {
@@ -273,23 +323,35 @@ void FeatureDetectorOpenCVCuda<T>::detectAndComputeFeatures(
       cv::OutputArray descriptors,
       std::vector<cv::Point2d> *points_ptr) const
 {
-  cv::cuda::GpuMat img_gpu;
-  cv::cuda::GpuMat mask_gpu;
-  cv::cuda::GpuMat keypoints_gpu;
-  cv::cuda::GpuMat descriptors_gpu;
+  cv_cuda::GpuMat img_gpu;
+  cv_cuda::GpuMat mask_gpu;
+  cv_cuda::GpuMat keypoints_gpu;
+  cv_cuda::GpuMat descriptors_gpu;
+  cv_cuda::Stream stream;
   Timer timer = Timer();
-  img_gpu.upload(img);
+#if OPENCV_2_4
+  stream.enqueueUpload(img.getMat(), img_gpu);
+#else
+  img_gpu.upload(img, stream);
+#endif
+  stream.waitForCompletion();
   timer.stopAndPrintTiming("uploading image to GPU");
   timer = Timer();
-  feature_computer_->detectAndComputeAsync(img_gpu, mask_gpu, keypoints_gpu, descriptors_gpu);
-  cv::cuda::Stream::Null().waitForCompletion();
+  feature_computer_->detectAndComputeAsync(img_gpu, mask_gpu, keypoints_gpu, descriptors_gpu, false, stream);
+  stream.waitForCompletion();
   timer.stopAndPrintTiming("detecting keypoints");
 //  timer = Timer();
 //  feature_computer_->operator()(img_gpu, mask_gpu, keypoints_gpu, descriptors_gpu, true);
 //  timer.stopAndPrintTiming("computing descriptors");
   timer = Timer();
-  feature_computer_->downloadKeypoints(keypoints_gpu, *keypoints_ptr);
-  descriptors_gpu.download(descriptors);
+  feature_computer_->downloadKeypoints(keypoints_gpu, *keypoints_ptr, stream);
+#if OPENCV_2_4
+  cv::Mat descriptors_mat = descriptors.create(descriptors_gpu.size(), descriptors_gpu.type());
+  stream.enqueueDownload(descriptors_gpu, descriptors_mat);
+#else
+  descriptors_gpu.download(descriptors, stream);
+#endif
+  stream.waitForCompletion();
   timer.stopAndPrintTiming("downloading keypoints and descriptors from GPU");
   if (points_ptr != nullptr)
   {
@@ -312,20 +374,25 @@ void FeatureDetectorOpenCVCuda<T>::detectAndComputeFeatures(
     std::vector<cv::Point2d> *points_left_ptr,
     std::vector<cv::Point2d> *points_right_ptr) const
 {
-  cv::cuda::GpuMat img_left_gpu;
-  cv::cuda::GpuMat img_right_gpu;
-  cv::cuda::GpuMat mask_left_gpu;
-  cv::cuda::GpuMat mask_right_gpu;
-  cv::cuda::GpuMat keypoints_left_gpu;
-  cv::cuda::GpuMat keypoints_right_gpu;
+  cv_cuda::GpuMat img_left_gpu;
+  cv_cuda::GpuMat img_right_gpu;
+  cv_cuda::GpuMat mask_left_gpu;
+  cv_cuda::GpuMat mask_right_gpu;
+  cv_cuda::GpuMat keypoints_left_gpu;
+  cv_cuda::GpuMat keypoints_right_gpu;
   cv::Mat keypoints_left_mat;
   cv::Mat keypoints_right_mat;
-  cv::cuda::GpuMat descriptors_left_gpu;
-  cv::cuda::GpuMat descriptors_right_gpu;
-  cv::cuda::Stream stream;
+  cv_cuda::GpuMat descriptors_left_gpu;
+  cv_cuda::GpuMat descriptors_right_gpu;
+  cv_cuda::Stream stream;
   Timer timer = Timer();
+#if OPENCV_2_4
+  stream.enqueueUpload(img_left.getMat(), img_left_gpu);
+  stream.enqueueUpload(img_right.getMat(), img_right_gpu);
+#else
   img_left_gpu.upload(img_left, stream);
   img_right_gpu.upload(img_right, stream);
+#endif
   stream.waitForCompletion();
   timer.stopAndPrintTiming("uploading images to GPU");
   timer = Timer();
@@ -334,10 +401,21 @@ void FeatureDetectorOpenCVCuda<T>::detectAndComputeFeatures(
   stream.waitForCompletion();
   timer.stopAndPrintTiming("detecting keypoints");
   timer = Timer();
+#if OPENCV_2_4
+  descriptors_left.create(descriptors_left_gpu.size(), descriptors_left_gpu.type());
+  cv::Mat descriptors_left_mat = descriptors_left.getMat();
+  stream.enqueueDownload(keypoints_left_gpu, keypoints_left_mat);
+  stream.enqueueDownload(descriptors_left_gpu, descriptors_left_mat);
+  descriptors_right.create(descriptors_right_gpu.size(), descriptors_right_gpu.type());
+  cv::Mat descriptors_right_mat = descriptors_right.getMat();
+  stream.enqueueDownload(keypoints_right_gpu, keypoints_right_mat);
+  stream.enqueueDownload(descriptors_right_gpu, descriptors_right_mat);
+#else
   keypoints_left_gpu.download(keypoints_left_mat, stream);
   descriptors_left_gpu.download(descriptors_left, stream);
   keypoints_right_gpu.download(keypoints_right_mat, stream);
   descriptors_right_gpu.download(descriptors_right, stream);
+#endif
   stream.waitForCompletion();
   timer.stopAndPrintTiming("downloading left keypoints and descriptors from GPU");
   timer = Timer();
@@ -488,7 +566,11 @@ std::vector<cv::DMatch> SparseStereoMatcher<T>::matchFeaturesBf(cv::InputArray l
   bool cross_check = true;
   cv::BFMatcher matcher(match_norm_, cross_check);
   std::vector<cv::DMatch> matches;
+#if OPENCV_2_4
+  matcher.match(left_descriptors.getMat(), right_descriptors.getMat(), matches);
+#else
   matcher.match(left_descriptors, right_descriptors, matches);
+#endif
   return matches;
 }
 
@@ -525,7 +607,11 @@ std::vector<cv::DMatch> SparseStereoMatcher<T>::matchFeaturesFlann(cv::InputArra
   // FLANN matching
   cv::FlannBasedMatcher matcher(flann_index_params_, flann_search_params_);
   std::vector<cv::DMatch> all_matches;
+#if OPENCV_2_4
+  matcher.match(left_descriptors.getMat(), right_descriptors.getMat(), all_matches);
+#else
   matcher.match(left_descriptors, right_descriptors, all_matches);
+#endif
   return filterMatchesWithDistance(all_matches);
 }
 

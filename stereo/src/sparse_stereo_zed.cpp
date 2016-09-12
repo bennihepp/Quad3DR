@@ -12,15 +12,23 @@
 #include <tclap/CmdLine.h>
 #include <opencv2/opencv.hpp>
 #include <opencv2/features2d.hpp>
-#include <opencv2/xfeatures2d.hpp>
-#include <opencv2/sfm.hpp>
-
-#include <opencv2/cudafeatures2d.hpp>
-#include <opencv2/xfeatures2d/cuda.hpp>
+#if OPENCV_3
+  #include <opencv2/xfeatures2d.hpp>
+  #include <opencv2/sfm.hpp>
+  #include <opencv2/cudafeatures2d.hpp>
+  #include <opencv2/xfeatures2d/cuda.hpp>
+#endif
 
 #include <video_source_zed.h>
 #include <sparse_stereo_matcher.h>
 #include <utilities.h>
+
+
+#if OPENCV_2_4
+  namespace cv_cuda = cv::gpu;
+#else
+  namespace cv_cuda = cv::cuda;
+#endif
 
 
 template <typename T>
@@ -52,8 +60,8 @@ int main(int argc, char **argv)
     cmd.parse(argc, argv);
 
     // TODO
-    cv::cuda::printCudaDeviceInfo(cv::cuda::getDevice());
-//    cv::cuda::printShortCudaDeviceInfo(cv::cuda::getDevice());
+    cv_cuda::printCudaDeviceInfo(cv_cuda::getDevice());
+//    cv_cuda::printShortCudaDeviceInfo(cv_cuda::getDevice());
 
     video::VideoSourceZED video;
 
@@ -83,9 +91,36 @@ int main(int argc, char **argv)
 
     stereo::StereoCameraCalibration calib = stereo::Utilities::readStereoCalibration(calib_arg.getValue());
 
+#if OPENCV_2_4
+    // FREAK
+    using DetectorType = cv::FastFeatureDetector;
+    using DescriptorType = cv::FREAK;
+    cv::Ptr<DetectorType> detector = cv::makePtr<DetectorType>(20, true);
+    cv::Ptr<DetectorType> detector_2 = cv::makePtr<DetectorType>(20, true);
+    cv::Ptr<DescriptorType> descriptor_computer = cv::makePtr<DescriptorType>();
+    cv::Ptr<DescriptorType> descriptor_computer_2 = cv::makePtr<DescriptorType>();
+
+    // Create feature detector
+//    cv::Ptr<DetectorType> detector_2 = detector;
+//    cv::Ptr<DescriptorType> descriptor_computer_2 = descriptor_computer;
+    using FeatureDetectorType = stereo::FeatureDetectorOpenCV<DetectorType, DescriptorType>;
+    cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(detector, detector_2, descriptor_computer, descriptor_computer_2);
+//    using FeatureDetectorType = stereo::FeatureDetectorOpenCVSurfCuda<FeatureType>;
+//    cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(feature_computer);
+//      using FeatureDetectorType = stereo::FeatureDetectorOpenCVCuda<FeatureType>;
+//      cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(feature_computer);
+
+    // Create sparse matcher
+    using SparseStereoMatcherType = stereo::SparseStereoMatcher<FeatureDetectorType>;
+    SparseStereoMatcherType matcher(feature_detector, calib);
+
+    // FREAK
+    //    matcher.setFlannIndexParams(cv::makePtr<cv::flann::LshIndexParams>(20, 10, 2));
+    matcher.setMatchNorm(cv::NORM_HAMMING);
+#else
     // SURF CUDA
 //    using FeatureType = cv::cuda::SURF_CUDA;
-//    cv::Ptr<FeatureType> feature_computer = new FeatureType();
+//    cv::Ptr<FeatureType> feature_computer = cv::makePtr<FeatureType>();
 
     // SURF
 //    using DetectorType = cv::xfeatures2d::SURF;
@@ -115,11 +150,11 @@ int main(int argc, char **argv)
 //    cv::Ptr<DetectorType> detector_2 = detector;
 //    cv::Ptr<DescriptorType> descriptor_computer_2 = descriptor_computer;
     using FeatureDetectorType = stereo::FeatureDetectorOpenCV<DetectorType, DescriptorType>;
-    cv::Ptr<FeatureDetectorType> feature_detector = new FeatureDetectorType(detector, detector_2, descriptor_computer, descriptor_computer_2);
+    cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(detector, detector_2, descriptor_computer, descriptor_computer_2);
 //    using FeatureDetectorType = stereo::FeatureDetectorOpenCVSurfCuda<FeatureType>;
-//    cv::Ptr<FeatureDetectorType> feature_detector = new FeatureDetectorType(feature_computer);
+//    cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(feature_computer);
 //      using FeatureDetectorType = stereo::FeatureDetectorOpenCVCuda<FeatureType>;
-//      cv::Ptr<FeatureDetectorType> feature_detector = new FeatureDetectorType(feature_computer);
+//      cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(feature_computer);
 
     // Create sparse matcher
     using SparseStereoMatcherType = stereo::SparseStereoMatcher<FeatureDetectorType>;
@@ -132,6 +167,7 @@ int main(int argc, char **argv)
     // FREAK
     //    matcher.setFlannIndexParams(cv::makePtr<cv::flann::LshIndexParams>(20, 10, 2));
     matcher.setMatchNorm(cv::NORM_HAMMING);
+#endif
 
     // General
     feature_detector->setMaxNumOfKeypoints(500);

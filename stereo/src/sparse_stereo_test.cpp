@@ -11,11 +11,16 @@
 #include <vector>
 #include <tclap/CmdLine.h>
 #include <opencv2/opencv.hpp>
-#include <opencv2/xfeatures2d.hpp>
+#if OPENCV_3_1
+  #include <opencv2/xfeatures2d.hpp>
+  #include <opencv2/ximgproc.hpp>
+#endif
 #include <opencv2/calib3d.hpp>
-#include <opencv2/ximgproc.hpp>
 #include <sparse_stereo_matcher.h>
 #include <utilities.h>
+
+// TODO
+#include <unistd.h>
 
 template <typename T>
 void chessboardTriangulation(
@@ -99,6 +104,8 @@ void profileSparseStereoMatching(
   std::cout << "sparse matching time: " << matching_time << std::endl;
 }
 
+// TODO
+#if OPENCV_3_1
 template <typename T>
 void denseStereoMatching(
     const stereo::SparseStereoMatcher<T> &matcher,
@@ -145,6 +152,7 @@ void denseStereoMatching(
 
   cv::waitKey();
 }
+#endif
 
 int main(int argc, char **argv)
 {
@@ -193,11 +201,15 @@ int main(int argc, char **argv)
     // ORB
     using DetectorType = cv::ORB;
     using DescriptorType = cv::ORB;
+#if OPENCV_2_4
+    cv::Ptr<DetectorType> detector = cv::makePtr<DetectorType>();
+#else
     cv::Ptr<DetectorType> detector = DetectorType::create();
+#endif
     cv::Ptr<DescriptorType> descriptor_computer = detector;
 
     using FeatureDetectorType = stereo::FeatureDetectorOpenCV<DetectorType, DescriptorType>;
-    cv::Ptr<FeatureDetectorType> feature_detector = new FeatureDetectorType(detector, descriptor_computer);
+    cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(detector, descriptor_computer);
 
     using SparseStereoMatcherType = stereo::SparseStereoMatcher<FeatureDetectorType>;
     SparseStereoMatcherType matcher(feature_detector, calib);
