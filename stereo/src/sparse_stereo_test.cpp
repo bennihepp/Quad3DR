@@ -19,7 +19,7 @@
 #include <sparse_stereo_matcher.h>
 #include <utilities.h>
 
-// TODO
+// TODO: For profiling (bug in oprofile eclipse plugin)
 #include <unistd.h>
 
 template <typename T>
@@ -89,26 +89,24 @@ void sparseStereoMatchingFull(const stereo::SparseStereoMatcher<T> &matcher, con
 
 template <typename T>
 void profileSparseStereoMatching(
-    const stereo::SparseStereoMatcher<T> &matcher,
+    stereo::SparseStereoMatcher<T> &matcher,
     cv::InputArray left_input_img, cv::InputArray right_input_img)
 {
   int num_of_iterations = 5;
-  double matching_time = (double)cv::getTickCount();
+  stereo::Timer timer;
   for (int i = 0; i < num_of_iterations; ++i)
   {
     std::vector<cv::Point2d> image_points;
     std::vector<cv::Point3d> points_3d = matcher.match(left_input_img, right_input_img, &image_points);
   }
-  matching_time = ((double)cv::getTickCount() - matching_time) / cv::getTickFrequency();
-  matching_time /= num_of_iterations;
-  std::cout << "sparse matching time: " << matching_time << std::endl;
+  timer.stopAndPrintTiming("sparse matching");
 }
 
 // TODO
 #if OPENCV_3_1
 template <typename T>
 void denseStereoMatching(
-    const stereo::SparseStereoMatcher<T> &matcher,
+    stereo::SparseStereoMatcher<T> &matcher,
     cv::InputArray left_input_img, cv::InputArray right_input_img)
 {
   int max_disp = 16*7;
@@ -185,53 +183,109 @@ int main(int argc, char **argv)
 
     stereo::StereoCameraCalibration calib = stereo::Utilities::readStereoCalibration(calib_arg.getValue());
 
-    // SURF
-//    using DetectorType = cv::xfeatures2d::SURF;
-//    using DescriptorType = cv::xfeatures2d::SURF;
-//    const int hessian_threshold = 400;
-//    cv::Ptr<DetectorType> detector = DescriptorType::create(hessian_threshold);
+#if OPENCV_2_4
+    // FREAK
+    using DetectorType = cv::FastFeatureDetector;
+    using DescriptorType = cv::FREAK;
+    cv::Ptr<DetectorType> detector = cv::makePtr<DetectorType>(20, true);
+    cv::Ptr<DetectorType> detector_2 = cv::makePtr<DetectorType>(20, true);
+    cv::Ptr<DescriptorType> descriptor_computer = cv::makePtr<DescriptorType>(true, true, 16, 3);
+    cv::Ptr<DescriptorType> descriptor_computer_2 = cv::makePtr<DescriptorType>(true, true, 16, 3);
+
+    // ORB
+//    using DetectorType = cv::ORB;
+//    using DescriptorType = cv::ORB;
+//    cv::Ptr<DetectorType> detector = cv::makePtr<DetectorType>();
 //    cv::Ptr<DescriptorType> descriptor_computer = detector;
+
+    // Create feature detector
+//    cv::Ptr<DetectorType> detector_2 = detector;
+//    cv::Ptr<DescriptorType> descriptor_computer_2 = descriptor_computer;
+    using FeatureDetectorType = stereo::FeatureDetectorOpenCV<DetectorType, DescriptorType>;
+    cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(detector, detector_2, descriptor_computer, descriptor_computer_2);
+//    using FeatureDetectorType = stereo::FeatureDetectorOpenCVSurfCuda<FeatureType>;
+//    cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(feature_computer);
+//      using FeatureDetectorType = stereo::FeatureDetectorOpenCVCuda<FeatureType>;
+//      cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(feature_computer);
+
+    // Create sparse matcher
+    using SparseStereoMatcherType = stereo::SparseStereoMatcher<FeatureDetectorType>;
+    SparseStereoMatcherType matcher(feature_detector, calib);
+
+    // FREAK
+    //    matcher.setFlannIndexParams(cv::makePtr<cv::flann::LshIndexParams>(20, 10, 2));
+    matcher.setMatchNorm(cv::NORM_HAMMING2);
+#else
+    // SURF CUDA
+//    using FeatureType = cv::cuda::SURF_CUDA;
+//    cv::Ptr<FeatureType> feature_computer = cv::makePtr<FeatureType>();
+
+    // SURF
+    using DetectorType = cv::xfeatures2d::SURF;
+    using DescriptorType = cv::xfeatures2d::SURF;
+    const int hessian_threshold = 400;
+    cv::Ptr<DescriptorType> detector = DetectorType::create(hessian_threshold);
+    cv::Ptr<DescriptorType> descriptor_computer = detector;
+
+    // ORB
+//    using DetectorType = cv::ORB;
+//    using DescriptorType = cv::ORB;
+//    cv::Ptr<DetectorType> detector = DetectorType::create();
+//    cv::Ptr<DescriptorType> descriptor_computer = detector;
+
+    // ORB CUDA
+//    using FeatureType = cv::cuda::ORB;
+//    cv::Ptr<FeatureType> feature_computer = FeatureType::create(500, 1.2f, 8);
 
     // FREAK
 //    using DetectorType = cv::FastFeatureDetector;
 //    using DescriptorType = cv::xfeatures2d::FREAK;
-//    cv::Ptr<DetectorType> detector = DetectorType::create();
-//    cv::Ptr<DescriptorType> descriptor_computer = DescriptorType::create(true, true, 16, 2);
+//    cv::Ptr<DetectorType> detector = DetectorType::create(20, true);
+//    cv::Ptr<DetectorType> detector_2 = DetectorType::create(20, true);
+//    cv::Ptr<DescriptorType> descriptor_computer = DescriptorType::create();
+//    cv::Ptr<DescriptorType> descriptor_computer_2 = DescriptorType::create();
 
-    // ORB
-    using DetectorType = cv::ORB;
-    using DescriptorType = cv::ORB;
-#if OPENCV_2_4
-    cv::Ptr<DetectorType> detector = cv::makePtr<DetectorType>();
-#else
-    cv::Ptr<DetectorType> detector = DetectorType::create();
-#endif
-    cv::Ptr<DescriptorType> descriptor_computer = detector;
-
+    // Create feature detector
+    cv::Ptr<DetectorType> detector_2 = detector;
+    cv::Ptr<DescriptorType> descriptor_computer_2 = descriptor_computer;
     using FeatureDetectorType = stereo::FeatureDetectorOpenCV<DetectorType, DescriptorType>;
-    cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(detector, descriptor_computer);
+    cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(detector, detector_2, descriptor_computer, descriptor_computer_2);
+//    using FeatureDetectorType = stereo::FeatureDetectorOpenCVSurfCuda<FeatureType>;
+//    cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(feature_computer);
+//      using FeatureDetectorType = stereo::FeatureDetectorOpenCVCuda<FeatureType>;
+//      cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(feature_computer);
 
+    // Create sparse matcher
     using SparseStereoMatcherType = stereo::SparseStereoMatcher<FeatureDetectorType>;
     SparseStereoMatcherType matcher(feature_detector, calib);
 
     // ORB
-    matcher.setFlannIndexParams(cv::makePtr<cv::flann::LshIndexParams>(20, 10, 2));
-    matcher.setMatchNorm(cv::NORM_HAMMING2);
-
-    // FREAK
 //    matcher.setFlannIndexParams(cv::makePtr<cv::flann::LshIndexParams>(20, 10, 2));
 //    matcher.setMatchNorm(cv::NORM_HAMMING2);
 
-//    denseStereoMatching(matcher, left_img, right_img);
-    profileSparseStereoMatching(matcher, left_img, right_img);
+    // FREAK
+    //    matcher.setFlannIndexParams(cv::makePtr<cv::flann::LshIndexParams>(20, 10, 2));
+//    matcher.setMatchNorm(cv::NORM_HAMMING);
+#endif
+
+    // General
+    feature_detector->setMaxNumOfKeypoints(500);
+    matcher.setRatioTestThreshold(1.0);
+    matcher.setEpipolarConstraintThreshold(1.0);
+
+    cv::Mat left_img_grayscale = stereo::Utilities::convertToGrayscale(left_img);
+    cv::Mat right_img_grayscale = stereo::Utilities::convertToGrayscale(right_img);
+
+//    denseStereoMatching(matcher, left_img_grayscale, right_img_grayscale);
+    profileSparseStereoMatching(matcher, left_img_grayscale, right_img_grayscale);
 //    if (chessboard_arg.getValue())
 //    {
 //      cv::Size board_size(board_width_arg.getValue(), board_height_arg.getValue());
-//      chessboardTriangulation(matcher, left_img, right_img, board_size);
+//      chessboardTriangulation(matcher, left_img_grayscale, right_img_grayscale, board_size);
 //    }
 //    else
 //    {
-//      sparseStereoMatchingFull<>(matcher, left_img, right_img);
+//      sparseStereoMatchingFull<>(matcher, left_img_grayscale, right_img_grayscale);
 //    }
   }
   catch (TCLAP::ArgException &err)

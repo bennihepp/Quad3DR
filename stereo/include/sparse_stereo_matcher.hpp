@@ -61,8 +61,7 @@ template <typename T, typename U>
 void FeatureDetectorOpenCV<T, U>::detectFeatureKeypoints(
     cv::Ptr<T> detector,
     const cv::InputArray img,
-    std::vector<cv::KeyPoint> *keypoints_ptr,
-    std::vector<cv::Point2d> *points_ptr) const
+    std::vector<cv::KeyPoint> *keypoints_ptr) const
 {
 #if OPENCV_2_4
   detector->detect(img.getMat(), *keypoints_ptr);
@@ -73,14 +72,6 @@ void FeatureDetectorOpenCV<T, U>::detectFeatureKeypoints(
   {
     keypoints_ptr->resize(max_num_of_keypoints_);
   }
-  if (points_ptr != nullptr)
-  {
-    for (auto &keypoint : *keypoints_ptr)
-    {
-      cv::Point2d point(keypoint.pt.x, keypoint.pt.y);
-      points_ptr->push_back(point);
-    }
-  }
 }
 
 template <typename T, typename U>
@@ -90,21 +81,41 @@ void FeatureDetectorOpenCV<T, U>::computeFeatureDescriptors(
     std::vector<cv::KeyPoint> *keypoints_ptr,
     cv::OutputArray descriptors) const
 {
-  cv::Mat descriptors_mat = descriptors.getMat();
+#if OPENCV_2_4
+  cv::Mat descriptors_mat;
   descriptor_computer->compute(img.getMat(), *keypoints_ptr, descriptors_mat);
+  descriptors.create(descriptors_mat.rows, descriptors_mat.cols, descriptors_mat.type());
+  descriptors_mat.copyTo(descriptors.getMat());
+#else
+  descriptor_computer->compute(img.getMat(), *keypoints_ptr, descriptors);
+#endif
+}
+
+template <typename T, typename U>
+void FeatureDetectorOpenCV<T, U>::convertKeypointsToPoints(
+    std::vector<cv::KeyPoint> *keypoints_ptr,
+    std::vector<cv::Point2d> *points_ptr) const
+{
+  for (auto &keypoint : *keypoints_ptr)
+  {
+    cv::Point2d point(keypoint.pt.x, keypoint.pt.y);
+    points_ptr->push_back(point);
+  }
 }
 
 template <typename T, typename U>
 void FeatureDetectorOpenCV<T, U>::detectFeatureKeypoints(
     const cv::InputArray img,
-    std::vector<cv::KeyPoint> *keypoints_ptr,
-    std::vector<cv::Point2d> *points_ptr) const
+    std::vector<cv::KeyPoint> *keypoints_ptr) const
 {
-  detectFeatureKeypoints(detector_, img, keypoints_ptr, points_ptr);
+  detectFeatureKeypoints(detector_, img, keypoints_ptr);
 }
 
 template <typename T, typename U>
-void FeatureDetectorOpenCV<T, U>::computeFeatureDescriptors(cv::InputArray img, std::vector<cv::KeyPoint> *keypoints_ptr, cv::OutputArray descriptors) const
+void FeatureDetectorOpenCV<T, U>::computeFeatureDescriptors(
+    cv::InputArray img,
+    std::vector<cv::KeyPoint> *keypoints_ptr,
+    cv::OutputArray descriptors) const
 {
   computeFeatureDescriptors(descriptor_computer_, img, keypoints_ptr, descriptors);
 }
@@ -116,12 +127,15 @@ void FeatureDetectorOpenCV<T, U>::detectAndComputeFeatures(
       cv::OutputArray descriptors,
       std::vector<cv::Point2d> *points_ptr) const
 {
-  Timer timer = Timer();
-  detectFeatureKeypoints(img, keypoints_ptr, points_ptr);
+  ProfilingTimer timer = ProfilingTimer();
+  detectFeatureKeypoints(img, keypoints_ptr);
   timer.stopAndPrintTiming("detecting keypoints");
-  timer = Timer();
+  timer = ProfilingTimer();
   computeFeatureDescriptors(img, keypoints_ptr, descriptors);
   timer.stopAndPrintTiming("computing descriptors");
+  timer = ProfilingTimer();
+  convertKeypointsToPoints(keypoints_ptr, points_ptr);
+  timer.stopAndPrintTiming("converting keypoints to points");
 }
 
 template <typename T, typename U>
@@ -137,21 +151,27 @@ void FeatureDetectorOpenCV<T, U>::detectAndComputeFeatures(
 {
   std::thread thread_left([&] ()
   {
-    Timer timer = Timer();
-    detectFeatureKeypoints(detector_, img_left, keypoints_left_ptr, points_left_ptr);
+    ProfilingTimer timer = ProfilingTimer();
+    detectFeatureKeypoints(detector_, img_left, keypoints_left_ptr);
     timer.stopAndPrintTiming("detecting left keypoints");
-    timer = Timer();
+    timer = ProfilingTimer();
     computeFeatureDescriptors(descriptor_computer_, img_left, keypoints_left_ptr, descriptors_left);
     timer.stopAndPrintTiming("computing left descriptors");
+    timer = ProfilingTimer();
+    convertKeypointsToPoints(keypoints_left_ptr, points_left_ptr);
+    timer.stopAndPrintTiming("converting keypoints to points");
   });
   std::thread thread_right([&] ()
   {
-    Timer timer = Timer();
-    detectFeatureKeypoints(detector_2_, img_right, keypoints_right_ptr, points_right_ptr);
+    ProfilingTimer timer = ProfilingTimer();
+    detectFeatureKeypoints(detector_2_, img_right, keypoints_right_ptr);
     timer.stopAndPrintTiming("detecting right keypoints");
-    timer = Timer();
+    timer = ProfilingTimer();
     computeFeatureDescriptors(descriptor_computer_2_, img_right, keypoints_right_ptr, descriptors_right);
     timer.stopAndPrintTiming("computing right descriptors");
+    timer = ProfilingTimer();
+    convertKeypointsToPoints(keypoints_right_ptr, points_right_ptr);
+    timer.stopAndPrintTiming("converting keypoints to points");
   });
   thread_left.join();
   thread_right.join();
@@ -179,7 +199,7 @@ void FeatureDetectorOpenCVSurfCuda<T>::detectAndComputeFeatures(
   cv_cuda::GpuMat mask_gpu;
   cv_cuda::GpuMat keypoints_gpu;
   cv_cuda::GpuMat descriptors_gpu;
-  Timer timer = Timer();
+  ProfilingTimer timer = ProfilingTimer();
   cv_cuda::Stream stream;
 #if OPENCV_2_4
   stream.enqueueUpload(img.getMat(), img_gpu);
@@ -187,13 +207,13 @@ void FeatureDetectorOpenCVSurfCuda<T>::detectAndComputeFeatures(
   img_gpu.upload(img, stream);
 #endif
   timer.stopAndPrintTiming("uploading image to GPU");
-  timer = Timer();
+  timer = ProfilingTimer();
   feature_computer_->operator()(img_gpu, mask_gpu, keypoints_gpu, stream);
   timer.stopAndPrintTiming("detecting keypoints");
-  timer = Timer();
+  timer = ProfilingTimer();
   feature_computer_->operator()(img_gpu, mask_gpu, keypoints_gpu, descriptors_gpu, true, stream);
   timer.stopAndPrintTiming("computing descriptors");
-  timer = Timer();
+  timer = ProfilingTimer();
   feature_computer_->downloadKeypoints(keypoints_gpu, *keypoints_ptr, stream);
 #if OPENCV_2_4
   cv::Mat descriptors_mat = descriptors.create(descriptors_gpu.size(), descriptors_gpu.type());
@@ -234,27 +254,27 @@ void FeatureDetectorOpenCVSurfCuda<T>::detectAndComputeFeatures(
   cv_cuda::Stream stream;
   std::thread thread_left([&] ()
   {
-    Timer timer = Timer();
+    ProfilingTimer timer = ProfilingTimer();
 #if OPENCV_2_4
     stream.enqueueUpload(img_left.getMat(), img_left_gpu);
 #else
     img_left_gpu.upload(img_left);
 #endif
     timer.stopAndPrintTiming("uploading image to GPU");
-    timer = Timer();
-    feature_computer_->operator()(img_left_gpu, mask_gpu, keypoints_left_gpu, descriptors_left_gpu);
+    timer = ProfilingTimer();
+    feature_computer_->operator()(img_left_gpu, mask_gpu, keypoints_left_gpu, descriptors_left_gpu, stream);
     timer.stopAndPrintTiming("detecting keypoints");
 //    timer = Timer();
 //    feature_computer_->operator()(img_left_gpu, mask_gpu, keypoints_left_gpu, descriptors_left_gpu, true);
 //    timer.stopAndPrintTiming("computing descriptors");
-    timer = Timer();
-    feature_computer_->downloadKeypoints(keypoints_left_gpu, *keypoints_left_ptr);
+    timer = ProfilingTimer();
+    feature_computer_->downloadKeypoints(keypoints_left_gpu, *keypoints_left_ptr, stream);
 #if OPENCV_2_4
     descriptors_left.create(descriptors_left_gpu.size(), descriptors_left_gpu.type());
     cv::Mat descriptors_left_mat = descriptors_left.getMat();
     stream.enqueueDownload(descriptors_left_gpu, descriptors_left_mat);
 #else
-    descriptors_left_gpu.download(descriptors_left);
+    descriptors_left_gpu.download(descriptors_left, stream);
 #endif
     timer.stopAndPrintTiming("downloading keypoints and descriptors from GPU");
     if (points_left_ptr != nullptr)
@@ -268,20 +288,20 @@ void FeatureDetectorOpenCVSurfCuda<T>::detectAndComputeFeatures(
   });
   std::thread thread_right([&] ()
   {
-    Timer timer = Timer();
+    ProfilingTimer timer = ProfilingTimer();
 #if OPENCV_2_4
     stream.enqueueUpload(img_right.getMat(), img_right_gpu);
 #else
     img_right_gpu.upload(img_right);
 #endif
     timer.stopAndPrintTiming("uploading image to GPU");
-    timer = Timer();
+    timer = ProfilingTimer();
     feature_computer_->operator()(img_right_gpu, mask_gpu, keypoints_right_gpu, descriptors_right_gpu);
     timer.stopAndPrintTiming("detecting keypoints");
-//    timer = Timer();
+//    timer = ProfilingTimer();
 //    feature_computer_->operator()(img_right_gpu, mask_gpu, keypoints_right_gpu, descriptors_right_gpu, true);
 //    timer.stopAndPrintTiming("computing descriptors");
-    timer = Timer();
+    timer = ProfilingTimer();
     feature_computer_->downloadKeypoints(keypoints_right_gpu, *keypoints_right_ptr);
 #if OPENCV_2_4
     descriptors_right.create(descriptors_right_gpu.size(), descriptors_right_gpu.type());
@@ -321,14 +341,14 @@ void FeatureDetectorOpenCVCuda<T>::detectAndComputeFeatures(
       cv::InputArray img,
       std::vector<cv::KeyPoint> *keypoints_ptr,
       cv::OutputArray descriptors,
-      std::vector<cv::Point2d> *points_ptr) const
+      std::vector<cv::Point2d> *points_ptr)
 {
   cv_cuda::GpuMat img_gpu;
   cv_cuda::GpuMat mask_gpu;
   cv_cuda::GpuMat keypoints_gpu;
   cv_cuda::GpuMat descriptors_gpu;
   cv_cuda::Stream stream;
-  Timer timer = Timer();
+  ProfilingTimer timer = ProfilingTimer();
 #if OPENCV_2_4
   stream.enqueueUpload(img.getMat(), img_gpu);
 #else
@@ -336,14 +356,18 @@ void FeatureDetectorOpenCVCuda<T>::detectAndComputeFeatures(
 #endif
   stream.waitForCompletion();
   timer.stopAndPrintTiming("uploading image to GPU");
-  timer = Timer();
+  timer = ProfilingTimer();
+#if OPENCV_2_4
+  feature_computer_->operator()(img_gpu, mask_gpu, keypoints_gpu, descriptors_gpu);
+#else
   feature_computer_->detectAndComputeAsync(img_gpu, mask_gpu, keypoints_gpu, descriptors_gpu, false, stream);
+#endif
   stream.waitForCompletion();
   timer.stopAndPrintTiming("detecting keypoints");
-//  timer = Timer();
+//  timer = ProfilingTimer();
 //  feature_computer_->operator()(img_gpu, mask_gpu, keypoints_gpu, descriptors_gpu, true);
 //  timer.stopAndPrintTiming("computing descriptors");
-  timer = Timer();
+  timer = ProfilingTimer();
   feature_computer_->downloadKeypoints(keypoints_gpu, *keypoints_ptr, stream);
 #if OPENCV_2_4
   cv::Mat descriptors_mat = descriptors.create(descriptors_gpu.size(), descriptors_gpu.type());
@@ -372,20 +396,19 @@ void FeatureDetectorOpenCVCuda<T>::detectAndComputeFeatures(
     cv::OutputArray descriptors_left,
     cv::OutputArray descriptors_right,
     std::vector<cv::Point2d> *points_left_ptr,
-    std::vector<cv::Point2d> *points_right_ptr) const
+    std::vector<cv::Point2d> *points_right_ptr)
 {
+  std::cout << "FeatureDetectorOpenCVCuda" << std::endl;
   cv_cuda::GpuMat img_left_gpu;
   cv_cuda::GpuMat img_right_gpu;
   cv_cuda::GpuMat mask_left_gpu;
   cv_cuda::GpuMat mask_right_gpu;
   cv_cuda::GpuMat keypoints_left_gpu;
   cv_cuda::GpuMat keypoints_right_gpu;
-  cv::Mat keypoints_left_mat;
-  cv::Mat keypoints_right_mat;
   cv_cuda::GpuMat descriptors_left_gpu;
   cv_cuda::GpuMat descriptors_right_gpu;
   cv_cuda::Stream stream;
-  Timer timer = Timer();
+  ProfilingTimer timer = ProfilingTimer();
 #if OPENCV_2_4
   stream.enqueueUpload(img_left.getMat(), img_left_gpu);
   stream.enqueueUpload(img_right.getMat(), img_right_gpu);
@@ -393,34 +416,50 @@ void FeatureDetectorOpenCVCuda<T>::detectAndComputeFeatures(
   img_left_gpu.upload(img_left, stream);
   img_right_gpu.upload(img_right, stream);
 #endif
-  stream.waitForCompletion();
   timer.stopAndPrintTiming("uploading images to GPU");
-  timer = Timer();
+  timer = ProfilingTimer();
+#if OPENCV_2_4
+  feature_computer_->operator()(img_left_gpu, mask_left_gpu, keypoints_left_gpu, descriptors_left_gpu);
+  feature_computer_->operator()(img_right_gpu, mask_right_gpu, keypoints_right_gpu, descriptors_right_gpu);
+#else
   feature_computer_->detectAndComputeAsync(img_left_gpu, mask_left_gpu, keypoints_left_gpu, descriptors_left_gpu, false, stream);
   feature_computer_->detectAndComputeAsync(img_right_gpu, mask_right_gpu, keypoints_right_gpu, descriptors_right_gpu, false, stream);
+#endif
   stream.waitForCompletion();
   timer.stopAndPrintTiming("detecting keypoints");
-  timer = Timer();
+  timer = ProfilingTimer();
 #if OPENCV_2_4
+  stream.waitForCompletion();
+  // Download left keypoints and descriptors
+  cv::Mat keypoints_left_mat(keypoints_left_gpu.rows, keypoints_left_gpu.cols, keypoints_left_gpu.type());
+  stream.enqueueDownload(keypoints_left_gpu, keypoints_left_mat);
   descriptors_left.create(descriptors_left_gpu.size(), descriptors_left_gpu.type());
   cv::Mat descriptors_left_mat = descriptors_left.getMat();
-  stream.enqueueDownload(keypoints_left_gpu, keypoints_left_mat);
   stream.enqueueDownload(descriptors_left_gpu, descriptors_left_mat);
+  // Download right keypoints and descriptors
+  cv::Mat keypoints_right_mat(keypoints_right_gpu.rows, keypoints_right_gpu.cols, keypoints_right_gpu.type());
+  stream.enqueueDownload(keypoints_right_gpu, keypoints_right_mat);
   descriptors_right.create(descriptors_right_gpu.size(), descriptors_right_gpu.type());
   cv::Mat descriptors_right_mat = descriptors_right.getMat();
-  stream.enqueueDownload(keypoints_right_gpu, keypoints_right_mat);
   stream.enqueueDownload(descriptors_right_gpu, descriptors_right_mat);
 #else
+  cv::Mat keypoints_left_mat;
   keypoints_left_gpu.download(keypoints_left_mat, stream);
   descriptors_left_gpu.download(descriptors_left, stream);
+  cv::Mat keypoints_right_mat;
   keypoints_right_gpu.download(keypoints_right_mat, stream);
   descriptors_right_gpu.download(descriptors_right, stream);
 #endif
   stream.waitForCompletion();
   timer.stopAndPrintTiming("downloading left keypoints and descriptors from GPU");
-  timer = Timer();
+  timer = ProfilingTimer();
+#if OPENCV_2_4
+  feature_computer_->convertKeyPoints(keypoints_left_mat, *keypoints_left_ptr);
+  feature_computer_->convertKeyPoints(keypoints_right_mat, *keypoints_right_ptr);
+#else
   feature_computer_->convert(keypoints_left_mat, *keypoints_left_ptr);
   feature_computer_->convert(keypoints_right_mat, *keypoints_right_ptr);
+#endif
   if (points_left_ptr != nullptr)
   {
     for (auto &keypoint : *keypoints_left_ptr)
@@ -521,14 +560,17 @@ std::vector<cv::DMatch> SparseStereoMatcher<T>::filterMatchesWithDistance(const 
 }
 
 template <typename T>
-std::vector<cv::DMatch> SparseStereoMatcher<T>::filterMatchesWithLoweRatioTest(const std::vector<std::vector<cv::DMatch>> &matches, double ratio_test_threshold) const
+std::vector<cv::DMatch> SparseStereoMatcher<T>::filterMatchesWithLoweRatioTest(
+    const std::vector<std::vector<cv::DMatch>> &matches,
+    double ratio_test_threshold,
+    bool verbose) const
 {
   if (ratio_test_threshold < 0)
   {
     ratio_test_threshold = ratio_test_threshold_;
   }
   std::vector<cv::DMatch> filtered_matches;
-  Timer timer = Timer();
+  ProfilingTimer timer = ProfilingTimer();
   if (ratio_test_threshold >= 1.0)
   {
     // Lowe's ratio test
@@ -554,7 +596,10 @@ std::vector<cv::DMatch> SparseStereoMatcher<T>::filterMatchesWithLoweRatioTest(c
       }
     }
   }
-  std::cout << "Keeping " << filtered_matches.size() << " out of " << matches.size() << " matches based on Lowe's test" << std::endl;
+  if (verbose)
+  {
+    std::cout << "Keeping " << filtered_matches.size() << " out of " << matches.size() << " matches based on Lowe's test" << std::endl;
+  }
   timer.stopAndPrintTiming("Lowe's ratio test filtering");
   return filtered_matches;
 }
@@ -575,7 +620,7 @@ std::vector<cv::DMatch> SparseStereoMatcher<T>::matchFeaturesBf(cv::InputArray l
 }
 
 template <typename T>
-std::vector<cv::DMatch> SparseStereoMatcher<T>::matchFeaturesBfKnn2(cv::InputArray left_descriptors, cv::InputArray right_descriptors) const
+std::vector<cv::DMatch> SparseStereoMatcher<T>::matchFeaturesBfKnn2(cv::InputArray left_descriptors, cv::InputArray right_descriptors, double ratio_test_threshold, bool verbose) const
 {
   cv::Mat left_descriptors_mat = left_descriptors.getMat();
   if (left_descriptors_mat.type() == CV_64F)
@@ -588,16 +633,16 @@ std::vector<cv::DMatch> SparseStereoMatcher<T>::matchFeaturesBfKnn2(cv::InputArr
     right_descriptors_mat.convertTo(right_descriptors_mat, CV_32F);
   }
 
-  Timer timer = Timer();
+  ProfilingTimer timer = ProfilingTimer();
   // Brute-Force matching with kNN (k=2)
   int k = 2;
   cv::BFMatcher matcher(match_norm_);
   timer.stopAndPrintTiming("creating brute-force knn2 matcher");
   std::vector<std::vector<cv::DMatch>> all_matches;
-  timer = Timer();
+  timer = ProfilingTimer();
   matcher.knnMatch(left_descriptors_mat, right_descriptors_mat, all_matches, k);
   timer.stopAndPrintTiming("performing brute-force knn2 matching");
-  std::vector<cv::DMatch> filtered_matches = filterMatchesWithLoweRatioTest(all_matches);
+  std::vector<cv::DMatch> filtered_matches = filterMatchesWithLoweRatioTest(all_matches, ratio_test_threshold, verbose);
   return filtered_matches;
 }
 
@@ -616,7 +661,7 @@ std::vector<cv::DMatch> SparseStereoMatcher<T>::matchFeaturesFlann(cv::InputArra
 }
 
 template <typename T>
-std::vector<cv::DMatch> SparseStereoMatcher<T>::matchFeaturesFlannKnn2(cv::InputArray left_descriptors, cv::InputArray right_descriptors) const
+std::vector<cv::DMatch> SparseStereoMatcher<T>::matchFeaturesFlannKnn2(cv::InputArray left_descriptors, cv::InputArray right_descriptors, double ratio_test_threshold, bool verbose) const
 {
   cv::Mat left_descriptors_mat = left_descriptors.getMat();
   if (left_descriptors_mat.type() == CV_64F)
@@ -629,16 +674,16 @@ std::vector<cv::DMatch> SparseStereoMatcher<T>::matchFeaturesFlannKnn2(cv::Input
     right_descriptors_mat.convertTo(right_descriptors_mat, CV_32F);
   }
 
-  Timer timer = Timer();
+  ProfilingTimer timer = ProfilingTimer();
   // FLANN matching with kNN (k=2)
   int k = 2;
   cv::FlannBasedMatcher matcher(flann_index_params_, flann_search_params_);
   timer.stopAndPrintTiming("creating flann matcher");
   std::vector<std::vector<cv::DMatch>> all_matches;
-  timer = Timer();
+  timer = ProfilingTimer();
   matcher.knnMatch(left_descriptors_mat, right_descriptors_mat, all_matches, k);
   timer.stopAndPrintTiming("flann knn2 matching");
-  std::vector<cv::DMatch> filtered_matches = filterMatchesWithLoweRatioTest(all_matches);
+  std::vector<cv::DMatch> filtered_matches = filterMatchesWithLoweRatioTest(all_matches, ratio_test_threshold, verbose);
   return filtered_matches;
 }
 
@@ -672,7 +717,7 @@ std::vector<cv::Point3_<V>> SparseStereoMatcher<T>::triangulatePoints(const std:
 
   std::vector<cv::Point3_<V>> points_3d_vec(num_of_points);
   // For debugging
-  std::cout << "-- 3d points --" << std::endl;
+//  std::cout << "-- 3d points --" << std::endl;
   for (int i = 0; i < num_of_points; ++i)
   {
     points_3d_vec[i] = cv::Point3_<V>(points_3d.col(i));
@@ -693,7 +738,8 @@ template <typename T>
 std::vector<cv::DMatch> SparseStereoMatcher<T>::filterMatchesWithEpipolarConstraint(
     const std::vector<cv::DMatch> &matches,
     const cv::Mat &left_undist_points, const cv::Mat &right_undist_points,
-    std::vector<double> *best_epipolar_constraints) const
+    std::vector<double> *best_epipolar_constraints,
+    bool verbose) const
 {
   if (best_epipolar_constraints != nullptr)
   {
@@ -706,29 +752,12 @@ std::vector<cv::DMatch> SparseStereoMatcher<T>::filterMatchesWithEpipolarConstra
   std::vector<cv::DMatch> best_matches;
   for (int i = 0; i < matches.size(); ++i)
   {
-    cv::Mat point1 = cv::Mat(1, 1, CV_64FC2);
+    cv::Mat point1 = cv::Mat(1, 1, CV_64F);
     point1.at<cv::Point2d>(0, 0) = left_undist_points.at<cv::Point2d>(matches[i].queryIdx);
-    cv::Mat hom_point1;
-    cv::convertPointsToHomogeneous(point1, hom_point1);
-    cv::Mat point2 = cv::Mat(1, 1, CV_64FC2);
+    cv::Mat point2 = cv::Mat(1, 1, CV_64F);
     point2.at<cv::Point2d>(0, 0) = right_undist_points.at<cv::Point2d>(matches[i].trainIdx);
-    cv::Mat hom_point2;
-    cv::convertPointsToHomogeneous(point2, hom_point2);
-    cv::Mat hom_point1_mat(3, 1, CV_64FC1);
-    hom_point1_mat.at<double>(0, 0) = hom_point1.at<cv::Point3d>(0, 0).x;
-    hom_point1_mat.at<double>(1, 0) = hom_point1.at<cv::Point3d>(0, 0).y;
-    hom_point1_mat.at<double>(2, 0) = hom_point1.at<cv::Point3d>(0, 0).z;
-    cv::Mat hom_point2_mat(3, 1, CV_64FC1);
-    hom_point2_mat.at<double>(0, 0) = hom_point2.at<cv::Point3d>(0, 0).x;
-    hom_point2_mat.at<double>(1, 0) = hom_point2.at<cv::Point3d>(0, 0).y;
-    hom_point2_mat.at<double>(2, 0) = hom_point2.at<cv::Point3d>(0, 0).z;
-    // For debugging
-//    std::cout << "hom_point1_mat: " << hom_point1_mat << std::endl;
-//    std::cout << "hom_point2_mat: " << hom_point2_mat << std::endl;
-    cv::Mat epipolar_constraint_mat = hom_point2_mat.t() * calib_.fundamental_matrix * hom_point1_mat;
-    CV_Assert(epipolar_constraint_mat.rows == 1 && epipolar_constraint_mat.cols == 1);
+    double epipolar_constraint = computeEpipolarConstraint(point1, point2);
 
-    double epipolar_constraint = epipolar_constraint_mat.at<double>(0, 0);
     if (std::abs(epipolar_constraint) < epipolar_constraint_threshold_)
     {
       best_matches.push_back(matches[i]);
@@ -741,8 +770,12 @@ std::vector<cv::DMatch> SparseStereoMatcher<T>::filterMatchesWithEpipolarConstra
 //    std::cout << i << ": " << epipolar_constraint << std::endl;
   }
 
+  if (verbose)
+  {
+    std::cout << "Keeping " << best_matches.size() << " from " << matches.size() << std::endl;
+  }
+
   // For debugging
-  std::cout << "Keeping " << best_matches.size() << " from " << matches.size() << std::endl;
 //  if (best_epipolar_constraints != nullptr)
 //  {
 //    std::cout << best_epipolar_constraints->size() << std::endl;
@@ -760,7 +793,8 @@ template <typename T>
 std::vector<cv::DMatch> SparseStereoMatcher<T>::filterMatchesWithEpipolarConstraint(
     const std::vector<cv::DMatch> &matches,
     const std::vector<cv::Point2d> &left_undist_points, const std::vector<cv::Point2d> &right_undist_points,
-    std::vector<double> *best_epipolar_constraints) const
+    std::vector<double> *best_epipolar_constraints,
+    bool verbose) const
 {
   if (best_epipolar_constraints != nullptr)
   {
@@ -773,29 +807,12 @@ std::vector<cv::DMatch> SparseStereoMatcher<T>::filterMatchesWithEpipolarConstra
   std::vector<cv::DMatch> best_matches;
   for (int i = 0; i < matches.size(); ++i)
   {
-    cv::Mat point1 = cv::Mat(1, 1, CV_64FC2);
+    cv::Mat point1 = cv::Mat(1, 2, CV_64F);
     point1.at<cv::Point2d>(0, 0) = left_undist_points[matches[i].queryIdx];
-    cv::Mat hom_point1;
-    cv::convertPointsToHomogeneous(point1, hom_point1);
-    cv::Mat point2 = cv::Mat(1, 1, CV_64FC2);
+    cv::Mat point2 = cv::Mat(1, 2, CV_64F);
     point2.at<cv::Point2d>(0, 0) = right_undist_points[matches[i].trainIdx];
-    cv::Mat hom_point2;
-    cv::convertPointsToHomogeneous(point2, hom_point2);
-    cv::Mat hom_point1_mat(3, 1, CV_64FC1);
-    hom_point1_mat.at<double>(0, 0) = hom_point1.at<cv::Point3d>(0, 0).x;
-    hom_point1_mat.at<double>(1, 0) = hom_point1.at<cv::Point3d>(0, 0).y;
-    hom_point1_mat.at<double>(2, 0) = hom_point1.at<cv::Point3d>(0, 0).z;
-    cv::Mat hom_point2_mat(3, 1, CV_64FC1);
-    hom_point2_mat.at<double>(0, 0) = hom_point2.at<cv::Point3d>(0, 0).x;
-    hom_point2_mat.at<double>(1, 0) = hom_point2.at<cv::Point3d>(0, 0).y;
-    hom_point2_mat.at<double>(2, 0) = hom_point2.at<cv::Point3d>(0, 0).z;
-    // For debugging
-//    std::cout << "hom_point1_mat: " << hom_point1_mat << std::endl;
-//    std::cout << "hom_point2_mat: " << hom_point2_mat << std::endl;
-    cv::Mat epipolar_constraint_mat = hom_point2_mat.t() * calib_.fundamental_matrix * hom_point1_mat;
-    CV_Assert(epipolar_constraint_mat.rows == 1 && epipolar_constraint_mat.cols == 1);
+    double epipolar_constraint = computeEpipolarConstraint(point1, point2);
 
-    double epipolar_constraint = epipolar_constraint_mat.at<double>(0, 0);
     if (std::abs(epipolar_constraint) < epipolar_constraint_threshold_)
     {
       best_matches.push_back(matches[i]);
@@ -808,8 +825,12 @@ std::vector<cv::DMatch> SparseStereoMatcher<T>::filterMatchesWithEpipolarConstra
 //    std::cout << i << ": " << epipolar_constraint << std::endl;
   }
 
+  if (verbose)
+  {
+    std::cout << "Keeping " << best_matches.size() << " from " << matches.size() << std::endl;
+  }
+
   // For debugging
-  std::cout << "Keeping " << best_matches.size() << " from " << matches.size() << std::endl;
 //  if (best_epipolar_constraints != nullptr)
 //  {
 //    std::cout << best_epipolar_constraints->size() << std::endl;
@@ -915,9 +936,13 @@ void SparseStereoMatcher<T>::correctMatches(
   CV_Assert(left_points->size() == right_points->size());
   std::vector<cv::Point2d> left_correct_points;
   std::vector<cv::Point2d> right_correct_points;
+  ProfilingTimer timer = ProfilingTimer();
   cv::correctMatches(calib_.fundamental_matrix, *left_points, *right_points, left_correct_points, right_correct_points);
+  timer.stopAndPrintTiming("cv::correctMatches");
+  timer = ProfilingTimer();
   *left_points = std::move(left_correct_points);
   *right_points = std::move(right_correct_points);
+  timer.stopAndPrintTiming("moving corrected matches");
 }
 
 template <typename T>
@@ -939,6 +964,76 @@ void SparseStereoMatcher<T>::correctMatchesAndUpdateKeypoints(
 }
 
 template <typename T>
+double SparseStereoMatcher<T>::computeEpipolarConstraint(const cv::Mat &point1, const cv::Mat &point2) const
+{
+  CV_Assert(point1.type() == point2.type());
+  if (point1.type() == CV_32FC2)
+  {
+    cv::Mat point1_flat(point1.rows, 2, CV_64FC1);
+    point1_flat.at<cv::Point2d>(0, 0) = point1.at<cv::Point2d>(0, 0);
+    cv::Mat point2_flat(point1.rows, 2, CV_64FC1);
+    point2_flat.at<cv::Point2d>(0, 0) = point2.at<cv::Point2d>(0, 0);
+    return computeEpipolarConstraint(point1_flat, point2_flat);
+  }
+  else if (point1.type() == CV_32FC2)
+  {
+    cv::Mat point1_flat(point1.rows, 2, CV_32FC1);
+    point1_flat.at<cv::Point2f>(0, 0) = point1.at<cv::Point2f>(0, 0);
+    cv::Mat point2_flat(point1.rows, 2, CV_32FC1);
+    point2_flat.at<cv::Point2f>(0, 0) = point2.at<cv::Point2f>(0, 0);
+    return computeEpipolarConstraint(point1_flat, point2_flat);
+  }
+  else
+  {
+    cv::Mat hom_point1;
+    Utilities::convertPointsToHomogeneous(point1, hom_point1);
+    cv::Mat hom_point2;
+    Utilities::convertPointsToHomogeneous(point2, hom_point2);
+    // For debugging
+//    std::cout << "fundamental_matrix: " << calib_.fundamental_matrix << std::endl;
+//    std::cout << "hom_point1: " << hom_point1 << std::endl;
+//    std::cout << "hom_point2: " << hom_point2 << std::endl;
+    cv::Mat epipolar_constraint_mat = hom_point2 * calib_.fundamental_matrix * hom_point1.t();
+    CV_Assert(epipolar_constraint_mat.rows == 1 && epipolar_constraint_mat.cols == 1);
+
+    double epipolar_constraint;
+    if (epipolar_constraint_mat.type() == CV_32F)
+    {
+      epipolar_constraint = static_cast<double>(epipolar_constraint_mat.at<float>(0, 0));
+    }
+    else if (epipolar_constraint_mat.type() == CV_64F)
+    {
+      epipolar_constraint = epipolar_constraint_mat.at<double>(0, 0);
+    }
+    else
+    {
+      throw std::runtime_error("Cannot compute epipolar constraint for non-floating point matrices");
+    }
+    return epipolar_constraint;
+  }
+}
+
+template <typename T>
+double SparseStereoMatcher<T>::computeEpipolarConstraint(const cv::Point2d &point1, const cv::Point2d &point2) const
+{
+  cv::Mat point1_mat(1, 1, CV_64FC2);
+  point1_mat.at<cv::Point2d>(0, 0) = point1;
+  cv::Mat point2_mat(1, 1, CV_64FC2);
+  point2_mat.at<cv::Point2d>(0, 0) = point2;
+  return computeEpipolarConstraint(point1_mat, point2_mat);
+}
+
+template <typename T>
+double SparseStereoMatcher<T>::computeEpipolarConstraint(const cv::Point2f &point1, const cv::Point2f &point2) const
+{
+  cv::Mat point1_mat(1, 1, CV_32FC2);
+  point1_mat.at<cv::Point2d>(0, 0) = point1;
+  cv::Mat point2_mat(1, 1, CV_32FC2);
+  point2_mat.at<cv::Point2d>(0, 0) = point2;
+  return computeEpipolarConstraint(point1_mat, point2_mat);
+}
+
+template <typename T>
 std::vector<double> SparseStereoMatcher<T>::computeEpipolarConstraints(
     const std::vector<cv::Point2d> &left_points, const std::vector<cv::Point2d> &right_points) const
 {
@@ -948,30 +1043,7 @@ std::vector<double> SparseStereoMatcher<T>::computeEpipolarConstraints(
 //  std::cout << "-- epipolar constraints --" << std::endl;
   for (int i = 0; i < left_points.size(); ++i)
   {
-    cv::Mat point1 = cv::Mat(1, 1, CV_64FC2);
-    point1.at<cv::Point2d>(0, 0) = left_points[i];
-    cv::Mat hom_point1;
-    cv::convertPointsToHomogeneous(point1, hom_point1);
-    cv::Mat point2 = cv::Mat(1, 1, CV_64FC2);
-    point2.at<cv::Point2d>(0, 0) = right_points[i];
-    cv::Mat hom_point2;
-    cv::convertPointsToHomogeneous(point2, hom_point2);
-    cv::Mat hom_point1_mat(3, 1, CV_64FC1);
-    hom_point1_mat.at<double>(0, 0) = hom_point1.at<cv::Point3d>(0, 0).x;
-    hom_point1_mat.at<double>(1, 0) = hom_point1.at<cv::Point3d>(0, 0).y;
-    hom_point1_mat.at<double>(2, 0) = hom_point1.at<cv::Point3d>(0, 0).z;
-    cv::Mat hom_point2_mat(3, 1, CV_64FC1);
-    hom_point2_mat.at<double>(0, 0) = hom_point2.at<cv::Point3d>(0, 0).x;
-    hom_point2_mat.at<double>(1, 0) = hom_point2.at<cv::Point3d>(0, 0).y;
-    hom_point2_mat.at<double>(2, 0) = hom_point2.at<cv::Point3d>(0, 0).z;
-    cv::Mat epipolar_constraint_mat = hom_point2_mat.t() * calib_.fundamental_matrix * hom_point1_mat;
-    CV_Assert(epipolar_constraint_mat.rows == 1 && epipolar_constraint_mat.cols == 1);
-    double epipolar_constraint = epipolar_constraint_mat.at<double>(0, 0);
-    epipolar_constraints[i] = epipolar_constraint;
-    // For debugging
-//    std::cout << "hom_point1_mat: " << hom_point1_mat << std::endl;
-//    std::cout << "hom_point2_mat: " << hom_point2_mat << std::endl;
-//    std::cout << i << ": " << epipolar_constraint << std::endl;
+    epipolar_constraints[i] = computeEpipolarConstraint(left_points[i], right_points[i]);
   }
   return epipolar_constraints;
 }
@@ -979,17 +1051,16 @@ std::vector<double> SparseStereoMatcher<T>::computeEpipolarConstraints(
 template <typename T>
 std::vector<cv::Point3d> SparseStereoMatcher<T>::match(
     const cv::InputArray left_input_img, cv::InputArray right_input_img,
-    std::vector<cv::Point2d> *image_points) const
+    std::vector<cv::Point2d> *image_points,
+    bool verbose)
 {
-  Timer timer = Timer();
-  cv::Mat left_img = stereo::Utilities::convertToGrayscale(left_input_img);
-  cv::Mat right_img = stereo::Utilities::convertToGrayscale(right_input_img);
-  CV_Assert(left_img.channels() == 1);
-  CV_Assert(right_img.channels() == 1);
-  timer.stopAndPrintTiming("converting images");
+  CV_Assert(left_input_img.channels() == 1);
+  CV_Assert(right_input_img.channels() == 1);
+  cv::Mat left_img = left_input_img.getMat();
+  cv::Mat right_img = right_input_img.getMat();
 
   // Compute feature points and match them
-  timer = Timer();
+  ProfilingTimer timer = ProfilingTimer();
   std::vector<cv::KeyPoint> left_keypoints;
   std::vector<cv::KeyPoint> right_keypoints;
   cv::Mat left_descriptors;
@@ -1003,8 +1074,10 @@ std::vector<cv::Point3d> SparseStereoMatcher<T>::match(
       &left_keypoints, &right_keypoints,
       left_descriptors, right_descriptors,
       &left_points, &right_points);
-  std::cout << "Detected " << left_points.size() << " left and " << right_points.size() << " right keypoints" << std::endl;
-  std::cout << "Left descriptors: " << left_descriptors.rows << ", " << left_descriptors.cols << std::endl;
+  if (verbose)
+  {
+    std::cout << "Detected " << left_points.size() << " left and " << right_points.size() << " right keypoints" << std::endl;
+  }
   timer.stopAndPrintTiming("detecting and computing features");
 
   if (left_points.size() == 0 || right_points.size() == 0)
@@ -1012,10 +1085,19 @@ std::vector<cv::Point3d> SparseStereoMatcher<T>::match(
     throw Error("Unable to detect any keypoints");
   }
 
-  timer = Timer();
+  // For debugging
+//  timer = ProfilingTimer();
+//  auto left_img_with_keypoints = stereo::Utilities::drawPoints(left_input_img.getMat().clone(), left_points);
+//  auto right_img_with_keypoints = stereo::Utilities::drawPoints(right_input_img.getMat().clone(), right_points);
+//  cv::imshow("Left keypoints", left_img_with_keypoints);
+//  cv::imshow("Right keypoints", right_img_with_keypoints);
+//  timer.stopAndPrintTiming("drawing keypoints");
+//  cv::waitKey();
+
+  timer = ProfilingTimer();
 //  std::vector<cv::DMatch> matches = matchFeaturesBf(left_descriptors, right_descriptors);
-  std::vector<cv::DMatch> matches = matchFeaturesBfKnn2(left_descriptors, right_descriptors);
-//  std::vector<cv::DMatch> matches = matchFeaturesFlannKnn2(left_descriptors, right_descriptors);
+  std::vector<cv::DMatch> matches = matchFeaturesBfKnn2(left_descriptors, right_descriptors, -1.0, verbose);
+//  std::vector<cv::DMatch> matches = matchFeaturesFlannKnn2(left_descriptors, right_descriptors, -1.0, verbose);
   timer.stopAndPrintTiming("feature matching");
 
   if (matches.size() == 0)
@@ -1023,14 +1105,26 @@ std::vector<cv::Point3d> SparseStereoMatcher<T>::match(
     throw Error("Unable to match any keypoints");
   }
 
+  // For debugging
+//  std::vector<cv::Point2d> left_debug_points;
+//  std::vector<cv::Point2d> right_debug_points;
+//  retrieveMatchedPointsAndUpdateMatches(left_points, right_points, &matches, &left_debug_points, &right_debug_points);
+//  left_points = left_debug_points;
+//  right_points = right_debug_points;
+//  timer = ProfilingTimer();
+//  auto match_img = stereo::Utilities::drawPointMatches(left_input_img.getMat().clone(), left_debug_points, right_input_img.getMat().clone(), right_debug_points);
+//  cv::imshow("Keypoint matches", match_img);
+//  timer.stopAndPrintTiming("drawing matches");
+//  cv::waitKey();
+
   // Undistort feature points and update keypoints
-  timer = Timer();
+  timer = ProfilingTimer();
   undistortPoints(left_points, right_points);
   timer.stopAndPrintTiming("undistorting keypoints");
 
-  timer = Timer();
+  timer = ProfilingTimer();
   // Filter matches based on epipolar constraint
-  std::vector<cv::DMatch> best_matches = filterMatchesWithEpipolarConstraint(matches, left_points, right_points);
+  std::vector<cv::DMatch> best_matches = filterMatchesWithEpipolarConstraint(matches, left_points, right_points, nullptr, verbose);
   std::vector<cv::Point2d> left_best_points;
   std::vector<cv::Point2d> right_best_points;
   retrieveMatchedPointsAndUpdateMatches(left_points, right_points, &best_matches, &left_best_points, &right_best_points);
@@ -1041,7 +1135,14 @@ std::vector<cv::Point3d> SparseStereoMatcher<T>::match(
     throw Error("All matched keypoints were filtered");
   }
 
-  timer = Timer();
+  // For debugging
+//  timer = ProfilingTimer();
+//  auto best_match_img = stereo::Utilities::drawPointMatches(left_input_img.getMat().clone(), left_best_points, right_input_img.getMat().clone(), right_best_points);
+//  cv::imshow("Best keypoint matches", best_match_img);
+//  timer.stopAndPrintTiming("drawing matches");
+//  cv::waitKey();
+
+  timer = ProfilingTimer();
   // Correct matched points based on epipolar constraint
   correctMatches(&left_best_points, &right_best_points);
   timer.stopAndPrintTiming("correcting matches with epipolar constraint");
@@ -1050,7 +1151,7 @@ std::vector<cv::Point3d> SparseStereoMatcher<T>::match(
 //  std::vector<double> epipolar_constraints = matcher.computeEpipolarConstraints(left_best_points, right_best_points);
 
   // For debugging
-  timer = Timer();
+//  timer = ProfilingTimer();
 //  auto left_img_with_keypoints = stereo::Utilities::drawPoints(left_input_img.getMat().clone(), left_best_points);
 //  auto right_img_with_keypoints = stereo::Utilities::drawPoints(right_input_img.getMat().clone(), right_best_points);
 //  cv::imshow("Left keypoints", left_img_with_keypoints);
@@ -1058,15 +1159,15 @@ std::vector<cv::Point3d> SparseStereoMatcher<T>::match(
 //  timer.stopAndPrintTiming("drawing keypoints");
 
   // For debugging
-  timer = Timer();
+//  timer = ProfilingTimer();
 //  auto match_img = stereo::Utilities::drawPointMatches(left_input_img.getMat().clone(), left_best_points, right_input_img.getMat().clone(), right_best_points);
 //  cv::imshow("Keypoint matches", match_img);
 //  timer.stopAndPrintTiming("drawing matches");
 
-  timer = Timer();
+  timer = ProfilingTimer();
   std::vector<cv::Point3d> points_3d = triangulatePoints(left_best_points, right_best_points);
   timer.stopAndPrintTiming("triangulating points");
-  timer = Timer();
+  timer = ProfilingTimer();
   if (image_points != nullptr)
   {
     (*image_points) = std::move(left_best_points);
@@ -1077,7 +1178,7 @@ std::vector<cv::Point3d> SparseStereoMatcher<T>::match(
 }
 
 template <typename T>
-SparseMatchResult SparseStereoMatcher<T>::matchFull(const cv::InputArray left_input_img, cv::InputArray right_input_img) const
+SparseMatchResult SparseStereoMatcher<T>::matchFull(const cv::InputArray left_input_img, cv::InputArray right_input_img, bool verbose)
 {
   cv::Mat left_img = Utilities::convertToGrayscale(left_input_img);
   cv::Mat right_img = Utilities::convertToGrayscale(right_input_img);
@@ -1098,7 +1199,7 @@ SparseMatchResult SparseStereoMatcher<T>::matchFull(const cv::InputArray left_in
       &left_keypoints, &right_keypoints,
       left_descriptors, right_descriptors,
       &left_points, &right_points);
-  std::vector<cv::DMatch> matches = matchFeaturesFlannKnn2(left_descriptors, right_descriptors, ratio_test_threshold_);
+  std::vector<cv::DMatch> matches = matchFeaturesFlannKnn2(left_descriptors, right_descriptors, ratio_test_threshold_, verbose);
 
   // For debugging
 //  auto left_img_with_keypoints = Utilities::drawKeypoints(left_input_img.getMat().clone(), left_keypoints);
@@ -1137,7 +1238,7 @@ SparseMatchResult SparseStereoMatcher<T>::matchFull(const cv::InputArray left_in
 
   // Filter matches based on epipolar constraint
   std::vector<double> epipolar_constraints;
-  std::vector<cv::DMatch> best_matches = filterMatchesWithEpipolarConstraint(matches, left_undist_points, right_undist_points, &epipolar_constraints);
+  std::vector<cv::DMatch> best_matches = filterMatchesWithEpipolarConstraint(matches, left_undist_points, right_undist_points, &epipolar_constraints, verbose);
   std::vector<cv::Point2d> left_best_points;
   std::vector<cv::Point2d> right_best_points;
   std::vector<cv::KeyPoint> left_best_keypoints;
@@ -1164,7 +1265,7 @@ SparseMatchResult SparseStereoMatcher<T>::matchFull(const cv::InputArray left_in
 //  cv::imshow("Left correct keypoints", left_img_with_correct_keypoints);
 //  cv::imshow("Right correct keypoints", right_img_with_correct_keypoints);
 //
-//    cv::waitKey(0);
+//  cv::waitKey(0);
 
   std::vector<cv::Point3d> points_3d = triangulatePoints(left_best_points, right_best_points);
 

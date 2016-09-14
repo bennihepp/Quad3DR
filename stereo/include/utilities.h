@@ -39,6 +39,24 @@ public:
   }
 };
 
+#if WITH_PROFILING
+  using ProfilingTimer = Timer;
+#else
+  class ProfilingTimer
+  {
+  public:
+    double stop()
+    {
+      return 0.0;
+    }
+
+    double stopAndPrintTiming(const std::string &name)
+    {
+      return 0.0;
+    }
+  };
+#endif
+
 class Utilities
 {
 public:
@@ -91,6 +109,32 @@ public:
     return img_with_matches;
   }
 
+  static void convertPointsToHomogeneous(const cv::Mat &points, cv::OutputArray hom_points)
+  {
+    CV_Assert(points.channels() == 1);
+    if (points.type() == CV_32F || points.type() == CV_64F)
+    {
+      hom_points.create(points.rows, points.cols + 1, points.type());
+      cv::Mat hom_points_mat = hom_points.getMat();
+      points.copyTo(hom_points_mat(cv::Rect(0, 0, points.cols, points.rows)));
+      for (int i = 0; i < hom_points_mat.rows; ++i)
+      {
+        if (points.type() == CV_64F)
+        {
+          hom_points_mat.at<double>(i, points.cols) = 1;
+        }
+        else // CV_32F
+        {
+          hom_points_mat.at<float>(i, points.cols) = 1;
+        }
+      }
+      hom_points_mat(cv::Rect(points.cols, 0, 1, points.rows));
+    }
+    else
+    {
+      throw std::runtime_error("Unable to convert non-floating point array to homogeneous coordinates");
+    }
+  }
 };
 
 } /* namespace stereo */

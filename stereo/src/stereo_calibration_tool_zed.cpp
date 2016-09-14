@@ -14,73 +14,13 @@
 #include <tclap/CmdLine.h>
 #include <video_source_zed.h>
 
-// TODO
-const char * usage =
-" \nexample command line for calibration from a live feed.\n"
-"   calibration  -w=4 -h=5 -s=0.025 -o=camera.yml -op -oe\n"
-" \n"
-" example command line for calibration from a list of stored images:\n"
-"   imagelist_creator image_list.xml *.png\n"
-"   calibration -w=4 -h=5 -s=0.025 -o=camera.yml -op -oe image_list.xml\n"
-" where image_list.xml is the standard OpenCV XML/YAML\n"
-" use imagelist_creator to create the xml or yaml list\n"
-" file consisting of the list of strings, e.g.:\n"
-" \n"
-"<?xml version=\"1.0\"?>\n"
-"<opencv_storage>\n"
-"<images>\n"
-"view000.png\n"
-"view001.png\n"
-"<!-- view002.png -->\n"
-"view003.png\n"
-"view010.png\n"
-"one_extra_view.jpg\n"
-"</images>\n"
-"</opencv_storage>\n";
-
-
-
 
 // TODO
 const char* liveCaptureHelp =
     "When the live video from camera is used as input, the following hot-keys may be used:\n"
         "  <ESC>, 'q' - quit the program\n"
-        "  'c' - keep frame\n"
-        "  'u' - switch undistortion on/off\n";
-
-// TODO
-static void help()
-{
-    printf("This is a camera calibration sample.\n"
-        "Usage: calibration\n"
-        "     -w=<board_width>         # the number of inner corners per one of board dimension\n"
-        "     -h=<board_height>        # the number of inner corners per another board dimension\n"
-        "     [-pt=<pattern>]          # the type of pattern: chessboard or circles' grid\n"
-        "     [-n=<number_of_frames>]  # the number of frames to use for calibration\n"
-        "                              # (if not specified, it will be set to the number\n"
-        "                              #  of board views actually available)\n"
-        "     [-d=<delay>]             # a minimum delay in ms between subsequent attempts to capture a next view\n"
-        "                              # (used only for video capturing)\n"
-        "     [-s=<squareSize>]       # square size in some user-defined units (1 by default)\n"
-        "     [-o=<out_camera_params>] # the output filename for intrinsic [and extrinsic] parameters\n"
-        "     [-op]                    # write detected feature points\n"
-        "     [-oe]                    # write extrinsic parameters\n"
-        "     [-zt]                    # assume zero tangential distortion\n"
-        "     [-a=<aspectRatio>]      # fix aspect ratio (fx/fy)\n"
-        "     [-p]                     # fix the principal point at the center\n"
-        "     [-v]                     # flip the captured images around the horizontal axis\n"
-        "     [-V]                     # use a video file, and not an image list, uses\n"
-        "                              # [input_data] string for the video file name\n"
-        "     [-su]                    # show undistorted images after calibration\n"
-        "     [input_data]             # input data, one of the following:\n"
-        "                              #  - text file with a list of the images of the board\n"
-        "                              #    the text file can be generated with imagelist_creator\n"
-        "                              #  - name of video file with a video of the board\n"
-        "                              # if input_data not specified, a live view from the camera is used\n"
-        "\n");
-    printf("\n%s",usage);
-    printf("\n%s", liveCaptureHelp);
-}
+        "  'c' - freeze frame (for keeping or discarding)\n"
+        "  'k' - keep frame\n";
 
 enum { DETECTION = 0, CAPTURING = 1, CALIBRATED = 2 };
 enum Pattern { CHESSBOARD, CIRCLES_GRID, ASYMMETRIC_CIRCLES_GRID };

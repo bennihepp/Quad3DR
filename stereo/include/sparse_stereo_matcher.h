@@ -15,6 +15,12 @@
 namespace stereo
 {
 
+#if OPENCV_2_4
+  namespace cv_cuda = cv::gpu;
+#else
+  namespace cv_cuda = cv::cuda;
+#endif
+
 struct SparseMatchResult
 {
   std::vector<cv::Point3d> points_3d;
@@ -42,8 +48,7 @@ class FeatureDetectorOpenCV
   void detectFeatureKeypoints(
       cv::Ptr<T> detector,
       const cv::InputArray img,
-      std::vector<cv::KeyPoint> *keypoints_ptr,
-      std::vector<cv::Point2d> *points_ptr) const;
+      std::vector<cv::KeyPoint> *keypoints_ptr) const;
 
   void computeFeatureDescriptors(
       cv::Ptr<U> descriptor_computer,
@@ -68,10 +73,13 @@ public:
     max_num_of_keypoints_ = max_num_of_keypoints;
   }
 
-  void detectFeatureKeypoints(
-      const cv::InputArray img,
+  void convertKeypointsToPoints(
       std::vector<cv::KeyPoint> *keypoints_ptr,
       std::vector<cv::Point2d> *points_ptr) const;
+
+  void detectFeatureKeypoints(
+      const cv::InputArray img,
+      std::vector<cv::KeyPoint> *keypoints_ptr) const;
   void computeFeatureDescriptors(
       cv::InputArray img,
       std::vector<cv::KeyPoint> *keypoints_ptr,
@@ -133,7 +141,7 @@ public:
       cv::InputArray img,
       std::vector<cv::KeyPoint> *keypoints_ptr,
       cv::OutputArray descriptors,
-      std::vector<cv::Point2d> *points_ptr) const;
+      std::vector<cv::Point2d> *points_ptr);
 
   void detectAndComputeFeatures(
       cv::InputArray img_left,
@@ -143,7 +151,7 @@ public:
       cv::OutputArray descriptors_left,
       cv::OutputArray descriptors_right,
       std::vector<cv::Point2d> *points_left_ptr,
-      std::vector<cv::Point2d> *points_right_ptr) const;
+      std::vector<cv::Point2d> *points_right_ptr);
 };
 
 template <typename T>
@@ -214,33 +222,39 @@ public:
     flann_search_params_ = search_params;
   }
 
-  // Convenience method for matching
+  // Convenience method for matching (input images have to be grayscale)
   std::vector<cv::Point3d> match(
       const cv::InputArray left_input_img, cv::InputArray right_input_img,
-      std::vector<cv::Point2d> *image_points) const;
+      std::vector<cv::Point2d> *image_points,
+      bool verbose=true);
 
-  SparseMatchResult matchFull(const cv::InputArray left_color_img, cv::InputArray right_color_img) const;
+  SparseMatchResult matchFull(const cv::InputArray left_color_img, cv::InputArray right_color_img, bool verbose=true);
 
   cv::Mat undistortPoints(cv::InputArray points, cv::InputArray camera_matrix, cv::InputArray dist_coefficients) const;
   void undistortPoints(cv::InputOutputArray left_points, cv::InputOutputArray right_points) const;
 
   std::vector<cv::DMatch> matchFeaturesBf(cv::InputArray left_descriptors, cv::InputArray right_descriptors) const;
-  std::vector<cv::DMatch> matchFeaturesBfKnn2(cv::InputArray left_descriptors, cv::InputArray right_descriptors) const;
+  std::vector<cv::DMatch> matchFeaturesBfKnn2(cv::InputArray left_descriptors, cv::InputArray right_descriptors, double ratio_test_threshold=-1.0, bool verbose=true) const;
   std::vector<cv::DMatch> matchFeaturesFlann(cv::InputArray left_descriptors, cv::InputArray right_descriptors) const;
-  std::vector<cv::DMatch> matchFeaturesFlannKnn2(cv::InputArray left_descriptors, cv::InputArray right_descriptors) const;
+  std::vector<cv::DMatch> matchFeaturesFlannKnn2(cv::InputArray left_descriptors, cv::InputArray right_descriptors, double ratio_test_threshold=-1.0, bool verbose=true) const;
 
   std::vector<cv::DMatch> filterMatchesWithDistance(const std::vector<cv::DMatch> &all_matches, double good_threshold_multiplier=5, double min_good_threshold=0.02) const;
-  std::vector<cv::DMatch> filterMatchesWithLoweRatioTest(const std::vector<std::vector<cv::DMatch>> &matches, double ratio_test_threshold=-1.0) const;
+  std::vector<cv::DMatch> filterMatchesWithLoweRatioTest(
+      const std::vector<std::vector<cv::DMatch>> &matches,
+      double ratio_test_threshold=-1.0,
+      bool verbose=true) const;
 
   std::vector<cv::DMatch> filterMatchesWithEpipolarConstraint(
       const std::vector<cv::DMatch> &matches,
       const cv::Mat &left_undist_points, const cv::Mat &right_undist_points,
-      std::vector<double> *best_epipolar_constraints=nullptr) const;
+      std::vector<double> *best_epipolar_constraints=nullptr,
+      bool verbose=true) const;
 
   std::vector<cv::DMatch> filterMatchesWithEpipolarConstraint(
       const std::vector<cv::DMatch> &matches,
       const std::vector<cv::Point2d> &left_undist_points, const std::vector<cv::Point2d> &right_undist_points,
-      std::vector<double> *best_epipolar_constraints=nullptr) const;
+      std::vector<double> *best_epipolar_constraints=nullptr,
+      bool verbose=true) const;
 
   void retrieveMatchedPointsAndUpdateMatches(
       const std::vector<cv::Point2d> &left_points, const std::vector<cv::Point2d> &right_points,
@@ -258,6 +272,10 @@ public:
   void correctMatchesAndUpdateKeypoints(
       std::vector<cv::Point2d> *left_points, std::vector<cv::Point2d> *right_points,
       std::vector<cv::KeyPoint> *left_keypoints, std::vector<cv::KeyPoint> *right_keypoints) const;
+
+  double computeEpipolarConstraint(const cv::Mat &point1, const cv::Mat &point2) const;
+  double computeEpipolarConstraint(const cv::Point2d &point1, const cv::Point2d &point2) const;
+  double computeEpipolarConstraint(const cv::Point2f &point1, const cv::Point2f &point2) const;
 
   std::vector<double> computeEpipolarConstraints(
       const std::vector<cv::Point2d> &left_points, const std::vector<cv::Point2d> &right_points) const;

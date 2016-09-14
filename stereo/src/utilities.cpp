@@ -7,9 +7,18 @@
 //==================================================
 
 #include <utilities.h>
+#if OPENCV_3
+  #include <opencv2/cudaimgproc.hpp>
+#endif
 
 namespace stereo
 {
+
+#if OPENCV_2_4
+  namespace cv_cuda = cv::gpu;
+#else
+  namespace cv_cuda = cv::cuda;
+#endif
 
 StereoCameraCalibration Utilities::readStereoCalibration(const std::string &filename)
 {
@@ -48,18 +57,23 @@ StereoCameraCalibration Utilities::readStereoCalibration(const std::string &file
 cv::Mat Utilities::convertToGrayscale(cv::InputArray img)
 {
   CV_Assert(img.channels() == 1 || img.channels() == 3 || img.channels() == 4);
-  cv::Mat img_m = img.getMat();
-  CV_Assert(!img_m.empty());
-  if (img_m.channels() > 1)
+  CV_Assert(!img.empty());
+  int code;
+  if (img.channels() == 3)
   {
-    cv::Mat grayscale_img;
-    cv::cvtColor(img_m, grayscale_img, CV_RGB2GRAY);
-    return grayscale_img;
+    code = CV_RGB2GRAY;
+  }
+  else if (img.channels() == 4)
+  {
+    code = CV_RGBA2GRAY;
   }
   else
   {
-    return img_m;
+    return img.getMat();
   }
+  cv::Mat img_grayscale;
+  cv::cvtColor(img, img_grayscale, code);
+  return img_grayscale;
 }
 
 cv::Mat Utilities::drawKeypoints(cv::InputArray img, const std::vector<cv::KeyPoint> &keypoints)
