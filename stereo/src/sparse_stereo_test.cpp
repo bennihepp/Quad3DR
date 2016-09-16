@@ -14,6 +14,7 @@
 #if OPENCV_3_1
   #include <opencv2/xfeatures2d.hpp>
   #include <opencv2/ximgproc.hpp>
+  #include <opencv2/cudastereo.hpp>
 #endif
 #include <opencv2/calib3d.hpp>
 #include <sparse_stereo_matcher.h>
@@ -21,6 +22,16 @@
 
 // TODO: For profiling (bug in oprofile eclipse plugin)
 #include <unistd.h>
+
+#if OPENCV_2_4
+  namespace cv_cuda = cv::gpu;
+  using HostMemType = cv::gpu::CudaMem;
+  const int HOST_MEM_ALLOC_TYPE = HostMemType::ALLOC_ZEROCOPY;
+#else
+  namespace cv_cuda = cv::cuda;
+  using HostMemType = cv::cuda::HostMem;
+  const HostMemType::AllocType HOST_MEM_ALLOC_TYPE = HostMemType::PAGE_LOCKED;
+#endif
 
 template <typename T>
 void chessboardTriangulation(
@@ -102,51 +113,79 @@ void profileSparseStereoMatching(
   timer.stopAndPrintTiming("sparse matching");
 }
 
-// TODO
 #if OPENCV_3_1
 template <typename T>
 void denseStereoMatching(
     stereo::SparseStereoMatcher<T> &matcher,
     cv::InputArray left_input_img, cv::InputArray right_input_img)
 {
-  int max_disp = 16*7;
-  int wsize = 19;
+  stereo::Timer timer;
   double vis_mult = 1.0;
 
   cv::Mat left_img = stereo::Utilities::convertToGrayscale(left_input_img);
   cv::Mat right_img = stereo::Utilities::convertToGrayscale(right_input_img);
 
-  cv::Ptr<cv::StereoBM> left_matcher = cv::StereoBM::create(max_disp, wsize);
-  cv::Ptr<cv::StereoMatcher> right_matcher = cv::ximgproc::createRightMatcher(left_matcher);
-  cv::Ptr<cv::ximgproc::DisparityWLSFilter> wls_filter = cv::ximgproc::createDisparityWLSFilter(left_matcher);
+  // CUDA StereoBM
+//  cv::Ptr<cv::cuda::StereoBM> left_matcher = cv::cuda::createStereoBM(max_disp, wsize);
 
+  // CUDA StereoBM
+  int num_disp = 128;
+  int block_size = 19;
+  int iters = 8;
+  int levels = 4;
+  int nr_plane = 4;
+//  cv::Ptr<cv::cuda::StereoBM> left_matcher = cv::cuda::createStereoBM(num_disp, block_size);
+//  cv::Ptr<cv::cuda::StereoBeliefPropagation> left_matcher = cv::cuda::createStereoBeliefPropagation(num_disp, iters, levels);
+  cv::Ptr<cv::cuda::StereoConstantSpaceBP> left_matcher = cv::cuda::createStereoConstantSpaceBP(num_disp, iters, levels, nr_plane);
+  cv_cuda::GpuMat left_img_gpu;
+  cv_cuda::GpuMat right_img_gpu;
+  left_img_gpu.upload(left_img);
+  right_img_gpu.upload(right_img);
+  timer.start();
+  cv_cuda::GpuMat left_disp_gpu;
+  left_matcher->compute(left_img_gpu, right_img_gpu, left_disp_gpu);
+  timer.stopAndPrintTiming("Dense stereo matching");
   cv::Mat left_disp;
-  cv::Mat right_disp;
-  double matching_time = (double)cv::getTickCount();
-  left_matcher->compute(left_img, right_img, left_disp);
-  right_matcher->compute(right_img, left_img, right_disp);
-  matching_time = ((double)cv::getTickCount() - matching_time) / cv::getTickFrequency();
+  left_disp_gpu.download(left_disp);
+//
+  std::cout << left_disp.type() << ", " << CV_16S << std::endl;
+  left_disp.convertTo(left_disp, CV_8U);
+  cv::namedWindow("left disparity", cv::WINDOW_AUTOSIZE);
+  cv::imshow("left disparity", left_disp);
 
-  double lambda = 8000.0;
-  double sigma = 1.5;
-  wls_filter->setLambda(lambda);
-  wls_filter->setSigmaColor(sigma);
-  double filtering_time = (double)cv::getTickCount();
-  cv::Mat filtered_disp;
-  wls_filter->filter(left_disp, left_img, filtered_disp, right_disp);
-  filtering_time = ((double)cv::getTickCount() - filtering_time) / cv::getTickFrequency();
-
-  std::cout << "matching time: " << matching_time << std::endl;
-  cv::Mat raw_disp_vis;
-  cv::ximgproc::getDisparityVis(left_disp, raw_disp_vis, vis_mult);
-  cv::namedWindow("raw disparity", cv::WINDOW_AUTOSIZE);
-  cv::imshow("raw disparity", raw_disp_vis);
-
-  std::cout << "filtering time: " << filtering_time << std::endl;
-  cv::Mat filtered_disp_vis;
-  cv::ximgproc::getDisparityVis(filtered_disp,filtered_disp_vis,vis_mult);
-  cv::namedWindow("filtered disparity", cv::WINDOW_AUTOSIZE);
-  cv::imshow("filtered disparity", filtered_disp_vis);
+  // StereoBM + disparity WLS filter
+//  int max_disp = 16*7;
+//  int wsize = 19;
+//  cv::Ptr<cv::StereoBM> left_matcher = cv::StereoBM::create(max_disp, wsize);
+//  cv::Ptr<cv::StereoMatcher> right_matcher = cv::ximgproc::createRightMatcher(left_matcher);
+//  cv::Ptr<cv::ximgproc::DisparityWLSFilter> wls_filter = cv::ximgproc::createDisparityWLSFilter(left_matcher);
+//
+//  cv::Mat left_disp;
+//  cv::Mat right_disp;
+//  double matching_time = (double)cv::getTickCount();
+//  left_matcher->compute(left_img, right_img, left_disp);
+//  right_matcher->compute(right_img, left_img, right_disp);
+//  matching_time = ((double)cv::getTickCount() - matching_time) / cv::getTickFrequency();
+//
+//  double lambda = 8000.0;
+//  double sigma = 1.5;
+//  wls_filter->setLambda(lambda);
+//  wls_filter->setSigmaColor(sigma);
+//  double filtering_time = (double)cv::getTickCount();
+//  cv::Mat filtered_disp;
+//  wls_filter->filter(left_disp, left_img, filtered_disp, right_disp);
+//  filtering_time = ((double)cv::getTickCount() - filtering_time) / cv::getTickFrequency();
+//
+//  std::cout << "filtering time: " << filtering_time << std::endl;
+//  cv::Mat filtered_disp_vis;
+//  cv::ximgproc::getDisparityVis(filtered_disp,filtered_disp_vis,vis_mult);
+//  cv::namedWindow("filtered disparity", cv::WINDOW_AUTOSIZE);
+//  cv::imshow("filtered disparity", filtered_disp_vis);
+//
+//  cv::Mat raw_disp_vis;
+//  cv::ximgproc::getDisparityVis(left_disp, raw_disp_vis, vis_mult);
+//  cv::namedWindow("raw disparity", cv::WINDOW_AUTOSIZE);
+//  cv::imshow("raw disparity", raw_disp_vis);
 
   cv::waitKey();
 }
@@ -276,8 +315,8 @@ int main(int argc, char **argv)
     cv::Mat left_img_grayscale = stereo::Utilities::convertToGrayscale(left_img);
     cv::Mat right_img_grayscale = stereo::Utilities::convertToGrayscale(right_img);
 
-//    denseStereoMatching(matcher, left_img_grayscale, right_img_grayscale);
-    profileSparseStereoMatching(matcher, left_img_grayscale, right_img_grayscale);
+    denseStereoMatching(matcher, left_img_grayscale, right_img_grayscale);
+//    profileSparseStereoMatching(matcher, left_img_grayscale, right_img_grayscale);
 //    if (chessboard_arg.getValue())
 //    {
 //      cv::Size board_size(board_width_arg.getValue(), board_height_arg.getValue());

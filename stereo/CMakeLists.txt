@@ -42,7 +42,7 @@ endif()
 
 # Set profiling preprocessor macro
 if(${WITH_PROFILING})
-    add_definitions(-DWITH_PROFILING)
+    add_definitions(-DWITH_PROFILING=1)
 	message("With profiling")
 else()
 	message("Without profiling")
@@ -50,18 +50,18 @@ endif()
 
 # Generate OpenCV preprocessor macro
 if("${OpenCV_VERSION_MAJOR}" EQUAL "3")
-    add_definitions(-DOPENCV_3)
+    add_definitions(-DOPENCV_3=1)
     if ("${OpenCV_VERSION_MINOR}" EQUAL "1")
         message("Defining OPENCV_3_1 macro")
-        add_definitions(-DOPENCV_3_1)
+        add_definitions(-DOPENCV_3_1=1)
     else()
         message("Defining OPENCV_3_0 macro")
-        add_definitions(-DOPENCV_3_0)
+        add_definitions(-DOPENCV_3_0=1)
     endif()
 elseif("${OpenCV_VERSION_MAJOR}" EQUAL "2")
-    add_definitions(-DOPENCV_2)
+    add_definitions(-DOPENCV_2=1)
     if ("${OpenCV_VERSION_MINOR}" EQUAL "4")
-        add_definitions(-DOPENCV_2_4)
+        add_definitions(-DOPENCV_2_4=1)
         message("Defining OPENCV_2_4 macro")
     else()
         message("Defining OPENCV_2 macro")
@@ -97,6 +97,7 @@ if("${WITH_ZED}")
       src/stereo_calibration.cpp
       ../video/src/video_source.cpp
       ../video/src/video_source_zed.cpp
+      src/mLibSource.cpp
   )
   target_link_libraries(sparse_stereo_zed
       ${OpenCV_LIBRARIES}
@@ -117,6 +118,10 @@ if("${WITH_ZED}")
       ${CUDA_CUDA_LIBRARY} ${CUDA_CUDART_LIBRARY} ${CUDA_npp_LIBRARY}
   )
 
+  include_directories(
+      ../../mLib/include
+      ../../mLib/src
+  )
   add_executable(stereo_capture_zed
       src/stereo_capture_zed.cpp
       src/utilities.cpp

@@ -18,25 +18,53 @@ namespace stereo
 class Timer
 {
   double timing_;
+  bool running;
 
 public:
-  Timer()
+  Timer(bool startTimer=true)
+  : timing_(-1.0)
+  {
+    if (startTimer)
+    {
+      start();
+    }
+  }
+
+  void start()
   {
     timing_ = static_cast<double>(cv::getTickCount());
   }
 
-  double stop()
+  double getElapsedTime()
   {
-    timing_ = (static_cast<double>(cv::getTickCount()) - timing_) / cv::getTickFrequency();
-    return timing_;
+    if (timing_ < 0)
+    {
+      throw std::runtime_error("Timer has not been started");
+    }
+    double elapsed_time = (static_cast<double>(cv::getTickCount()) - timing_) / cv::getTickFrequency();
+    return elapsed_time;
   }
 
+  double stop()
+  {
+    double elapsed_time = getElapsedTime();
+    timing_ = -1.0;
+    return elapsed_time;
+  }
+
+  double printTiming(const std::string &name)
+  {
+    double elapsed_time = getElapsedTime();
+    std::cout << "Timing for " << name << ": " << elapsed_time << " s" << std::endl;
+    return elapsed_time;
+  }
   double stopAndPrintTiming(const std::string &name)
   {
+    double elapsed_time = printTiming(name);
     stop();
-    std::cout << "Timing for " << name << ": " << timing_ << " s" << std::endl;
-    return timing_;
+    return elapsed_time;
   }
+
 };
 
 #if WITH_PROFILING
