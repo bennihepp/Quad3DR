@@ -84,52 +84,25 @@ struct StereoAndDepthImage
 };
 
 template <typename T>
-void savePointCloudToOff(const std::string &filename, const ml::PointCloud<T> &pc, bool save_color=true)
-{
-  std::ofstream out(filename);
-  if (!out.is_open())
-  {
-    throw std::runtime_error("Unable to open output file: " + filename);
-  }
-  out << "COFF" << std::endl;
-  out << pc.m_points.size() << " " << 0 << " " << 0 << std::endl;
-  for (int i = 0; i < pc.m_points.size(); ++i)
-  {
-    const ml::vec3<T> &p = pc.m_points[i];
-    out << p.x << " " << p.y << " " << p.z;
-    if (save_color)
-    {
-      const ml::vec4<T> &c = pc.m_colors[i];
-      out << " " << c.r << " " << c.g << " " << c.b << " " << 255;
-    }
-    else
-    {
-      ml::vec4<T> c(1, 1, 1, 1);
-      out << " " << c.r << " " << c.g << " " << c.b << " " << 255;
-    }
-    out << std::endl;
-  }
-  out.close();
-}
-
-template <typename T>
 struct SparseStereoThreadData
 {
   cv::Ptr<T> matcher_ptr;
   LockedQueue<StereoAndDepthImage> images_queue;
   std::condition_variable queue_filled_condition;
   bool stop = false;
+  stereo::StereoCameraCalibration calib;
 };
 
 template <typename T>
 std::vector<cv::Point3d> sparseStereoMatching(
     const cv::Ptr<T> &matcher_ptr,
     cv::InputArray left_input_img, cv::InputArray right_input_img,
-    std::vector<cv::Point2d> *image_points=nullptr)
+    std::vector<cv::Point2d> *left_image_points=nullptr,
+    std::vector<cv::Point2d> *right_image_points=nullptr)
 {
   stereo::Timer  timer;
-  bool verbose = false;
-  std::vector<cv::Point3d> points_3d = matcher_ptr->match(left_input_img, right_input_img, image_points, verbose);
+  bool verbose = true;
+  std::vector<cv::Point3d> points_3d = matcher_ptr->match(left_input_img, right_input_img, left_image_points, right_image_points, verbose);
   timer.stopAndPrintTiming("sparse stereo matching");
   return points_3d;
 }
@@ -162,48 +135,144 @@ void runSparseStereoMatching(SparseStereoThreadData<T> &thread_data)
       prof_timer.stopAndPrintTiming("Popping from queue and moving");
       try
       {
-        std::vector<cv::Point2d> image_points;
-        std::vector<cv::Point3d> points_3d = sparseStereoMatching(matcher_ptr, images.left_img, images.right_img, &image_points);
+        std::vector<cv::Point2d> left_image_points;
+        std::vector<cv::Point2d> right_image_points;
+        std::vector<cv::Point3d> points_3d = sparseStereoMatching(
+            matcher_ptr, images.left_img, images.right_img,
+            &left_image_points, &right_image_points);
+
+        std::cout << "thread_data.calib.disparity_to_depth_map: " << thread_data.calib.disparity_to_depth_map << std::endl;
+        // For debugging
+        std::vector<cv::Point3d> points_3d_copy;
+        stereo::DenseStereoMatcher dense_matcher(thread_data.calib);
+        cv::Mat disp_img = dense_matcher.match(images.left_img, images.right_img);
+        cv::Mat p3d_img;
+        cv::reprojectImageTo3D(disp_img, p3d_img, thread_data.calib.disparity_to_depth_map);
+        for (int i = 0; i < points_3d.size(); ++i)
+        {
+          double depth_sparse = points_3d[i].z / 1000.0;
+          int left_x = static_cast<int>(left_image_points[i].x);
+          int left_y = static_cast<int>(left_image_points[i].y);
+          int right_x = static_cast<int>(right_image_points[i].x);
+          int right_y = static_cast<int>(right_image_points[i].y);
+          double depth_zed = images.depth_img.at<float>(left_y, left_x);
+          double depth_dense = p3d_img.at<cv::Point3f>(left_y, left_x).z / 1000.0;
+          double disp_sparse = left_x - right_x;
+          double disp_dense = disp_img.at<uchar>(left_y, left_x);
+          double disp_diff = disp_sparse - disp_dense;
+          if (disp_dense == 0)
+          {
+            continue;
+          }
+          std::cout << "disp_diff=" << disp_diff << ", disp_sparse=" << disp_sparse << ", disp_dense=" << disp_dense << ", depth_sparse=" << depth_sparse << std::endl;
+          if (!std::isnan(depth_zed))
+          {
+            double depth_diff = depth_sparse - depth_zed;
+            std::cout << "zed_depth_diff=" << depth_diff << ", depth_sparse=" << depth_sparse << ", depth_zed=" << depth_zed << std::endl;
+          }
+//          if (!std::isnan(depth_dense))
+//          {
+//            double depth_diff = depth_sparse - depth_dense;
+//            std::cout << "dense_depth_diff=" << depth_diff << ", depth_sparse=" << depth_sparse << ", depth_dense=" << depth_dense << std::endl;
+//          }
+
+          cv::Mat mat(1, 1, CV_32FC3);
+          mat.at<cv::Point3f>(0, 0) = cv::Point3f(left_image_points[i].x, left_image_points[i].y, disp_sparse);
+          cv::Mat mat_out;
+          cv::perspectiveTransform(mat, mat_out, thread_data.calib.disparity_to_depth_map);
+          const cv::Point3f p3df = mat_out.at<cv::Point3f>(0, 0);
+          cv::Point3d p3d(p3df.x, p3df.y, p3df.z);
+          points_3d_copy.push_back(p3d);
+//          if (disp_sparse < 4)
+//          {
+//            std::cout << " +++ disp_sparse=" << disp_sparse << std::endl;
+//            std::cout << points_3d[i] / 1000.0 << std::endl;
+//            std::cout << p3d / 1000.0 << std::endl;
+//          }
+        }
+        cv::Mat disp_hist = stereo::Utilities::drawHistogram(disp_img, 50);
+        cv::imshow("disp_hist", disp_hist);
+        cv::Mat disp_cmap_img = stereo::Utilities::drawImageWithColormap(disp_img);
+        cv::imshow("disp_img", disp_cmap_img);
+        cv::Mat depth_hist = stereo::Utilities::drawHistogram(stereo::Utilities::getDepthImageFrom3DPointImage(p3d_img), 50);
+        cv::imshow("depth_hist", depth_hist);
+        cv::Mat depth_cmap_vis = stereo::Utilities::draw3DPointImage(p3d_img);
+        cv::imshow("depth_img", depth_cmap_vis);
+
+        // For debugging
         for (int i = 0; i < points_3d.size(); ++i)
         {
           const cv::Point3d &p = points_3d[i];
-          const cv::Point2d &point_2d = image_points[i];
-          const uchar *cv_color = images.left_img_color.at<uchar[4]>(point_2d);
+          const cv::Point2d &left_point_2d = left_image_points[i];
+          const cv::Point2d &right_point_2d = right_image_points[i];
+          const uchar *cv_color = images.left_img_color.at<uchar[4]>(left_point_2d);
           ml::vec4f c(cv_color[0], cv_color[1], cv_color[2], 255);
           // Scale sparse points to millimeters
           float point_scale = 1 / 1000.0f;
           sparse_pc.m_points.push_back(ml::vec3f(p.x * point_scale, p.y * point_scale, p.z * point_scale));
           float color_scale = 1 / 255.0f;
-          sparse_pc.m_colors.push_back(ml::vec4f(c.x * color_scale, c.y * color_scale, c.z * color_scale, c.w * color_scale));
+          sparse_pc.m_colors.push_back(ml::vec4f(c.y * color_scale, c.x * color_scale, c.z * color_scale, c.w * color_scale));
         }
 
-        dense_pc.clear();
-        for (int i = 0; i < images.point_cloud_points.size(); ++i)
-        {
-          const cv::Point3d &p = images.point_cloud_points[i];
-          const cv::Point3d &c = images.point_cloud_colors[i];
-          if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z))
-          {
-            continue;
-          }
-          float point_scale = 1.0f;
-          dense_pc.m_points.push_back(ml::vec3f(p.x * point_scale, p.y * point_scale, p.z * point_scale));
-          float color_scale = 1 / 255.0f;
-          dense_pc.m_colors.push_back(ml::vec4f(c.x * color_scale, c.y * color_scale, c.z * color_scale, 1.0f));
-        }
-
-//      for (int i = 0; i < points_3d.size(); ++i)
-//      {
-//        double depth = points_3d[i].z / 1000.0;
-//        int x = static_cast<int>(image_points[i].x);
-//        int y = static_cast<int>(image_points[i].y);
-//        float depth_zed = images.depth_img.at<float>(y, x);
-//        if (!std::isnan(depth_zed))
+//        // For debugging (point cloud from ZED point cloud)
+//        dense_pc.clear();
+//        for (int i = 0; i < images.point_cloud_points.size(); ++i)
 //        {
-//          double diff = depth - depth_zed;
-//          std::cout << "diff=" << diff << ", depth=" << depth << std::endl;
+//          const cv::Point3d &p = images.point_cloud_points[i];
+//          const cv::Point3d &c = images.point_cloud_colors[i];
+//          if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z))
+//          {
+//            continue;
+//          }
+//          float point_scale = 1.0f;
+//          dense_pc.m_points.push_back(ml::vec3f(p.x * point_scale, p.y * point_scale, p.z * point_scale));
+//          float color_scale = 1 / 255.0f;
+//          dense_pc.m_colors.push_back(ml::vec4f(c.x * color_scale, c.y * color_scale, c.z * color_scale, 1.0f));
 //        }
-//      }
+
+        // For debugging (point cloud from StereoSGBM depth image)
+        dense_pc.clear();
+        for (int i = 0; i < p3d_img.rows; ++i)
+        {
+          for (int j = 0; j < p3d_img.cols; ++j)
+          {
+            CV_Assert(p3d_img.type() == CV_32FC3);
+            const cv::Point3f &p = p3d_img.at<cv::Point3f>(i, j);
+            const uchar *img_data = images.left_img_color.at<uchar[4]>(i, j);
+            float disp = disp_img.at<float>(i, j);
+//            std::cout << "i=" << i << ", j=" << j << std::endl;
+//            std::cout << "p=" << p << ", disp=" << disp << std::endl;
+            if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z))
+            {
+              continue;
+            }
+            ml::vec4f c(img_data[0], img_data[1], img_data[2], img_data[3]);
+            // Scale sparse points to millimeters
+            float point_scale = 1 / 1000.0f;
+            dense_pc.m_points.push_back(ml::vec3f(p.x * point_scale, p.y * point_scale, p.z * point_scale));
+            float color_scale = 1 / 255.0f;
+            dense_pc.m_colors.push_back(ml::vec4f(c.z * color_scale, c.y * color_scale, c.x * color_scale, c.w * color_scale));
+          }
+        }
+
+        // For debugging
+        // Draw keypoints on image and put depth values as text
+        cv::Mat img_with_text = images.left_img.clone();
+        img_with_text = stereo::Utilities::drawPoints(img_with_text, left_image_points, 5);
+        cv::cvtColor(img_with_text, img_with_text, CV_GRAY2RGBA);
+        for (int i = 0; i < points_3d.size(); ++i)
+        {
+          double depth_sparse = points_3d[i].z / 1000.0;
+          int x = left_image_points[i].x;
+          int y = left_image_points[i].y;
+          std::ostringstream out;
+          out.precision(2);
+          out << depth_sparse;
+          double font_scale = 1.0;
+          cv::Scalar font_color(255, 0, 0, 255);
+          cv::putText(img_with_text, out.str(), cv::Point(x, y), cv::FONT_HERSHEY_PLAIN, font_scale, font_color);
+        }
+        cv::imshow("keypoints with depth text", img_with_text);
       }
       catch (const typename T::Error &err)
       {
@@ -230,8 +299,8 @@ void runSparseStereoMatching(SparseStereoThreadData<T> &thread_data)
   } while (!stop);
   ml::PointCloudIO<float>::saveToFile("sparse_points.ply", sparse_pc);
   ml::PointCloudIO<float>::saveToFile("dense_points.ply", dense_pc);
-  savePointCloudToOff("sparse_points.off", sparse_pc);
-  savePointCloudToOff("dense_points.off", dense_pc);
+  stereo::Utilities::savePointCloudToOff("sparse_points.off", sparse_pc);
+  stereo::Utilities::savePointCloudToOff("dense_points.off", dense_pc);
 }
 
 void convertToGrayscaleGpu(const cv_cuda::GpuMat &img, cv_cuda::GpuMat *img_grayscale_ptr, cv_cuda::Stream &stream)
@@ -267,6 +336,7 @@ int main(int argc, char **argv)
     TCLAP::ValueArg<int> draw_period_arg("", "draw-period", "Period of drawing frames", false, 5, "integer", cmd);
     TCLAP::ValueArg<std::string> calib_arg("c", "calib", "Calibration file to use", false, "camera_calibration_stereo.yml", "filename", cmd);
     TCLAP::ValueArg<std::string> zed_params_arg("", "zed-params", "ZED parameter file", false, "", "filename", cmd);
+    TCLAP::SwitchArg single_thread_arg("", "single-thread", "Use single thread", cmd, false);
 
     cmd.parse(argc, argv);
 
@@ -346,17 +416,18 @@ int main(int argc, char **argv)
 //    cv::Ptr<FeatureType> feature_computer = cv::makePtr<FeatureType>();
 
     // SURF
-//    using DetectorType = cv::xfeatures2d::SURF;
-//    using DescriptorType = cv::xfeatures2d::SURF;
-//    const int hessian_threshold = 400;
-//    cv::Ptr<DescriptorType> detector = FeatureType::create(hessian_threshold);
-
-    // ORB
-    using DetectorType = cv::ORB;
-    using DescriptorType = cv::ORB;
-    const int num_features = 2000;
-    cv::Ptr<DetectorType> detector = DetectorType::create();
+    using DetectorType = cv::xfeatures2d::SURF;
+    using DescriptorType = cv::xfeatures2d::SURF;
+    const int hessian_threshold = 200;
+    cv::Ptr<DescriptorType> detector = DetectorType::create(hessian_threshold);
     cv::Ptr<DescriptorType> descriptor_computer = detector;
+
+//    // ORB
+//    using DetectorType = cv::ORB;
+//    using DescriptorType = cv::ORB;
+//    const int num_features = 5000;
+//    cv::Ptr<DetectorType> detector = DetectorType::create(num_features);
+//    cv::Ptr<DescriptorType> descriptor_computer = detector;
 
     // ORB CUDA
 //    using FeatureType = cv::cuda::ORB;
@@ -390,21 +461,26 @@ int main(int argc, char **argv)
 
     // FREAK
     //    matcher->setFlannIndexParams(cv::makePtr<cv::flann::LshIndexParams>(20, 10, 2));
-    matcher_ptr->setMatchNorm(cv::NORM_HAMMING);
+//    matcher_ptr->setMatchNorm(cv::NORM_HAMMING);
 #endif
 
     // General
 //    feature_detector->setMaxNumOfKeypoints(500);
-    matcher_ptr->setRatioTestThreshold(1.0);
-    matcher_ptr->setEpipolarConstraintThreshold(1.0);
+    matcher_ptr->setRatioTestThreshold(0.9);
+    matcher_ptr->setEpipolarConstraintThreshold(50.0);
 
     SparseStereoThreadData<SparseStereoMatcherType> sparse_stereo_thread_data;
     sparse_stereo_thread_data.matcher_ptr = matcher_ptr;
-    // TODO
-//    std::thread sparse_matching_thread([&] ()
-//    {
-//      runSparseStereoMatching(sparse_stereo_thread_data);
-//    });
+    sparse_stereo_thread_data.calib = calib;
+
+    std::thread sparse_matching_thread;
+    if (!single_thread_arg.getValue())
+    {
+      sparse_matching_thread = std::thread([&] ()
+      {
+        runSparseStereoMatching(sparse_stereo_thread_data);
+      });
+    }
 
     int width = video.getWidth();
     int height = video.getHeight();
@@ -455,7 +531,7 @@ int main(int argc, char **argv)
       video.retrieveConfidenceFloatGpu(&confidence_img_gpu, false);
       // TODO
       video.retrievePointCloud(&pc_points, &pc_colors);
-//      sl::writePointCloudAs(video.getNativeCamera(), sl::POINT_CLOUD_FORMAT::PLY, "dense_zed.ply", true, false);
+      sl::writePointCloudAs(video.getNativeCamera(), sl::POINT_CLOUD_FORMAT::PLY, "dense_zed.ply", true, false);
 
       if (!hide_arg.getValue() && frame_counter % draw_period_arg.getValue() == 0)
       {
@@ -463,7 +539,15 @@ int main(int argc, char **argv)
         {
           cv::imshow("left", left_img_gpu);
           cv::imshow("right", right_img_gpu);
-          cv::imshow("depth", depth_img_gpu);
+//          cv::imshow("depth", depth_img_gpu);
+          cv::Mat depth_img;
+#if OPENCV_2_4
+          stream.enqueueDownload(depth_img_gpu, depth_img);
+#else
+          depth_img_gpu.download(depth_img, stream);
+#endif
+          cv::extractChannel(depth_img, depth_img, 0);
+          cv::imshow("depth", stereo::Utilities::drawImageWithColormap(depth_img));
         }
         else
         {
@@ -535,12 +619,17 @@ int main(int argc, char **argv)
         sparse_stereo_thread_data.images_queue.queue.clear();
         sparse_stereo_thread_data.images_queue.queue.push_front(std::move(images));
       }
-      sparse_stereo_thread_data.queue_filled_condition.notify_one();
-      timer.stopAndPrintTiming("Pushing to queue and notifying");
+      timer.stopAndPrintTiming("Pushing to queue");
 
-      // TODO
-      sparse_stereo_thread_data.stop = true;
-      runSparseStereoMatching(sparse_stereo_thread_data);
+      if (single_thread_arg.getValue())
+      {
+        sparse_stereo_thread_data.stop = true;
+        runSparseStereoMatching(sparse_stereo_thread_data);
+      }
+      else
+      {
+        sparse_stereo_thread_data.queue_filled_condition.notify_one();
+      }
 
       // Computing frame rate
       ++frame_counter;
@@ -564,9 +653,11 @@ int main(int argc, char **argv)
       }
     }  // while (key != 27)
 
-    sparse_stereo_thread_data.stop = true;
-    // TODO
-//    sparse_matching_thread.join();
+    if (sparse_matching_thread.joinable())
+    {
+      sparse_stereo_thread_data.stop = true;
+      sparse_matching_thread.join();
+    }
   }
   catch (TCLAP::ArgException &err)
   {

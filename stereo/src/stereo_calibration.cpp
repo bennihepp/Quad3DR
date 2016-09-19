@@ -39,15 +39,14 @@ StereoCameraCalibration::~StereoCameraCalibration()
 
 void StereoCameraCalibration::computeProjectionMatrices()
 {
-  cv::Mat R1, R2, Q;
   cv::stereoRectify(
       left.camera_matrix, left.dist_coeffs,
       right.camera_matrix, right.dist_coeffs,
       image_size,
       rotation, translation,
-      R1, R2,
+      rectification_transform_left, rectification_transform_right,
       projection_matrix_left, projection_matrix_right,
-      Q
+      disparity_to_depth_map
   );
   // For debugging
   std::cout << "projection_matrix_left: " << projection_matrix_left << std::endl;

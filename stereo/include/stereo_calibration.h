@@ -42,9 +42,18 @@ struct StereoCameraCalibration
   cv::Mat essential_matrix;
   cv::Mat fundamental_matrix;
 
-  // 3x4 Projection matrix of left and right camera
+  // Matrices as returned from cv::stereoRectify
+  //
+  // 3x4 Projection matrices
   cv::Mat projection_matrix_left;
   cv::Mat projection_matrix_right;
+  //
+  // 3x3 Rectification matrices
+  cv::Mat rectification_transform_left;
+  cv::Mat rectification_transform_right;
+  //
+  // 4x4 Disparity to depth mapping (OpenCV)
+  cv::Mat disparity_to_depth_map;
 };
 
 } /* namespace stereo */

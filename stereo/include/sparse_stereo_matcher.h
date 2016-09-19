@@ -163,6 +163,7 @@ class SparseStereoMatcher
   double ratio_test_threshold_;
   double epipolar_constraint_threshold_;
   int match_norm_;
+  bool bf_matcher_cross_check_;
   cv::Ptr<cv::flann::IndexParams> flann_index_params_;
   cv::Ptr<cv::flann::SearchParams> flann_search_params_;
 
@@ -225,7 +226,8 @@ public:
   // Convenience method for matching (input images have to be grayscale)
   std::vector<cv::Point3d> match(
       const cv::InputArray left_input_img, cv::InputArray right_input_img,
-      std::vector<cv::Point2d> *image_points,
+      std::vector<cv::Point2d> *left_image_points,
+      std::vector<cv::Point2d> *right_image_points,
       bool verbose=true);
 
   SparseMatchResult matchFull(const cv::InputArray left_color_img, cv::InputArray right_color_img, bool verbose=true);
@@ -237,7 +239,20 @@ public:
   std::vector<cv::DMatch> matchFeaturesBfKnn2(cv::InputArray left_descriptors, cv::InputArray right_descriptors, double ratio_test_threshold=-1.0, bool verbose=true) const;
   std::vector<cv::DMatch> matchFeaturesFlann(cv::InputArray left_descriptors, cv::InputArray right_descriptors) const;
   std::vector<cv::DMatch> matchFeaturesFlannKnn2(cv::InputArray left_descriptors, cv::InputArray right_descriptors, double ratio_test_threshold=-1.0, bool verbose=true) const;
+  std::vector<cv::DMatch> matchFeaturesCustom(
+      const std::vector<cv::Point2d> &left_points, const std::vector<cv::Point2d> &right_points,
+      cv::InputArray left_descriptors, cv::InputArray right_descriptors, bool verbose=true) const;
 
+  std::vector<cv::DMatch> filterMatchesWithMinimumDisparity(
+      const std::vector<cv::Point2d> &left_points, const std::vector<cv::Point2d> &right_points,
+      const std::vector<cv::DMatch> &matches,
+      double min_disparity,
+      bool verbose=true) const;
+  std::vector<cv::DMatch> filterMatchesWithMaximumDisparity(
+      const std::vector<cv::Point2d> &left_points, const std::vector<cv::Point2d> &right_points,
+      const std::vector<cv::DMatch> &matches,
+      double max_disparity,
+      bool verbose=true) const;
   std::vector<cv::DMatch> filterMatchesWithDistance(const std::vector<cv::DMatch> &all_matches, double good_threshold_multiplier=5, double min_good_threshold=0.02) const;
   std::vector<cv::DMatch> filterMatchesWithLoweRatioTest(
       const std::vector<std::vector<cv::DMatch>> &matches,

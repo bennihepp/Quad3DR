@@ -10,6 +10,11 @@
 
 #include <vector>
 #include <opencv2/opencv.hpp>
+#if OPENCV_3_1
+  #include <opencv2/xfeatures2d.hpp>
+  #include <opencv2/ximgproc.hpp>
+  #include <opencv2/cudastereo.hpp>
+#endif
 #include "stereo_calibration.h"
 
 namespace stereo
@@ -24,11 +29,6 @@ namespace stereo
 class DenseStereoMatcher
 {
   StereoCameraCalibration calib_;
-  double ratio_test_threshold_;
-  double epipolar_constraint_threshold_;
-  int match_norm_;
-  cv::Ptr<cv::flann::IndexParams> flann_index_params_;
-  cv::Ptr<cv::flann::SearchParams> flann_search_params_;
 
 public:
   class Error : public std::runtime_error
@@ -38,14 +38,20 @@ public:
     ~Error() override;
   };
 
-  DenseStereoMatcher(const StereoCameraCalibration &calib);
-  virtual ~DenseStereoMatcher();
+  DenseStereoMatcher(const StereoCameraCalibration &calib)
+  : calib_(calib)
+  {
+  }
 
+  virtual ~DenseStereoMatcher()
+  {
+  }
 
 #if OPENCV_3_1
 cv::Mat match(
     const cv::InputArray left_input_img, cv::InputArray right_input_img,
-    bool verbose=true)
+    bool verbose=true,
+    cv_cuda::Stream &stream=cv_cuda::Stream::Null())
 {
   stereo::Timer timer;
   double vis_mult = 1.0;
@@ -58,29 +64,34 @@ cv::Mat match(
 
   // CUDA StereoBM
   int num_disp = 128;
-  int block_size = 19;
+  int block_size = 31;
   int iters = 8;
   int levels = 4;
   int nr_plane = 4;
+  int min_disparity = 4;
 //  cv::Ptr<cv::cuda::StereoBM> left_matcher = cv::cuda::createStereoBM(num_disp, block_size);
 //  cv::Ptr<cv::cuda::StereoBeliefPropagation> left_matcher = cv::cuda::createStereoBeliefPropagation(num_disp, iters, levels);
   cv::Ptr<cv::cuda::StereoConstantSpaceBP> left_matcher = cv::cuda::createStereoConstantSpaceBP(num_disp, iters, levels, nr_plane);
+  left_matcher->setMinDisparity(min_disparity);
   cv_cuda::GpuMat left_img_gpu;
   cv_cuda::GpuMat right_img_gpu;
-  left_img_gpu.upload(left_img);
-  right_img_gpu.upload(right_img);
+  left_img_gpu.upload(left_img, stream);
+  right_img_gpu.upload(right_img, stream);
   timer.start();
   cv_cuda::GpuMat left_disp_gpu;
-  left_matcher->compute(left_img_gpu, right_img_gpu, left_disp_gpu);
+  left_matcher->compute(left_img_gpu, right_img_gpu, left_disp_gpu, stream);
+  CV_Assert(left_disp_gpu.type() == CV_16S);
   timer.stopAndPrintTiming("Dense stereo matching");
   cv::Mat left_disp;
-  left_disp_gpu.download(left_disp);
+  left_disp_gpu.download(left_disp, stream);
+  CV_Assert(left_disp.type() == CV_16S);
 //
-  std::cout << left_disp.type() << ", " << CV_16S << std::endl;
-  left_disp.convertTo(left_disp, CV_8U);
+  cv::Mat left_disp_vis;
+  left_disp.convertTo(left_disp_vis, CV_8U);
   cv::namedWindow("left disparity", cv::WINDOW_AUTOSIZE);
-  cv::imshow("left disparity", left_disp);
+  cv::imshow("left disparity", left_disp_vis);
 
+  left_disp.convertTo(left_disp, CV_32F);
   return left_disp;
 }
 #endif
@@ -88,6 +99,3 @@ cv::Mat match(
 };
 
 } /* namespace stereo */
-
-#include "sparse_stereo_matcher.hpp"
-

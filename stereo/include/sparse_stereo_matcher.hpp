@@ -498,6 +498,7 @@ SparseStereoMatcher<T>::SparseStereoMatcher(const cv::Ptr<T> &feature_detector, 
   ratio_test_threshold_(0.7),
   epipolar_constraint_threshold_(0.5),
   match_norm_(cv::NORM_L2),
+  bf_matcher_cross_check_(true),
   flann_index_params_(cv::makePtr<cv::flann::KDTreeIndexParams>(5)),
   flann_search_params_(cv::makePtr<cv::flann::SearchParams>(50, 0, true))
 {
@@ -524,6 +525,56 @@ void SparseStereoMatcher<T>::undistortPoints(cv::InputOutputArray left_points, c
 {
   left_points.getMat() = undistortPoints(left_points, calib_.left.camera_matrix, calib_.left.dist_coeffs);
   right_points.getMat() = undistortPoints(right_points, calib_.right.camera_matrix, calib_.right.dist_coeffs);
+}
+
+template <typename T>
+std::vector<cv::DMatch> SparseStereoMatcher<T>::filterMatchesWithMinimumDisparity(
+    const std::vector<cv::Point2d> &left_points, const std::vector<cv::Point2d> &right_points,
+    const std::vector<cv::DMatch> &matches,
+    double min_disparity,
+    bool verbose) const
+{
+  std::vector<cv::DMatch> filtered_matches;
+  for (int i = 0; i < matches.size(); i++)
+  {
+    double left_x = left_points[matches[i].queryIdx].x;
+    double right_x = right_points[matches[i].trainIdx].x;
+    double disparity = left_x - right_x;
+    if (disparity >= min_disparity)
+    {
+      filtered_matches.push_back(matches[i]);
+    }
+  }
+  if (verbose)
+  {
+    std::cout << "Keeping " << filtered_matches.size() << " out of " << matches.size() << " matches based on minimum disparity" << std::endl;
+  }
+  return filtered_matches;
+}
+
+template <typename T>
+std::vector<cv::DMatch> SparseStereoMatcher<T>::filterMatchesWithMaximumDisparity(
+    const std::vector<cv::Point2d> &left_points, const std::vector<cv::Point2d> &right_points,
+    const std::vector<cv::DMatch> &matches,
+    double max_disparity,
+    bool verbose) const
+{
+  std::vector<cv::DMatch> filtered_matches;
+  for (int i = 0; i < matches.size(); i++)
+  {
+    double left_x = left_points[matches[i].queryIdx].x;
+    double right_x = right_points[matches[i].trainIdx].x;
+    double disparity = left_x - right_x;
+    if (disparity <= max_disparity)
+    {
+      filtered_matches.push_back(matches[i]);
+    }
+  }
+  if (verbose)
+  {
+    std::cout << "Keeping " << filtered_matches.size() << " out of " << matches.size() << " matches based on maximum disparity" << std::endl;
+  }
+  return filtered_matches;
 }
 
 template <typename T>
@@ -608,8 +659,7 @@ template <typename T>
 std::vector<cv::DMatch> SparseStereoMatcher<T>::matchFeaturesBf(cv::InputArray left_descriptors, cv::InputArray right_descriptors) const
 {
 //   Brute-Force matching
-  bool cross_check = true;
-  cv::BFMatcher matcher(match_norm_, cross_check);
+  cv::BFMatcher matcher(match_norm_, bf_matcher_cross_check_);
   std::vector<cv::DMatch> matches;
 #if OPENCV_2_4
   matcher.match(left_descriptors.getMat(), right_descriptors.getMat(), matches);
@@ -617,6 +667,84 @@ std::vector<cv::DMatch> SparseStereoMatcher<T>::matchFeaturesBf(cv::InputArray l
   matcher.match(left_descriptors, right_descriptors, matches);
 #endif
   return matches;
+}
+
+template <typename T>
+std::vector<cv::DMatch> SparseStereoMatcher<T>::matchFeaturesCustom(
+    const std::vector<cv::Point2d> &left_points, const std::vector<cv::Point2d> &right_points,
+    cv::InputArray left_descriptors, cv::InputArray right_descriptors, bool verbose) const
+{
+  cv::Mat left_descriptors_mat = left_descriptors.getMat();
+  if (left_descriptors_mat.type() == CV_64F)
+  {
+    left_descriptors_mat.convertTo(left_descriptors_mat, CV_32F);
+  }
+  cv::Mat right_descriptors_mat = right_descriptors.getMat();
+  if (right_descriptors_mat.type() == CV_64F)
+  {
+    right_descriptors_mat.convertTo(right_descriptors_mat, CV_32F);
+  }
+
+  ProfilingTimer timer;
+  std::vector<int> left_y_sorted_indices;
+  std::vector<int> right_y_sorted_indices;
+  left_y_sorted_indices.reserve(left_descriptors_mat.rows);
+  right_y_sorted_indices.reserve(right_descriptors_mat.rows);
+  for (int i = 0; i < left_descriptors_mat.rows; ++i)
+  {
+    left_y_sorted_indices.push_back(i);
+  }
+  for (int i = 0; i < right_descriptors_mat.rows; ++i)
+  {
+    right_y_sorted_indices.push_back(i);
+  }
+  std::sort(left_y_sorted_indices.begin(), left_y_sorted_indices.end(), [&](int a, int b)
+  {
+    return left_points[a].y < left_points[b].y;
+  });
+  std::sort(right_y_sorted_indices.begin(), right_y_sorted_indices.end(), [&](int a, int b)
+  {
+    return right_points[a].y < right_points[b].y;
+  });
+  timer.stopAndPrintTiming("Sorting keypoint indices by y");
+
+  timer.start();
+  double max_y_diff = 10;
+  std::vector<cv::DMatch> matches;
+  int right_begin_j = 0;
+  int right_end_j = 0;
+  for (int i = 0; i < left_points.size(); ++i)
+  {
+    double best_score = std::numeric_limits<double>::infinity();
+    int best_index = -1;
+    while (right_end_j < right_points.size() - 1
+        && right_points[right_end_j].y < left_points[i].y + max_y_diff)
+    {
+      ++right_end_j;
+    }
+    while (right_begin_j < right_end_j
+        && right_points[right_begin_j].y - max_y_diff > left_points[i].y)
+    {
+      ++right_begin_j;
+    }
+    for (int j = right_begin_j; j <= right_end_j; ++j)
+    {
+      double score = cv::norm(left_descriptors_mat.row(i), right_descriptors_mat.row(j), cv::NORM_L2);
+      if (score < best_score)
+      {
+        best_score = score;
+        best_index = j;
+      }
+    }
+    if (best_index >= 0)
+    {
+      matches.push_back(cv::DMatch(i, best_index, best_score));
+    }
+  }
+  timer.stopAndPrintTiming("performing epipolar-based matching");
+  return matches;
+//  std::vector<cv::DMatch> filtered_matches = filterMatchesWithLoweRatioTest(all_matches, ratio_test_threshold, verbose);
+//  return filtered_matches;
 }
 
 template <typename T>
@@ -772,7 +900,7 @@ std::vector<cv::DMatch> SparseStereoMatcher<T>::filterMatchesWithEpipolarConstra
 
   if (verbose)
   {
-    std::cout << "Keeping " << best_matches.size() << " from " << matches.size() << std::endl;
+    std::cout << "Keeping " << best_matches.size() << " from " << matches.size() << " based on epipolar constraint" << std::endl;
   }
 
   // For debugging
@@ -827,7 +955,7 @@ std::vector<cv::DMatch> SparseStereoMatcher<T>::filterMatchesWithEpipolarConstra
 
   if (verbose)
   {
-    std::cout << "Keeping " << best_matches.size() << " from " << matches.size() << std::endl;
+    std::cout << "Keeping " << best_matches.size() << " from " << matches.size() << " based on epipolar constraint" << std::endl;
   }
 
   // For debugging
@@ -1051,7 +1179,8 @@ std::vector<double> SparseStereoMatcher<T>::computeEpipolarConstraints(
 template <typename T>
 std::vector<cv::Point3d> SparseStereoMatcher<T>::match(
     const cv::InputArray left_input_img, cv::InputArray right_input_img,
-    std::vector<cv::Point2d> *image_points,
+    std::vector<cv::Point2d> *left_image_points,
+    std::vector<cv::Point2d> *right_image_points,
     bool verbose)
 {
   CV_Assert(left_input_img.channels() == 1);
@@ -1097,12 +1226,16 @@ std::vector<cv::Point3d> SparseStereoMatcher<T>::match(
 //  std::vector<cv::DMatch> matches = matchFeaturesBf(left_descriptors, right_descriptors);
   std::vector<cv::DMatch> matches = matchFeaturesBfKnn2(left_descriptors, right_descriptors, -1.0, verbose);
 //  std::vector<cv::DMatch> matches = matchFeaturesFlannKnn2(left_descriptors, right_descriptors, -1.0, verbose);
+//  std::vector<cv::DMatch> matches = matchFeaturesCustom(left_points, right_points, left_descriptors, right_descriptors, verbose);
   timer.stopAndPrintTiming("feature matching");
 
   if (matches.size() == 0)
   {
     throw Error("Unable to match any keypoints");
   }
+  // TODO (add parameter)
+  double min_disparity = 10;
+  matches = filterMatchesWithMinimumDisparity(left_points, right_points, matches, min_disparity, verbose);
 
   // For debugging
 //  std::vector<cv::Point2d> left_debug_points;
@@ -1167,9 +1300,13 @@ std::vector<cv::Point3d> SparseStereoMatcher<T>::match(
   std::vector<cv::Point3d> points_3d = triangulatePoints(left_best_points, right_best_points);
   timer.stopAndPrintTiming("triangulating points");
   timer = ProfilingTimer();
-  if (image_points != nullptr)
+  if (left_image_points != nullptr)
   {
-    (*image_points) = std::move(left_best_points);
+    (*left_image_points) = std::move(left_best_points);
+  }
+  if (right_image_points != nullptr)
+  {
+    (*right_image_points) = std::move(right_best_points);
   }
   timer.stopAndPrintTiming("moving image points");
 

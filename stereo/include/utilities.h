@@ -11,6 +11,7 @@
 #include <vector>
 #include <opencv2/opencv.hpp>
 #include <stereo_calibration.h>
+#include <mLibInclude.h>
 
 namespace stereo
 {
@@ -73,14 +74,28 @@ public:
   class ProfilingTimer
   {
   public:
+    void start()
+    {
+    }
+
+    double getElapsedTime()
+    {
+      return -1.0;
+    }
+
     double stop()
     {
-      return 0.0;
+      return -1.0;
+    }
+
+    double printTiming(const std::string &name)
+    {
+      return -1.0;
     }
 
     double stopAndPrintTiming(const std::string &name)
     {
-      return 0.0;
+      return -1.0;
     }
   };
 #endif
@@ -93,6 +108,14 @@ public:
   static StereoCameraCalibration readStereoCalibration(const std::string &filename);
 
   static cv::Mat convertToGrayscale(cv::InputArray img);
+
+  static cv::Mat drawImageWithColormap(cv::InputArray depth_img, cv::ColormapTypes cmap=cv::COLORMAP_HOT, bool show_range=true);
+
+  static cv::Mat getDepthImageFrom3DPointImage(cv::InputArray p3d_img, double cutoff_threshold=1e4);
+
+  static cv::Mat draw3DPointImage(cv::InputArray p3d_img, cv::ColormapTypes cmap=cv::COLORMAP_HOT);
+
+  static cv::Mat drawHistogram(cv::InputArray img, int bins=100, bool show_range=true,  int width=1280, int height=720);
 
   static cv::Mat drawKeypoints(cv::InputArray img, const std::vector<cv::KeyPoint> &keypoints);
 
@@ -163,6 +186,36 @@ public:
       throw std::runtime_error("Unable to convert non-floating point array to homogeneous coordinates");
     }
   }
+
+  template <typename T>
+  static void savePointCloudToOff(const std::string &filename, const ml::PointCloud<T> &pc, bool save_color=true)
+  {
+    std::ofstream out(filename);
+    if (!out.is_open())
+    {
+      throw std::runtime_error("Unable to open output file: " + filename);
+    }
+    out << "COFF" << std::endl;
+    out << pc.m_points.size() << " " << 0 << " " << 0 << std::endl;
+    for (int i = 0; i < pc.m_points.size(); ++i)
+    {
+      const ml::vec3<T> &p = pc.m_points[i];
+      out << p.x << " " << p.y << " " << p.z;
+      if (save_color)
+      {
+        const ml::vec4<T> &c = pc.m_colors[i];
+        out << " " << c.r << " " << c.g << " " << c.b << " " << c.w;
+      }
+      else
+      {
+        ml::vec4<T> c(1, 1, 1, 1);
+        out << " " << c.r << " " << c.g << " " << c.b << " " << c.w;
+      }
+      out << std::endl;
+    }
+    out.close();
+  }
+
 };
 
 } /* namespace stereo */
