@@ -8,13 +8,17 @@
 
 #include "video_source_zed.h"
 #include <algorithm>
+#include <cuda_runtime_api.h>
 
 namespace video
 {
 
-VideoSourceZED::VideoSourceZED(sl::zed::SENSING_MODE sensing_mode, bool compute_disparity, bool compute_measure)
+VideoSourceZED::VideoSourceZED(sl::zed::SENSING_MODE sensing_mode, bool compute_disparity, bool compute_measure, bool compute_pointcloud)
 : camera_(nullptr),
-  sensing_mode_(sensing_mode), compute_disparity_(compute_disparity), compute_measure_(compute_measure),
+  sensing_mode_(sensing_mode),
+  compute_disparity_(compute_disparity),
+  compute_measure_(compute_measure),
+  compute_pointcloud_(compute_pointcloud),
   initialized_(false)
 {
 	init_params_.unit = sl::zed::UNIT::METER;
@@ -175,6 +179,26 @@ void VideoSourceZED::copyZedMatToCvMat(const sl::zed::Mat &zed_mat, cv::Mat *cv_
 //  }
 }
 
+void VideoSourceZED::copyZedMatToCvMat(const sl::zed::Mat &zed_mat, cv_cuda::GpuMat *cv_mat) const
+{
+  assert(zed_mat.getDataSize() == cv_mat->elemSize1());
+  int data_size = zed_mat.width * zed_mat.height * zed_mat.channels * zed_mat.getDataSize();
+  cudaMemcpy(cv_mat->data, zed_mat.data, data_size, cudaMemcpyDeviceToDevice);
+  // For debugging: Copy manually
+//  for (int row=0; row < zed_mat.height; ++row)
+//  {
+//    int row_offset = row * zed_mat.width * zed_mat.channels;
+//    for (int col=0; col < zed_mat.width; ++col)
+//    {
+//      int row_col_offset = row_offset + col * zed_mat.channels;
+//      for (int channel=0; channel < zed_mat.channels; ++channel)
+//      {
+//        cv_mat->data[row_col_offset + channel] = zed_mat.data[row_col_offset + channel];
+//      }
+//    }
+//  }
+}
+
 bool VideoSourceZED::retrieveSide(cv::Mat *cv_mat, sl::zed::SIDE side)
 {
   ensureInitialized();
@@ -207,7 +231,7 @@ bool VideoSourceZED::retrieveNormalizedMeasure(cv::Mat *cv_mat, sl::zed::MEASURE
 	sl::zed::Mat zed_mat = camera_->normalizeMeasure(measure);
 	if (cv_mat->empty())
 	{
-		(*cv_mat) = cv::Mat(zed_mat.height, zed_mat.width, CV_8UC4);
+		*cv_mat = cv::Mat(zed_mat.height, zed_mat.width, CV_8UC4);
 	}
 	copyZedMatToCvMat(zed_mat, cv_mat);
 	return true;
@@ -223,6 +247,13 @@ bool VideoSourceZED::retrieveMeasure(cv::Mat *cv_mat, sl::zed::MEASURE measure)
       throw Error("Disparity map was not computed");
     }
   }
+  else if (measure == sl::zed::MEASURE::XYZ || measure == sl::zed::MEASURE::XYZRGBA)
+  {
+    if (!compute_pointcloud_)
+    {
+      throw Error("Point cloud was not computed");
+    }
+  }
   else if (!compute_measure_)
   {
     throw Error("Depth map measures were not computed");
@@ -231,9 +262,117 @@ bool VideoSourceZED::retrieveMeasure(cv::Mat *cv_mat, sl::zed::MEASURE measure)
   sl::zed::Mat zed_mat = camera_->retrieveMeasure(measure);
   if (cv_mat->empty())
   {
-    (*cv_mat) = cv::Mat(zed_mat.height, zed_mat.width, CV_32FC1);
+    if (measure == sl::zed::MEASURE::XYZ || measure == sl::zed::MEASURE::XYZRGBA)
+    {
+      *cv_mat = cv::Mat(zed_mat.height, zed_mat.width, CV_32FC4);
+    }
+    else
+    {
+      *cv_mat = cv::Mat(zed_mat.height, zed_mat.width, CV_32FC1);
+    }
   }
   copyZedMatToCvMat(zed_mat, cv_mat);
+  return true;
+}
+
+bool VideoSourceZED::retrieveSideGpu(cv_cuda::GpuMat *cv_mat, sl::zed::SIDE side, bool copy)
+{
+  ensureInitialized();
+  sl::zed::Mat zed_mat = camera_->retrieveImage_gpu(side);
+  if (copy)
+  {
+    if (cv_mat->empty())
+    {
+      *cv_mat = cv_cuda::GpuMat(zed_mat.height, zed_mat.width, CV_8UC4);
+    }
+    copyZedMatToCvMat(zed_mat, cv_mat);
+  }
+  else
+  {
+    *cv_mat = cv_cuda::GpuMat(zed_mat.height, zed_mat.width, CV_8UC4, zed_mat.data);
+  }
+  // ZED SDK function for converting ZED image to CV
+  //  *cv_mat = sl::zed::slMat2cvMat(zed_mat);
+  return true;
+}
+
+bool VideoSourceZED::retrieveNormalizedMeasureGpu(cv_cuda::GpuMat *cv_mat, sl::zed::MEASURE measure, bool copy)
+{
+  ensureInitialized();
+  if (measure == sl::zed::MEASURE::DISPARITY)
+  {
+    if (!compute_disparity_)
+    {
+      throw Error("Disparity map was not computed");
+    }
+  }
+  else if (!compute_measure_)
+  {
+    throw Error("Depth map measures were not computed");
+  }
+
+  sl::zed::Mat zed_mat = camera_->normalizeMeasure_gpu(measure);
+  if (copy)
+  {
+    if (cv_mat->empty())
+    {
+      *cv_mat = cv_cuda::GpuMat(zed_mat.height, zed_mat.width, CV_8UC4);
+    }
+    copyZedMatToCvMat(zed_mat, cv_mat);
+  }
+  else
+  {
+    *cv_mat = cv_cuda::GpuMat(zed_mat.height, zed_mat.width, CV_8UC4, zed_mat.data);
+  }
+  return true;
+}
+
+bool VideoSourceZED::retrieveMeasureGpu(cv_cuda::GpuMat *cv_mat, sl::zed::MEASURE measure, bool copy)
+{
+  ensureInitialized();
+  if (measure == sl::zed::MEASURE::DISPARITY)
+  {
+    if (!compute_disparity_)
+    {
+      throw Error("Disparity map was not computed");
+    }
+  }
+  else if (!compute_measure_)
+  {
+    throw Error("Depth map measures were not computed");
+  }
+
+  sl::zed::Mat zed_mat = camera_->retrieveMeasure_gpu(measure);
+  int type;
+  switch (zed_mat.channels)
+  {
+  case 1:
+    type = CV_32FC1;
+    break;
+  case 2:
+    type = CV_32FC2;
+    break;
+  case 3:
+    type = CV_32FC3;
+    break;
+  case 4:
+    type = CV_32FC4;
+    break;
+  default:
+    throw std::runtime_error("ZED images with channels > 4 are not supported");
+  }
+  if (copy)
+  {
+    if (cv_mat->empty())
+    {
+      *cv_mat = cv_cuda::GpuMat(zed_mat.height, zed_mat.width, type);
+    }
+    copyZedMatToCvMat(zed_mat, cv_mat);
+  }
+  else
+  {
+    *cv_mat = cv_cuda::GpuMat(zed_mat.height, zed_mat.width, type, zed_mat.data);
+  }
   return true;
 }
 
@@ -280,6 +419,56 @@ bool VideoSourceZED::retrieveConfidence(cv::Mat *mat)
 bool VideoSourceZED::retrieveConfidenceFloat(cv::Mat *mat)
 {
 	return retrieveMeasure(mat, sl::zed::MEASURE::CONFIDENCE);
+}
+
+bool VideoSourceZED::retrieveLeftGpu(cv_cuda::GpuMat *mat, bool copy)
+{
+  return retrieveSideGpu(mat, sl::zed::SIDE::LEFT, copy);
+}
+
+bool VideoSourceZED::retrieveRightGpu(cv_cuda::GpuMat *mat, bool copy)
+{
+  return retrieveSideGpu(mat, sl::zed::SIDE::RIGHT, copy);
+}
+
+bool VideoSourceZED::retrieveDepthGpu(cv_cuda::GpuMat *mat, bool copy)
+{
+  return retrieveNormalizedMeasureGpu(mat, sl::zed::MEASURE::DEPTH, copy);
+}
+
+bool VideoSourceZED::retrieveDepthFloatGpu(cv_cuda::GpuMat *mat, bool copy)
+{
+  return retrieveMeasureGpu(mat, sl::zed::MEASURE::DEPTH, copy);
+}
+
+bool VideoSourceZED::retrieveConfidenceGpu(cv_cuda::GpuMat *mat, bool copy)
+{
+  return retrieveNormalizedMeasureGpu(mat, sl::zed::MEASURE::CONFIDENCE, copy);
+}
+
+bool VideoSourceZED::retrieveConfidenceFloatGpu(cv_cuda::GpuMat *mat, bool copy)
+{
+  return retrieveMeasureGpu(mat, sl::zed::MEASURE::CONFIDENCE, copy);
+}
+
+bool VideoSourceZED::retrieveDisparityGpu(cv_cuda::GpuMat *mat, bool copy)
+{
+  return retrieveNormalizedMeasureGpu(mat, sl::zed::MEASURE::DISPARITY, copy);
+}
+
+bool VideoSourceZED::retrieveDisparityFloatGpu(cv_cuda::GpuMat *mat, bool copy)
+{
+  return retrieveMeasureGpu(mat, sl::zed::MEASURE::DISPARITY, copy);
+}
+
+bool VideoSourceZED::retrievePointCloud(cv::Mat *mat)
+{
+  return retrieveMeasure(mat, sl::zed::MEASURE::XYZRGBA);
+}
+
+bool VideoSourceZED::retrievePointCloudGpu(cv_cuda::GpuMat *mat, bool copy)
+{
+  return retrieveMeasureGpu(mat, sl::zed::MEASURE::XYZRGBA, copy);
 }
 
 } /* namespace video */

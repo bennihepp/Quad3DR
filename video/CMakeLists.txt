@@ -34,6 +34,25 @@ find_package(CUDA REQUIRED)
 find_package(TCLAP REQUIRED)
 find_package(GStreamer REQUIRED COMPONENTS gstreamer-app)
 
+# Generate OpenCV preprocessor macro
+if("${OpenCV_VERSION_MAJOR}" EQUAL "3")
+    add_definitions(-DOPENCV_3=1)
+    if ("${OpenCV_VERSION_MINOR}" EQUAL "1")
+        message("Defining OPENCV_3_1 macro")
+        add_definitions(-DOPENCV_3_1=1)
+    else()
+        message("Defining OPENCV_3_0 macro")
+        add_definitions(-DOPENCV_3_0=1)
+    endif()
+elseif("${OpenCV_VERSION_MAJOR}" EQUAL "2")
+    add_definitions(-DOPENCV_2=1)
+    if ("${OpenCV_VERSION_MINOR}" EQUAL "4")
+        add_definitions(-DOPENCV_2_4=1)
+        message("Defining OPENCV_2_4 macro")
+    else()
+        message("Defining OPENCV_2 macro")
+    endif()
+endif()
 
 include_directories(
     include/
