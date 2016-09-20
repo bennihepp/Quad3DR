@@ -14,11 +14,78 @@
 namespace stereo
 {
 
-#if OPENCV_2_4
-  namespace cv_cuda = cv::gpu;
-#else
-  namespace cv_cuda = cv::cuda;
+Timer::Timer(bool startTimer)
+: timing_(-1.0)
+{
+  if (startTimer)
+  {
+    start();
+  }
+}
+
+void Timer::start()
+{
+  timing_ = static_cast<double>(cv::getTickCount());
+}
+
+double Timer::getElapsedTime() const
+{
+  if (timing_ < 0)
+  {
+    throw std::runtime_error("Timer has not been started");
+  }
+  double elapsed_time = (static_cast<double>(cv::getTickCount()) - timing_) / cv::getTickFrequency();
+  return elapsed_time;
+}
+
+double Timer::stop()
+{
+  double elapsed_time = getElapsedTime();
+  timing_ = -1.0;
+  return elapsed_time;
+}
+
+double Timer::printTiming(const std::string &name) const
+{
+  double elapsed_time = getElapsedTime();
+  std::cout << "Timing for " << name << ": " << elapsed_time << " s" << std::endl;
+  return elapsed_time;
+}
+
+double Timer::stopAndPrintTiming(const std::string &name)
+{
+  double elapsed_time = printTiming(name);
+  stop();
+  return elapsed_time;
+}
+
+
+#if not WITH_PROFILING
+  void ProfilingTimer::start()
+  {
+  }
+
+  double ProfilingTimer::getElapsedTime() const
+  {
+    return -1.0;
+  }
+
+  double ProfilingTimer::stop()
+  {
+    return -1.0;
+  }
+
+  double ProfilingTimer::printTiming(const std::string &name) const
+  {
+    return -1.0;
+  }
+
+  double ProfilingTimer::stopAndPrintTiming(const std::string &name)
+  {
+    return -1.0;
+  }
 #endif
+
 
 StereoCameraCalibration Utilities::readStereoCalibration(const std::string &filename)
 {
@@ -74,6 +141,25 @@ cv::Mat Utilities::convertToGrayscale(cv::InputArray img)
   cv::Mat img_grayscale;
   cv::cvtColor(img, img_grayscale, code);
   return img_grayscale;
+}
+
+void Utilities::convertToGrayscaleGpu(const cv_cuda::GpuMat &img, cv_cuda::GpuMat *img_grayscale_ptr, cv_cuda::Stream &stream)
+{
+  int code;
+  if (img.channels() == 3)
+  {
+    code = CV_RGB2GRAY;
+  }
+  else if (img.channels() == 4)
+  {
+    code = CV_RGBA2GRAY;
+  }
+  else
+  {
+    throw std::runtime_error("Cannot convert image to grayscale");
+  }
+  int destination_channels = 0;
+  cv_cuda::cvtColor(img, *img_grayscale_ptr, code, destination_channels, stream);
 }
 
 cv::Mat Utilities::drawImageWithColormap(cv::InputArray img, cv::ColormapTypes cmap, bool show_range)

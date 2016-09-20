@@ -13,6 +13,12 @@
 #include <stereo_calibration.h>
 #include <mLibInclude.h>
 
+#if OPENCV_2_4
+  namespace cv_cuda = cv::gpu;
+#else
+  namespace cv_cuda = cv::cuda;
+#endif
+
 namespace stereo
 {
 
@@ -22,49 +28,14 @@ class Timer
   bool running;
 
 public:
-  Timer(bool startTimer=true)
-  : timing_(-1.0)
-  {
-    if (startTimer)
-    {
-      start();
-    }
-  }
+  Timer(bool startTimer=true);
 
-  void start()
-  {
-    timing_ = static_cast<double>(cv::getTickCount());
-  }
+  void start();
+  double getElapsedTime() const;
+  double stop();
 
-  double getElapsedTime()
-  {
-    if (timing_ < 0)
-    {
-      throw std::runtime_error("Timer has not been started");
-    }
-    double elapsed_time = (static_cast<double>(cv::getTickCount()) - timing_) / cv::getTickFrequency();
-    return elapsed_time;
-  }
-
-  double stop()
-  {
-    double elapsed_time = getElapsedTime();
-    timing_ = -1.0;
-    return elapsed_time;
-  }
-
-  double printTiming(const std::string &name)
-  {
-    double elapsed_time = getElapsedTime();
-    std::cout << "Timing for " << name << ": " << elapsed_time << " s" << std::endl;
-    return elapsed_time;
-  }
-  double stopAndPrintTiming(const std::string &name)
-  {
-    double elapsed_time = printTiming(name);
-    stop();
-    return elapsed_time;
-  }
+  double printTiming(const std::string &name) const;
+  double stopAndPrintTiming(const std::string &name);
 
 };
 
@@ -74,29 +45,12 @@ public:
   class ProfilingTimer
   {
   public:
-    void start()
-    {
-    }
+    void start();
+    double getElapsedTime() const;
+    double stop();
 
-    double getElapsedTime()
-    {
-      return -1.0;
-    }
-
-    double stop()
-    {
-      return -1.0;
-    }
-
-    double printTiming(const std::string &name)
-    {
-      return -1.0;
-    }
-
-    double stopAndPrintTiming(const std::string &name)
-    {
-      return -1.0;
-    }
+    double printTiming(const std::string &name) const;
+    double stopAndPrintTiming(const std::string &name);
   };
 #endif
 
@@ -108,6 +62,8 @@ public:
   static StereoCameraCalibration readStereoCalibration(const std::string &filename);
 
   static cv::Mat convertToGrayscale(cv::InputArray img);
+
+  static void convertToGrayscaleGpu(const cv_cuda::GpuMat &img, cv_cuda::GpuMat *img_grayscale_ptr, cv_cuda::Stream &stream);
 
   static cv::Mat drawImageWithColormap(cv::InputArray depth_img, cv::ColormapTypes cmap=cv::COLORMAP_HOT, bool show_range=true);
 
