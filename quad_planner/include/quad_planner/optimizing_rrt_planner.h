@@ -47,8 +47,8 @@ namespace quad_planner
 {
 
 // Local namespace abbreviations
-namespace ob = ompl::base;
-namespace og = ompl::geometric;
+namespace ob = ::ompl::base;
+namespace og = ::ompl::geometric;
 
 /** \brief Rapidly-exploring Random Trees */
 class OptimizingRRT : public ob::Planner
@@ -166,6 +166,12 @@ protected:
 
   /** \brief The random number generator */
   ompl::RNG                                            rng_;
+
+  /** \brief Objective we're optimizing */
+  ob::OptimizationObjectivePtr opt_;
+
+  /** \brief Best cost found so far by algorithm */
+  ob::Cost bestCost_;
 
   /** \brief The most recent goal motion.  Used for PlannerData computation */
   Motion                                         *lastGoalMotion_;

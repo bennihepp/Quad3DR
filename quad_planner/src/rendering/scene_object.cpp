@@ -14,12 +14,12 @@ namespace rendering
 {
 
 SceneObject::SceneObject()
-: obj_trans_(1.0f), visible_(false)
+: model_trans_(1.0f), visible_(false)
 {
 }
 
 SceneObject::SceneObject(const std::shared_ptr<RenderObject> &obj_ptr, const std::shared_ptr<ShaderProgram> &shader_ptr)
-: obj_ptr_(obj_ptr), shader_ptr_(shader_ptr), obj_trans_(1.0f), visible_(true)
+: obj_ptr_(obj_ptr), shader_ptr_(shader_ptr), model_trans_(1.0f), visible_(true)
 {
 }
 
@@ -58,43 +58,40 @@ void SceneObject::setVisible(bool visible)
 }
 
 
+void SceneObject::updateViewportSize(float width, float height)
+{
+  shader_ptr_->use();
+  shader_ptr_->setUniform("viewportWidth", width);
+  shader_ptr_->setUniform("viewportWidth", height);
+}
+
 const glm::mat4& SceneObject::getTransformation() const
 {
-  return obj_trans_;
+  return model_trans_;
 }
 
 glm::mat4& SceneObject::getTransformation()
 {
-  return obj_trans_;
+  return model_trans_;
 }
 
 void SceneObject::setTransformation(const glm::mat4 &trans)
 {
-  obj_trans_ = trans;
+  model_trans_ = trans;
 }
 
 
-void SceneObject::render(const Eigen::MatrixXd &mvp) const
+void SceneObject::render(const Eigen::MatrixXd& view, const Eigen::MatrixXd &projection, float width, float height) const
 {
-  render(Utilities::eigenToGlm(mvp));
+  render(Utilities::eigenToGlm(view), Utilities::eigenToGlm(projection), width, height);
 }
 
-void SceneObject::render(const Eigen::MatrixXf &mvp) const
+void SceneObject::render(const Eigen::MatrixXf& view, const Eigen::MatrixXf& projection, float width, float height) const
 {
-  render(Utilities::eigenToGlm(mvp));
+  render(Utilities::eigenToGlm(view), Utilities::eigenToGlm(projection), width, height);
 }
 
-void SceneObject::render(const Eigen::Matrix<double, 4, 4> &mvp) const
-{
-  render(Utilities::eigenToGlm(mvp));
-}
-
-void SceneObject::render(const Eigen::Matrix<float, 4, 4> &mvp) const
-{
-  render(Utilities::eigenToGlm(mvp));
-}
-
-void SceneObject::render(const glm::mat4 &mvp) const
+void SceneObject::render(const glm::mat4 &view, const glm::mat4 &projection, float width, float height) const
 {
   if (isVisible())
   {
@@ -103,8 +100,12 @@ void SceneObject::render(const glm::mat4 &mvp) const
       throw std::runtime_error("SceneObject::render() failed: Not initialized properly.");
     }
     shader_ptr_->use();
-    glm::mat4 obj_mvp = mvp * obj_trans_;
-    shader_ptr_->setUniform("mvp", obj_mvp);
+    shader_ptr_->setUniform("viewportWidth", width);
+    shader_ptr_->setUniform("viewportHeight", height);
+    glm::mat4 mvp = projection * view * model_trans_;
+    shader_ptr_->setUniform("MVP", mvp);
+    shader_ptr_->setUniform("M", model_trans_);
+    shader_ptr_->setUniform("V", view);
     obj_ptr_->render();
   }
 }

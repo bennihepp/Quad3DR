@@ -1,9 +1,18 @@
+//==================================================
+// quad_planner.h
+//
+//  Copyright (c) 2016 Benjamin Hepp.
+//  Author: Benjamin Hepp
+//  Created on: Sep 21, 2016
+//==================================================
+
 #pragma once
 
 #include <memory>
-#include <boost/shared_ptr.hpp>
+#include <memory>
 #include <octomap/octomap.h>
 #include <ompl/base/SpaceInformation.h>
+#include <ompl/base/OptimizationObjective.h>
 #include <ompl/base/spaces/SE3StateSpace.h>
 #include <ompl/geometric/planners/rrt/RRT.h>
 
@@ -14,8 +23,8 @@ namespace quad_planner
 {
 
 // Local namespace abbreviations
-namespace ob = ompl::base;
-namespace og = ompl::geometric;
+namespace ob = ::ompl::base;
+namespace og = ::ompl::geometric;
 
 class QuadPlanner
 {
@@ -27,9 +36,9 @@ private:
   using PlannerT = OptimizingRRT;
 //  using PlannerT = og::RRT;
 
-  boost::shared_ptr<StateSpaceT> state_space_;
-  boost::shared_ptr<ob::SpaceInformation> space_info_;
-  boost::shared_ptr<PlannerT> planner_;
+  std::shared_ptr<StateSpaceT> state_space_;
+  std::shared_ptr<ob::SpaceInformation> space_info_;
+  std::shared_ptr<PlannerT> planner_;
   std::shared_ptr<octomap::OcTree> octomap_ptr_;
 
 
@@ -40,8 +49,21 @@ public:
   std::shared_ptr<const octomap::OcTree> getOctomap() const;
   void loadOctomapFile(const std::string &filename);
 
-  bool isStateValid(const ob::State *state) const;
-  void run();
+  struct MotionValidator : public ob::MotionValidator
+  {
+    MotionValidator(const QuadPlanner* parent, ob::SpaceInformation* si);
+
+    bool checkMotion(const ob::State* state1, const ob::State* state2,
+        std::pair<ob::State*, double>& lastValid) const;
+    bool checkMotion(const ob::State* state1, const ob::State* state2) const;
+
+    const QuadPlanner* planner_;
+  };
+
+  bool isCoordinateValid(double x, double y, double z) const;
+  bool isStateValid(const ob::State* state) const;
+
+  std::shared_ptr<ob::ProblemDefinition> run();
 };
 
 }

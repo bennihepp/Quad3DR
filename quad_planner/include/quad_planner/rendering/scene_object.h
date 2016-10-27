@@ -22,30 +22,29 @@ class SceneObject
 {
   std::shared_ptr<RenderObject> obj_ptr_;
   std::shared_ptr<ShaderProgram> shader_ptr_;
-  glm::mat4 obj_trans_;
+  glm::mat4 model_trans_;
   bool visible_;
 
 public:
   explicit SceneObject();
-  explicit SceneObject(const std::shared_ptr<RenderObject> &obj_ptr, const std::shared_ptr<ShaderProgram> &shader_ptr);
+  explicit SceneObject(const std::shared_ptr<RenderObject>& obj_ptr, const std::shared_ptr<ShaderProgram>& shader_ptr);
   virtual ~SceneObject();
 
   std::shared_ptr<RenderObject> getRenderObject();
   std::shared_ptr<const RenderObject> getRenderObject() const;
-  void setRenderObject(const std::shared_ptr<RenderObject> &obj_ptr);
-  void setShaderProgram(const std::shared_ptr<ShaderProgram> &shader_ptr);
+  void setRenderObject(const std::shared_ptr<RenderObject>& obj_ptr);
+  void setShaderProgram(const std::shared_ptr<ShaderProgram>& shader_ptr);
   bool isVisible() const;
   void setVisible(bool visible=true);
 
+  void updateViewportSize(float width, float height);
   const glm::mat4& getTransformation() const;
   glm::mat4& getTransformation();
   void setTransformation(const glm::mat4 &trans);
 
-  void render(const Eigen::MatrixXd &mvp) const;
-  void render(const Eigen::Matrix<double, 4, 4> &mvp) const;
-  void render(const Eigen::MatrixXf &mvp) const;
-  void render(const Eigen::Matrix<float, 4, 4> &mvp) const;
-  void render(const glm::mat4 &mvp) const;
+  void render(const Eigen::MatrixXf& view, const Eigen::MatrixXf& projection, float width, float height) const;
+  void render(const Eigen::MatrixXd& view, const Eigen::MatrixXd& projection, float width, float height) const;
+  void render(const glm::mat4& view, const glm::mat4& projection, float width, float height) const;
 };
 
 } /* namespace rendering */

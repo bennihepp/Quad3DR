@@ -1,3 +1,11 @@
+//==================================================
+// visualizer.h
+//
+//  Copyright (c) 2016 Benjamin Hepp.
+//  Author: Benjamin Hepp
+//  Created on: Sep 21, 2016
+//==================================================
+
 #pragma once
 
 #include <string>
@@ -8,6 +16,7 @@
 #include <quad_planner/rendering/octomap_renderer.h>
 #include <quad_planner/rendering/shader_program.h>
 #include <quad_planner/rendering/scene_object.h>
+#include <quad_planner/quad_planner.h>
 
 namespace quad_planner
 {
@@ -25,19 +34,25 @@ class Visualizer
   bool right_button_pressed_;
 
   std::shared_ptr<ShaderProgram> octomap_shader_ptr_;
+  std::shared_ptr<ShaderProgram> arcball_shader_ptr_;
+  std::shared_ptr<ShaderProgram> trajectory_shader_ptr_;
   SceneObject octomap_so_;
   SceneObject so_;
+  SceneObject so2_;
   SceneObject arcball1_so_;
   SceneObject arcball2_so_;
 
   GLuint vertex_array_id_;
 
-  glm::mat4 model_;
   glm::mat4 view_;
   glm::mat4 projection_;
-  glm::mat4 mvp_;
   const float ARCBALL_ROTATION_THRESHOLD = 1e-6f;
   const float DEFAULT_MODEL_SCALE = 0.1f;
+
+  // Shaders
+  static const char *SIMPLE_VERTEX_SHADER;
+  static const char *ELEVATION_VERTEX_SHADER;
+  static const char *SIMPLE_FRAGMENT_SHADER;
 
 public:
   Visualizer();
@@ -64,10 +79,10 @@ public:
   GLuint loadShader(const std::string &vertex_shader_filename, const std::string &fragment_shader_filename);
 
   glm::vec3 getArcballVector(int cursor_pos_x, int cursor_pos_y) const;
-  void resetView(bool reset_model=true);
+  void resetView(bool reset_scale = true);
   void updateMatricesFromInputs();
 
-  void run();
+  void run(std::shared_ptr<ob::ProblemDefinition>);
   void render();
 };
 

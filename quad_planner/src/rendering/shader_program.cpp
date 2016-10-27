@@ -76,7 +76,8 @@ void ShaderProgram::compileShader(const std::string &source, ShaderType type)
     std::vector<char> shader_error_message(log_length+1);
     glGetShaderInfoLog(shader_id, log_length, nullptr, &shader_error_message[0]);
     std::cerr << "glCompileShader() failed [type=" << type << "]: " << &shader_error_message[0] << std::endl;
-    throw std::runtime_error("ShaderProgram::compileShader() failed: Unable to compile shader");
+    std::cerr << "Shader code: " << source << std::endl;
+    throw std::runtime_error("ShaderProgram::compileShader() failed: Unable to compile shader of type " + getShaderTypeString(type));
   }
   else
   {
@@ -108,7 +109,12 @@ void ShaderProgram::compileShaderFromFile(const std::string &filename, ShaderTyp
   std::ifstream input(filename, std::ios::in);
   if (input.is_open())
   {
-    compileShaderFromStream(input, type);
+    try {
+      compileShaderFromStream(input, type);
+    }
+    catch (const std::runtime_error& err) {
+      throw std::runtime_error(std::string("Error when trying to compile shader from file '") + filename + "': " + err.what());
+    }
     input.close();
   }
   else
@@ -156,31 +162,62 @@ void ShaderProgram::use()
   glUseProgram(program_id_);
 }
 
-GLint ShaderProgram::getUniformLocation(const std::string &name)
+bool ShaderProgram::hasUniformLocation(const std::string &name)
 {
   GLint location;
   auto it = uniform_locations_.find(name);
   if (it == uniform_locations_.end())
   {
     GLint location = glGetUniformLocation(program_id_, name.c_str());
-    if (location == -1)
-    {
-      std::cerr << "glGetUniformLocation() failed: name=" << name << std::endl;
-      throw std::runtime_error("ShaderProgram::getUniformLocation() failed: Failed to get uniform location for shader program");
-    }
     uniform_locations_[name] = location;
   }
   else
   {
     location = it->second;
   }
+  return location != -1;
+}
+
+GLint ShaderProgram::getUniformLocation(const std::string &name, bool fail_if_not_found /*= true*/)
+{
+  GLint location;
+  auto it = uniform_locations_.find(name);
+  if (it == uniform_locations_.end())
+  {
+    location = glGetUniformLocation(program_id_, name.c_str());
+    uniform_locations_[name] = location;
+  }
+  else
+  {
+    location = it->second;
+  }
+  if (fail_if_not_found && location == -1)
+  {
+    std::cerr << "glGetUniformLocation() failed: name=" << name << std::endl;
+    throw std::runtime_error("ShaderProgram::getUniformLocation() failed: Failed to get uniform location for shader program");
+  }
   return location;
 }
 
+void ShaderProgram::setUniform(const std::string &name, float value)
+{
+  GLint location = getUniformLocation(name, false);
+  if (location != -1) {
+    glUniform1f(location, value);
+  }
+  else {
+    std::cerr << "WARNING: Uniform '" << name << "' is not used by shader" << std::endl;
+  }
+}
 void ShaderProgram::setUniform(const std::string &name, const glm::mat4 &matrix)
 {
-  GLint location = getUniformLocation(name);
-  glUniformMatrix4fv(location, 1, GL_FALSE, &matrix[0][0]);
+  GLint location = getUniformLocation(name, false);
+  if (location != -1) {
+    glUniformMatrix4fv(location, 1, GL_FALSE, &matrix[0][0]);
+  }
+//  else {
+//    std::cerr << "WARNING: Uniform '" << name << "' is not used by shader" << std::endl;
+//  }
 }
 
 void ShaderProgram::setUniform(const std::string &name, const Eigen::MatrixXd &matrix)
@@ -200,6 +237,11 @@ void ShaderProgram::setUniform(const std::string &name, const Eigen::MatrixXf &m
 {
   assert(matrix.rows() == 4);
   assert(matrix.cols() == 4);
-  GLint location = getUniformLocation(name);
-  glUniformMatrix4fv(location, 1, GL_FALSE, matrix.data());
+  GLint location = getUniformLocation(name, false);
+  if (location != -1) {
+    glUniformMatrix4fv(location, 1, GL_FALSE, matrix.data());
+  }
+//  else {
+//    std::cerr << "WARNING: Uniform '" << name << "' is not used by shader" << std::endl;
+//  }
 }

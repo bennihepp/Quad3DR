@@ -40,7 +40,9 @@
 
 #include <quad_planner/optimizing_rrt_planner.h>
 
+#include <ompl/util/Console.h>
 #include <ompl/geometric/planners/rrt/RRT.h>
+#include <ompl/base/objectives/PathLengthOptimizationObjective.h>
 #include <ompl/base/goals/GoalSampleableRegion.h>
 #include <ompl/tools/config/SelfConfig.h>
 #include <limits>
@@ -68,12 +70,15 @@ OptimizingRRT::~OptimizingRRT()
 
 void OptimizingRRT::clear()
 {
+  setup_ = false;
   Planner::clear();
   sampler_.reset();
   freeMemory();
   if (nn_)
     nn_->clear();
   lastGoalMotion_ = nullptr;
+
+  bestCost_ = ob::Cost(std::numeric_limits<double>::quiet_NaN());
 }
 
 void OptimizingRRT::setup()
@@ -82,9 +87,40 @@ void OptimizingRRT::setup()
   ompl::tools::SelfConfig sc(si_, getName());
   sc.configurePlannerRange(maxDistance_);
 
-  if (!nn_)
-    nn_.reset(ompl::tools::SelfConfig::getDefaultNearestNeighbors<Motion*>(si_->getStateSpace()));
-  nn_->setDistanceFunction(std::bind(&OptimizingRRT::distanceFunction, this, std::placeholders::_1, std::placeholders::_2));
+  if (!si_->getStateSpace()->hasSymmetricDistance() || !si_->getStateSpace()->hasSymmetricInterpolate()) {
+    OMPL_WARN("%s requires a state space with symmetric distance and symmetric interpolation.", getName().c_str());
+  }
+
+  if (!nn_) {
+    nn_.reset(ompl::tools::SelfConfig::getDefaultNearestNeighbors<Motion*>(this));
+  }
+  nn_->setDistanceFunction([this](const Motion *a, const Motion *b)
+      {
+        return distanceFunction(a, b);
+      });
+
+  if (pdef_) {
+    if (pdef_->hasOptimizationObjective()) {
+      opt_ = pdef_->getOptimizationObjective();
+    }
+    else {
+      OMPL_INFORM("%s: No optimization objective specified. Defaulting to optimizing path length for the allowed "
+                  "planning time.",
+                  getName().c_str());
+      opt_ = std::make_shared<ob::PathLengthOptimizationObjective>(si_);
+
+      // Store the new objective in the problem def'n
+      pdef_->setOptimizationObjective(opt_);
+    }
+    // Set the bestCost_ and prunedCost_ as infinite
+    bestCost_ = opt_->infiniteCost();
+  }
+  else
+  {
+  OMPL_INFORM("%s: problem definition is not set, deferring setup completion...", getName().c_str());
+  setup_ = false;
+  }
+
 }
 
 void OptimizingRRT::freeMemory()
@@ -93,11 +129,11 @@ void OptimizingRRT::freeMemory()
   {
     std::vector<Motion*> motions;
     nn_->list(motions);
-    for (unsigned int i = 0 ; i < motions.size() ; ++i)
+    for (auto &motion : motions)
     {
-      if (motions[i]->state)
-        si_->freeState(motions[i]->state);
-      delete motions[i];
+      if (motion->state)
+        si_->freeState(motion->state);
+      delete motion;
     }
   }
 }
@@ -176,7 +212,8 @@ ob::PlannerStatus OptimizingRRT::solve(const ob::PlannerTerminationCondition &pt
 
   Motion *solution  = nullptr;
   Motion *approxsol = nullptr;
-  double  approxdif = std::numeric_limits<double>::infinity();
+//  double  approxdif = std::numeric_limits<double>::infinity();
+  double  approxdif = 0.1;
   Motion *rmotion   = new Motion(si_);
   ob::State *rstate = rmotion->state;
   ob::State *xstate = si_->allocState();
@@ -208,6 +245,7 @@ ob::PlannerStatus OptimizingRRT::solve(const ob::PlannerTerminationCondition &pt
     if (si_->checkMotion(nmotion->state, dstate))
     {
       ++num_of_valid_sampled_states_;
+
       /* create a motion */
       Motion *motion = new Motion(si_);
       si_->copyState(motion->state, dstate);

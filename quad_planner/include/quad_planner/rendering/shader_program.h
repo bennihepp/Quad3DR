@@ -37,6 +37,19 @@ public:
     GEOMETRY = GL_GEOMETRY_SHADER,
   };
 
+  static std::string getShaderTypeString(ShaderType type) {
+    switch (type) {
+    case VERTEX:
+      return "Vertex";
+    case FRAGMENT:
+      return "Fragment";
+    case GEOMETRY:
+      return "Geometry";
+    default:
+      return "Unknown";
+    }
+  }
+
   ShaderProgram();
   virtual ~ShaderProgram();
 
@@ -46,7 +59,9 @@ public:
   void link();
 
   void use();
-  GLint getUniformLocation(const std::string &name);
+  bool hasUniformLocation(const std::string &name);
+  GLint getUniformLocation(const std::string &name, bool fail_if_not_found = true);
+  void setUniform(const std::string &name, float value);
   void setUniform(const std::string &name, const glm::mat4 &matrix);
   void setUniform(const std::string &name, const Eigen::MatrixXd &matrix);
   void setUniform(const std::string &name, const Eigen::MatrixXf &matrix);

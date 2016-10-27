@@ -1,4 +1,13 @@
+//==================================================
+// visualizer.cpp
+//
+//  Copyright (c) 2016 Benjamin Hepp.
+//  Author: Benjamin Hepp
+//  Created on: Sep 21, 2016
+//==================================================
+
 #include <iostream>
+#include <memory>
 #include <fstream>
 #include <vector>
 #include <stdexcept>
@@ -9,10 +18,14 @@
 #include <quad_planner/rendering/linalg.h>
 #include <quad_planner/rendering/scene_object.h>
 #include <quad_planner/rendering/triangle_mesh.h>
+#include <quad_planner/rendering/lines.h>
 
 using namespace glm;
-using namespace quad_planner::rendering;
 
+namespace quad_planner
+{
+namespace rendering
+{
 
 static std::ostream& operator<<(std::ostream& stream, const glm::vec3 &vec)
 {
@@ -52,8 +65,58 @@ void Visualizer::init()
   init(3, 3);
 }
 
+// Only for debugging
+void APIENTRY glDebugOutput(GLenum source,
+                            GLenum type,
+                            GLuint id,
+                            GLenum severity,
+                            GLsizei length,
+                            const GLchar *message,
+                            void *userParam)
+{
+    // ignore non-significant error/warning codes
+    if(id == 131169 || id == 131185 || id == 131218 || id == 131204) return;
+
+    std::cout << "---------------" << std::endl;
+    std::cout << "Debug message (" << id << "): " <<  message << std::endl;
+
+    switch (source)
+    {
+        case GL_DEBUG_SOURCE_API:             std::cout << "Source: API"; break;
+        case GL_DEBUG_SOURCE_WINDOW_SYSTEM:   std::cout << "Source: Window System"; break;
+        case GL_DEBUG_SOURCE_SHADER_COMPILER: std::cout << "Source: Shader Compiler"; break;
+        case GL_DEBUG_SOURCE_THIRD_PARTY:     std::cout << "Source: Third Party"; break;
+        case GL_DEBUG_SOURCE_APPLICATION:     std::cout << "Source: Application"; break;
+        case GL_DEBUG_SOURCE_OTHER:           std::cout << "Source: Other"; break;
+    } std::cout << std::endl;
+
+    switch (type)
+    {
+        case GL_DEBUG_TYPE_ERROR:               std::cout << "Type: Error"; break;
+        case GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR: std::cout << "Type: Deprecated Behaviour"; break;
+        case GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR:  std::cout << "Type: Undefined Behaviour"; break;
+        case GL_DEBUG_TYPE_PORTABILITY:         std::cout << "Type: Portability"; break;
+        case GL_DEBUG_TYPE_PERFORMANCE:         std::cout << "Type: Performance"; break;
+        case GL_DEBUG_TYPE_MARKER:              std::cout << "Type: Marker"; break;
+        case GL_DEBUG_TYPE_PUSH_GROUP:          std::cout << "Type: Push Group"; break;
+        case GL_DEBUG_TYPE_POP_GROUP:           std::cout << "Type: Pop Group"; break;
+        case GL_DEBUG_TYPE_OTHER:               std::cout << "Type: Other"; break;
+    } std::cout << std::endl;
+
+    switch (severity)
+    {
+        case GL_DEBUG_SEVERITY_HIGH:         std::cout << "Severity: high"; break;
+        case GL_DEBUG_SEVERITY_MEDIUM:       std::cout << "Severity: medium"; break;
+        case GL_DEBUG_SEVERITY_LOW:          std::cout << "Severity: low"; break;
+        case GL_DEBUG_SEVERITY_NOTIFICATION: std::cout << "Severity: notification"; break;
+    } std::cout << std::endl;
+    std::cout << std::endl;
+}
+
 void Visualizer::init(int core_minor, int core_major)
 {
+  const bool use_debug_context = false;
+
   if (!glfwInit())
   {
     throw std::runtime_error("Unable to initialize GLFW");
@@ -64,6 +127,10 @@ void Visualizer::init(int core_minor, int core_major)
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, core_minor);
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE); // To make MacOS happy; should not be needed
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE); //We don't want the old OpenGL
+  // Only for debugging
+  if (use_debug_context) {
+    glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
+  }
 
   width_ = 1024;
   height_ = 768;
@@ -78,6 +145,20 @@ void Visualizer::init(int core_minor, int core_major)
   if (glewInit() != GLEW_OK)
   {
     throw std::runtime_error("Failed to initialize GLEW");
+  }
+
+  if (use_debug_context) {
+    GLint flags;
+    glGetIntegerv(GL_CONTEXT_FLAGS, &flags);
+    if (flags & GL_CONTEXT_FLAG_DEBUG_BIT) {
+      glEnable(GL_DEBUG_OUTPUT);
+      glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+      glDebugMessageCallback(glDebugOutput, nullptr);
+      glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, GL_TRUE);
+    }
+    else {
+      throw std::runtime_error("Unable to create OpenGL debug context");
+    }
   }
 
   // Reduce tearing
@@ -95,23 +176,52 @@ void Visualizer::init(int core_minor, int core_major)
   glfwSetInputMode(window_, GLFW_STICKY_KEYS, GL_TRUE);
 
   octomap_shader_ptr_ = std::make_shared<ShaderProgram>();
-  octomap_shader_ptr_->compileShaderFromFile("shaders/simple_vertex_shader.vertexshader", ShaderProgram::VERTEX);
-  octomap_shader_ptr_->compileShaderFromFile("shaders/simple_fragment_shader.fragmentshader", ShaderProgram::FRAGMENT);
+//  octomap_shader_ptr_->compileShader(ELEVATION_VERTEX_SHADER, ShaderProgram::VERTEX);
+//  octomap_shader_ptr_->compileShader(SIMPLE_FRAGMENT_SHADER, ShaderProgram::FRAGMENT);
+  octomap_shader_ptr_->compileShaderFromFile("quad_planner/shaders/octomap_shader.vertex", ShaderProgram::VERTEX);
+  octomap_shader_ptr_->compileShaderFromFile("quad_planner/shaders/octomap_shader.geometry", ShaderProgram::GEOMETRY);
+  octomap_shader_ptr_->compileShaderFromFile("quad_planner/shaders/octomap_shader.fragment", ShaderProgram::FRAGMENT);
+//  octomap_shader_ptr_->compileShaderFromFile("shaders/simple_vertex_shader.vertexshader", ShaderProgram::VERTEX);
+//  octomap_shader_ptr_->compileShaderFromFile("shaders/simple_fragment_shader.fragmentshader", ShaderProgram::FRAGMENT);
   octomap_shader_ptr_->link();
+
+  arcball_shader_ptr_ = std::make_shared<ShaderProgram>();
+//  arcball_shader_ptr_->compileShader(ELEVATION_VERTEX_SHADER, ShaderProgram::VERTEX);
+//  arcball_shader_ptr_->compileShader(SIMPLE_FRAGMENT_SHADER, ShaderProgram::FRAGMENT);
+  arcball_shader_ptr_->compileShaderFromFile("quad_planner/shaders/phong_shader.vertex", ShaderProgram::VERTEX);
+  arcball_shader_ptr_->compileShaderFromFile("quad_planner/shaders/phong_shader.fragment", ShaderProgram::FRAGMENT);
+  arcball_shader_ptr_->link();
 
   octomap_so_ = SceneObject(std::make_shared<OctomapRenderer>(), octomap_shader_ptr_);
   octomap_so_.setVisible(true);
 
-  std::shared_ptr<ColorTriangleMesh> sphere_ptr = ColorTriangleMesh::createSphere(1.0, ColorEigen::red(), 3);
-  so_ = SceneObject(sphere_ptr, octomap_shader_ptr_);
+  std::shared_ptr<ColorTriangleMesh> sphere_ptr = ColorTriangleMesh::createUnitSphere(ColorEigen::red(), 3);
+  std::shared_ptr<ColorTriangleMesh> sphere_ptr2 = ColorTriangleMesh::createUnitSphere(ColorEigen::blue(), 3);
+  std::shared_ptr<ColorTriangleMesh> sphere_ptr3 = ColorTriangleMesh::createUnitSphere(ColorEigen::green(), 3);
+  so_ = SceneObject(sphere_ptr, arcball_shader_ptr_);
   so_.setTransformation(glm::translate(glm::vec3(0, 0, 1)));
   so_.setVisible(true);
 
-  arcball1_so_.setShaderProgram(octomap_shader_ptr_);
-  arcball1_so_.setRenderObject(sphere_ptr);
+  double cylinder_length = 10;
+//  std::shared_ptr<ColorTriangleMesh> cylinder_ptr = ColorTriangleMesh::createUnitSphere(ColorEigen::green(), 3);
+  std::shared_ptr<ColorTriangleMesh> cylinder_ptr = ColorTriangleMesh::createUnitRadiusCylinder(cylinder_length, ColorEigen::green(), 3);
+  so2_ = SceneObject(cylinder_ptr, arcball_shader_ptr_);
+  so2_.setTransformation(glm::translate(glm::vec3(0, 1, 2)) * glm::scale(glm::vec3(0.1)));
+  so2_.setVisible(true);
 
-  arcball2_so_.setShaderProgram(octomap_shader_ptr_);
-  arcball2_so_.setRenderObject(sphere_ptr);
+  arcball1_so_.setShaderProgram(arcball_shader_ptr_);
+  arcball1_so_.setRenderObject(sphere_ptr2);
+
+  arcball2_so_.setShaderProgram(arcball_shader_ptr_);
+  arcball2_so_.setRenderObject(sphere_ptr3);
+
+  trajectory_shader_ptr_ = std::make_shared<ShaderProgram>();
+  trajectory_shader_ptr_->compileShaderFromFile("quad_planner/shaders/trajectory_shader.vertex", ShaderProgram::VERTEX);
+  trajectory_shader_ptr_->compileShaderFromFile("quad_planner/shaders/trajectory_shader.geometry", ShaderProgram::GEOMETRY);
+  trajectory_shader_ptr_->compileShaderFromFile("quad_planner/shaders/trajectory_shader.fragment", ShaderProgram::FRAGMENT);
+  trajectory_shader_ptr_->link();
+  trajectory_shader_ptr_->use();
+  trajectory_shader_ptr_->setUniform("lineWidth", 0.03f);
 }
 
 std::shared_ptr<OctomapRenderer> Visualizer::getOctomapRenderer()
@@ -177,11 +287,11 @@ void Visualizer::glfwScrollCallback(GLFWwindow *window, double xoffset, double y
 //  }
 //  model_ *= glm::scale(glm::vec3(factor, factor, factor));
 
-  float model_scale = glm::length(model_[0]);
-  float translate_speed = 0.1f / model_scale / model_scale;
-  glm::mat4 inv_model = glm::transpose(model_);
-  glm::vec4 translation_vec = inv_model * glm::vec4(0, 0, translate_speed * yoffset, 1);
-  model_ *= glm::translate(glm::vec3(translation_vec));
+  float view_scale = glm::length(view_[0]);
+  float translate_speed = 0.1f / view_scale / view_scale;
+  glm::mat4 inv_view = glm::transpose(view_);
+  glm::vec4 translation_vec = inv_view * glm::vec4(0, 0, translate_speed * yoffset, 1);
+  view_ *= glm::translate(glm::vec3(translation_vec));
 }
 
 void Visualizer::glfwCursorPosCallback(GLFWwindow *window, double xpos, double ypos)
@@ -216,7 +326,7 @@ glm::vec3 Visualizer::getArcballVector(int cursor_pos_x, int cursor_pos_y) const
   return point;
 }
 
-void Visualizer::resetView(bool reset_model)
+void Visualizer::resetView(bool reset_scale /*= true*/)
 {
   // Projection matrix: 110° Field of View, 4:3 ratio, display range : 0.1 unit <-> 100 units
   float aspect_ratio = 1.0f;
@@ -233,11 +343,11 @@ void Visualizer::resetView(bool reset_model)
             glm::vec3(0, 0, 0), // Look at point
             glm::vec3(0, 1, 0)  // Head is up (set to 0,-1,0 to look upside-down)
   );
-  if (reset_model)
+  if (reset_scale)
   {
     // Model matrix : an identity matrix (model will be at the origin)
-    model_ = glm::mat4(DEFAULT_MODEL_SCALE);
-//    model_ *= glm::rotate(glm::radians(-45.0f), glm::vec3(1, 0, 0));
+    view_ *= glm::mat4(DEFAULT_MODEL_SCALE);
+//    view_ *= glm::rotate(glm::radians(-45.0f), glm::vec3(1, 0, 0));
   }
 }
 
@@ -252,7 +362,7 @@ void Visualizer::updateMatricesFromInputs()
   static double last_cursor_pos_x;
   static double last_cursor_pos_y;
   static glm::vec3 start_arcball_vector;
-  static glm::mat4 start_model_matrix;
+  static glm::mat4 start_view_matrix;
 
   int left_button_state = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_LEFT);
   int right_button_state = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_RIGHT);
@@ -276,12 +386,12 @@ void Visualizer::updateMatricesFromInputs()
     d_cursor_pos_y /= height_;
 
     // TODO: Should be a member
-    float model_scale = glm::length(model_[0]);
-    float translate_speed = 1.0f / model_scale / model_scale;
-    glm::mat4 inv_model = glm::transpose(model_);
-    glm::vec4 translation_vec = inv_model * glm::vec4(d_cursor_pos_x, d_cursor_pos_y, 0, 1) * translate_speed;
+    float view_scale = glm::length(view_[0]);
+    float translate_speed = 1.0f / view_scale / view_scale;
+    glm::mat4 inv_view = glm::transpose(view_);
+    glm::vec4 translation_vec = inv_view * glm::vec4(d_cursor_pos_x, d_cursor_pos_y, 0, 1) * translate_speed;
 //    std::cout << "translation_vec: " << translation_vec << std::endl;
-    model_ *= glm::translate(glm::vec3(translation_vec));
+    view_ *= glm::translate(glm::vec3(translation_vec));
 
     last_cursor_pos_x = cursor_pos_x;
     last_cursor_pos_y = cursor_pos_y;
@@ -294,7 +404,7 @@ void Visualizer::updateMatricesFromInputs()
       last_cursor_pos_x = cursor_pos_x;
       last_cursor_pos_y = cursor_pos_y;
       start_arcball_vector = getArcballVector(cursor_pos_x, cursor_pos_y);
-      start_model_matrix = model_;
+      start_view_matrix = view_;
       // TODO:
       arcball1_so_.setTransformation(glm::translate(start_arcball_vector * 5.0f) * glm::scale(glm::vec3(0.5, 0.5, 0.5)));
       arcball1_so_.setVisible(true);
@@ -308,8 +418,8 @@ void Visualizer::updateMatricesFromInputs()
       float angle = std::acos(std::min(1.0f, glm::dot(start_arcball_vector, arcball_vector)));
       glm::vec3 rotation_axis = glm::cross(start_arcball_vector, arcball_vector);
       std::cout << "rotation_axis: " << rotation_axis << std::endl;
-      glm::vec3 model_rotation_axis = glm::vec3(glm::transpose(start_model_matrix) * glm::vec4(rotation_axis, 1));
-      model_ = glm::rotate(start_model_matrix, angle, model_rotation_axis);
+      glm::vec3 view_rotation_axis = glm::vec3(glm::transpose(start_view_matrix) * glm::vec4(rotation_axis, 1));
+      view_ = glm::rotate(start_view_matrix, angle, view_rotation_axis);
     }
   }
   else
@@ -321,19 +431,62 @@ void Visualizer::updateMatricesFromInputs()
   last_time = current_time;
 }
 
-void Visualizer::run()
+void Visualizer::run(std::shared_ptr<ob::ProblemDefinition> pdef)
 {
   if (window_ == nullptr)
   {
     throw std::runtime_error("Visualizer has not been initialized");
   }
 
+  using StateSpaceT = ob::SE3StateSpace;
+  const ob::PathPtr path = pdef->getSolutionPath();
+  const og::PathGeometric *geo_path = dynamic_cast<og::PathGeometric*>(path.get());
+  std::vector<SceneObject> objects;
+  for (int i = 1; i < geo_path->getStateCount(); ++i) {
+    auto state1 = dynamic_cast<const StateSpaceT::StateType*>(geo_path->getState(i-1));
+    auto state2 = dynamic_cast<const StateSpaceT::StateType*>(geo_path->getState(i));
+//    auto state1_pos = state1->as<ompl::base::RealVectorStateSpace::StateType>(0);
+//    auto state2_pos = state2->as<ompl::base::RealVectorStateSpace::StateType>(0);
+    Eigen::Vector3d state1_pos_vec(state1->getX(), state1->getY(), state1->getZ());
+    Eigen::Vector3d state2_pos_vec(state2->getX(), state2->getY(), state2->getZ());
+    auto lines = ColorLines3D::createLine(state1_pos_vec, state2_pos_vec, ColorEigen::yellow());
+    SceneObject so(lines, trajectory_shader_ptr_);
+    objects.push_back(so);
+  }
+
+  std::vector<std::shared_ptr<ColorLines3D>> lines;
+  double line_length = 10;
+  auto p0 = Eigen::Vector3d(0, 0, .15);
+  auto p1 = Eigen::Vector3d(-4.73269, -0.200741, 1.3174);
+  auto p2 = Eigen::Vector3d(-6.88227, -0.0225858, 5.4814);
+  auto p3 = Eigen::Vector3d(-3.79652, -1.11825, 5.05384);
+  auto p4 = Eigen::Vector3d(-3.34997, -4.94136, 7.1635);
+  auto p5 = Eigen::Vector3d(-1.64127, -7.5216, 4.01971);
+  auto p6 = Eigen::Vector3d(0, -10, 1);
+  lines.push_back(ColorLines3D::createLine(p0, p1, ColorEigen::magenta()));
+  lines.push_back(ColorLines3D::createLine(p1, p2, ColorEigen::magenta()));
+  lines.push_back(ColorLines3D::createLine(p2, p3, ColorEigen::magenta()));
+  lines.push_back(ColorLines3D::createLine(p3, p4, ColorEigen::magenta()));
+  lines.push_back(ColorLines3D::createLine(p4, p5, ColorEigen::magenta()));
+  lines.push_back(ColorLines3D::createLine(p5, p6, ColorEigen::magenta()));
+  std::vector<SceneObject> objects2;
+  for (const auto& line : lines) {
+    SceneObject so(line, trajectory_shader_ptr_);
+    objects2.push_back(so);
+  }
+
+  auto point1 = Eigen::Vector3d(0, 0, 0);
+  auto point2 = Eigen::Vector3d(4, 4, 1);
+  std::shared_ptr<ColorLines3D> lines_ptr = ColorLines3D::createLine(point1, point2, ColorEigen::magenta());
+  so2_ = SceneObject(lines_ptr, trajectory_shader_ptr_);
+  so2_.setTransformation(glm::translate(glm::vec3(0, 1, 2)));
+  so2_.setVisible(true);
+
   resetView();
 
   glClearColor(0.3f, 0.3f, 0.3f, 0.0f);
   do
   {
-    mvp_ = projection_  * view_ * model_;
     updateMatricesFromInputs();
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -343,8 +496,18 @@ void Visualizer::run()
 //    glDisable(GL_CULL_FACE);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
+    // Enable alpha blendingglEnable( GL_BLEND )
+    glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     render();
+    for (const auto& object : objects) {
+      object.render(view_, projection_, width_, height_);
+    }
+    for (const auto& object : objects2) {
+      object.render(view_, projection_, width_, height_);
+    }
 
     // Swap buffers
     glfwSwapBuffers(window_);
@@ -358,8 +521,55 @@ void Visualizer::run()
 
 void Visualizer::render()
 {
-  octomap_so_.render(mvp_);
-  so_.render(mvp_);
-  arcball1_so_.render(mvp_);
-  arcball2_so_.render(mvp_);
+  octomap_so_.render(view_, projection_, width_, height_);
+  so_.render(view_, projection_, width_, height_);
+  so2_.render(view_, projection_, width_, height_);
+  arcball1_so_.render(view_, projection_, width_, height_);
+  arcball2_so_.render(view_, projection_, width_, height_);
+}
+
+
+// Shaders
+const char *Visualizer::SIMPLE_VERTEX_SHADER =
+"#version 330 core\n"
+
+"layout(location = 0) in vec3 vertexPosition_modelspace;\n"
+"layout(location = 1) in vec3 vertexColor;\n"  // Output data
+"out vec4 fragmentColor;\n"
+"uniform mat4 mvp;\n"
+
+"void main()\n"
+"{\n"
+"  gl_Position = mvp * vec4(vertexPosition_modelspace, 1);\n"
+"  fragmentColor = vertexColor;\n"
+"  //fragmentColor = vec4(0.5f, 0.2f * vertexPosition_modelspace[2], 0.5f, 1.0f);\n"
+"}\n";
+
+// Shaders
+const char *Visualizer::ELEVATION_VERTEX_SHADER =
+"#version 330 core\n"
+
+"layout(location = 0) in vec3 vertexPosition_modelspace;\n"
+"layout(location = 1) in vec3 vertexColor;\n"  // Output data
+"out vec4 fragmentColor;\n"
+"uniform mat4 mvp;\n"
+
+"void main()\n"
+"{\n"
+"  gl_Position = mvp * vec4(vertexPosition_modelspace, 1);\n"
+"  fragmentColor = vec4(0.5f, 0.2f * vertexPosition_modelspace[2], 0.5f, 1.0f);\n"
+"}\n";
+
+const char *Visualizer::SIMPLE_FRAGMENT_SHADER =
+"#version 330 core\n"
+
+"in vec4 fragmentColor;\n"
+"out vec4 color;\n"  // Output data
+
+"void main()\n"
+"{\n"
+"  color = fragmentColor;  // Output color = red\n"
+"}\n";
+
+}
 }

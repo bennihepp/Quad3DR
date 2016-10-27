@@ -1,5 +1,5 @@
 //==================================================
-// RenderObject.h
+// render_object.h
 //
 //  Copyright (c) 2016 Benjamin Hepp.
 //  Author: Benjamin Hepp
