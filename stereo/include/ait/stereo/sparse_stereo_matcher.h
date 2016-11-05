@@ -12,6 +12,8 @@
 #include <opencv2/opencv.hpp>
 #include "stereo_calibration.h"
 
+namespace ait
+{
 namespace stereo
 {
 
@@ -299,7 +301,8 @@ public:
   std::vector<cv::Point3_<V>> triangulatePoints(const std::vector<cv::Point_<V>> &left_points, const std::vector<cv::Point_<V>> &right_points) const;
 };
 
-} /* namespace stereo */
+}  // namespace stereo
+}  // namespace ait
 
-#include "sparse_stereo_matcher.hpp"
+#include "ait/stereo/sparse_stereo_matcher.hpp"
 

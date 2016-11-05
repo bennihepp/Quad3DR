@@ -8,8 +8,10 @@
 
 #pragma once
 
-#include <video_source.h>
+#include <ait/video/video_source.h>
 
+namespace ait
+{
 namespace video
 {
 
@@ -39,4 +41,5 @@ public:
   bool retrieveMono(cv::Mat *mat) override;
 };
 
-} /* namespace video */
+}  // namespace video
+}  // namespace ait

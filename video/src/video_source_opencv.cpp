@@ -6,8 +6,10 @@
 //  Created on: Aug 29, 2016
 //==================================================
 
-#include <video_source_opencv.h>
+#include <ait/video/video_source_opencv.h>
 
+namespace ait
+{
 namespace video
 {
 
@@ -81,14 +83,14 @@ int VideoSourceOpenCV::getWidth() const
 {
   ensureOpened();
   // const_cast is required for OpenCV 2.4
-  return const_cast<cv::VideoCapture*>(&capture_)->get(CV_CAP_PROP_FRAME_WIDTH);
+  return static_cast<int>(const_cast<cv::VideoCapture*>(&capture_)->get(CV_CAP_PROP_FRAME_WIDTH));
 }
 
 int VideoSourceOpenCV::getHeight() const
 {
   ensureOpened();
   // const_cast is required for OpenCV 2.4
-  return const_cast<cv::VideoCapture*>(&capture_)->get(CV_CAP_PROP_FRAME_HEIGHT);
+  return static_cast<int>(const_cast<cv::VideoCapture*>(&capture_)->get(CV_CAP_PROP_FRAME_HEIGHT));
 }
 
 bool VideoSourceOpenCV::grab(bool block)
@@ -103,4 +105,5 @@ bool VideoSourceOpenCV::retrieveMono(cv::Mat *mat)
   return capture_.retrieve(*mat);
 }
 
-} /* namespace video */
+}  // namespace video
+}  // namespace ait

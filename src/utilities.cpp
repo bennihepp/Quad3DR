@@ -6,13 +6,100 @@
 //  Created on: Sep 3, 2016
 //==================================================
 
-#include <utilities.h>
+#include <ait/utilities.h>
 #if OPENCV_3
-  #include <opencv2/cudaimgproc.hpp>
+  #include <opencv2/core/cuda.hpp>
 #endif
 
-namespace stereo
+namespace ait
 {
+
+std::int64_t Clock::getTickCount()
+{
+  return cv::getTickCount();
+}
+
+double Clock::getTickFrequency()
+{
+  return cv::getTickFrequency();
+}
+
+
+RateCounter::RateCounter(bool do_start)
+: counter_(-1), start_ticks_(-1)
+{
+  if (do_start)
+  {
+    start();
+  }
+}
+
+void RateCounter::start()
+{
+  counter_ = 0;
+  start_ticks_ = Clock::getTickCount();;
+}
+
+void RateCounter::reset()
+{
+  start();
+}
+
+void RateCounter::increment()
+{
+  ++counter_;
+}
+
+void RateCounter::increment(int n)
+{
+  counter_ += n;
+}
+
+std::int64_t RateCounter::getCounts() const
+{
+  return counter_;
+}
+
+double RateCounter::getElapsedTime() const
+{
+  std::int64_t ticks = Clock::getTickCount();
+  double elapsed_time = double(ticks - start_ticks_) / Clock::getTickFrequency();
+  return elapsed_time;
+}
+
+std::pair<std::int64_t, double> RateCounter::getCountsAndElapsedTime() const
+{
+  return std::make_pair<std::int64_t, double>(getCounts(), getElapsedTime());
+}
+
+double RateCounter::getRate() const
+{
+  double elapsed_time = getElapsedTime();
+  double rate = counter_ / elapsed_time;
+  return rate;
+}
+
+double RateCounter::getRateAndReset()
+{
+  double rate = getRate();
+  reset();
+  return rate;
+}
+
+double RateCounter::printRate(const std::string &name) const
+{
+  double rate = getRate();
+  std::cout << "Rate for " << name << ": " << rate << " Hz" << std::endl;
+  return rate;
+}
+
+double RateCounter::printRateAndReset(const std::string &name)
+{
+  double rate = printRate(name);
+  reset();
+  return rate;
+}
+
 
 Timer::Timer(bool startTimer)
 : timing_(-1.0)
@@ -25,7 +112,7 @@ Timer::Timer(bool startTimer)
 
 void Timer::start()
 {
-  timing_ = static_cast<double>(cv::getTickCount());
+  timing_ = static_cast<double>(Clock::getTickCount());
 }
 
 double Timer::getElapsedTime() const
@@ -34,7 +121,7 @@ double Timer::getElapsedTime() const
   {
     throw std::runtime_error("Timer has not been started");
   }
-  double elapsed_time = (static_cast<double>(cv::getTickCount()) - timing_) / cv::getTickFrequency();
+  double elapsed_time = (static_cast<double>(Clock::getTickCount()) - timing_) / Clock::getTickFrequency();
   return elapsed_time;
 }
 
@@ -86,40 +173,6 @@ double Timer::stopAndPrintTiming(const std::string &name)
   }
 #endif
 
-
-StereoCameraCalibration Utilities::readStereoCalibration(const std::string &filename)
-{
-  stereo::StereoCameraCalibration calib;
-  cv::FileStorage fs(filename, cv::FileStorage::READ);
-  if(!fs.isOpened())
-  {
-    throw std::runtime_error("Unable to open calibration file");
-  }
-
-  fs["image_width"] >> calib.image_size.width;
-  fs["image_height"] >> calib.image_size.height;
-
-  fs["camera_matrix_left"] >> calib.left.camera_matrix;
-  fs["distortion_coefficients_left"] >> calib.left.dist_coeffs;
-
-  fs["camera_matrix_right"] >> calib.right.camera_matrix;
-  fs["distortion_coefficients_right"] >> calib.right.dist_coeffs;
-
-  fs["rotation"] >> calib.rotation;
-  fs["translation"] >> calib.translation;
-  fs["essential_matrix"] >> calib.essential_matrix;
-  fs["fundamental_matrix"] >> calib.fundamental_matrix;
-
-  calib.computeProjectionMatrices();
-
-//  std::cout << calib.left.camera_matrix << std::endl;
-//  std::cout << calib.left.dist_coeffs << std::endl;
-//  std::cout << calib.projection_matrix_right << std::endl;
-//  std::cout << calib.essential_matrix << std::endl;
-//  std::cout << calib.fundamental_matrix << std::endl;
-
-  return calib;
-}
 
 cv::Mat Utilities::convertToGrayscale(cv::InputArray img)
 {
@@ -285,4 +338,4 @@ cv::Mat Utilities::drawFeatureMatches(cv::InputArray left_img, const std::vector
   return match_img;
 }
 
-} /* namespace stereo */
+}  // namespace ait

@@ -6,10 +6,12 @@
 //  Created on: Aug 29, 2016
 //==================================================
 
-#include "video_source_zed.h"
+#include <ait/video/video_source_zed.h>
 #include <algorithm>
 #include <cuda_runtime_api.h>
 
+namespace ait
+{
 namespace video
 {
 
@@ -45,6 +47,65 @@ const sl::zed::InitParams& VideoSourceZED::getInitParameters() const
 sl::zed::InitParams& VideoSourceZED::getInitParameters()
 {
   return init_params_;
+}
+
+ait::stereo::StereoCameraCalibration VideoSourceZED::getStereoCalibration() const
+{
+	const sl::zed::StereoParameters* stereo_params = camera_->getParameters();
+	ait::stereo::StereoCameraCalibration calib;
+
+	calib.image_size.width = camera_->getImageSize().width;
+	calib.image_size.height = camera_->getImageSize().height;
+
+	calib.left = ait::stereo::StereoCameraCalibration::getCameraCalibrationFromZED(stereo_params->LeftCam);
+	calib.right = ait::stereo::StereoCameraCalibration::getCameraCalibrationFromZED(stereo_params->RightCam);
+
+	calib.translation = cv::Mat::zeros(3, 1, CV_64F);
+	calib.translation.at<double>(0, 0) = -stereo_params->baseline;
+	calib.translation.at<double>(1, 0) = -stereo_params->Ty;
+	calib.translation.at<double>(2, 0) = -stereo_params->Tz;
+
+	cv::Mat rotVecX = cv::Mat::zeros(3, 1, CV_64F);
+	cv::Mat rotVecY = cv::Mat::zeros(3, 1, CV_64F);
+	cv::Mat rotVecZ = cv::Mat::zeros(3, 1, CV_64F);
+	rotVecX = stereo_params->Rx;
+	rotVecY = stereo_params->convergence;
+	rotVecZ = stereo_params->Rz;
+	cv::Mat rotX;
+	cv::Mat rotY;
+	cv::Mat rotZ;
+	cv::Rodrigues(rotVecX, rotX);
+	cv::Rodrigues(rotVecY, rotY);
+	cv::Rodrigues(rotVecZ, rotZ);
+	calib.rotation = rotX * rotY * rotZ;
+
+	cv::Mat translation_cross = cv::Mat::zeros(3, 3, CV_64F);
+	translation_cross.at<double>(1, 2) = -calib.translation.at<double>(0, 0);
+	translation_cross.at<double>(2, 1) = +calib.translation.at<double>(0, 0);
+	translation_cross.at<double>(0, 2) = +calib.translation.at<double>(1, 0);
+	translation_cross.at<double>(2, 0) = -calib.translation.at<double>(1, 0);
+	translation_cross.at<double>(0, 1) = -calib.translation.at<double>(2, 0);
+	translation_cross.at<double>(1, 0) = +calib.translation.at<double>(2, 0);
+
+	calib.essential_matrix = translation_cross * calib.rotation;
+	calib.fundamental_matrix = calib.right.camera_matrix.t().inv() * calib.essential_matrix * calib.left.camera_matrix.inv();
+	calib.fundamental_matrix /= calib.fundamental_matrix.at<double>(2, 2);
+
+	// For debugging
+	//std::cout << "width: " << calib.image_size.width << std::endl;
+	//std::cout << "height: " << calib.image_size.height << std::endl;
+	//std::cout << "translation: " << calib.translation << std::endl;
+	//std::cout << "rotation: " << calib.rotation << std::endl;
+	//std::cout << "left.camera_matrix: " << calib.left.camera_matrix << std::endl;
+	//std::cout << "left.dist_coeffs: " << calib.left.dist_coeffs << std::endl;
+	//std::cout << "right.camera_matrix: " << calib.right.camera_matrix << std::endl;
+	//std::cout << "right.dist_coeffs: " << calib.right.dist_coeffs << std::endl;
+	//std::cout << "essential_matrix: " << calib.essential_matrix << std::endl;
+	//std::cout << "fundamental_matrix: " << calib.fundamental_matrix << std::endl;
+
+	calib.computeProjectionMatrices();
+
+	return calib;
 }
 
 void VideoSourceZED::init()
@@ -471,4 +532,5 @@ bool VideoSourceZED::retrievePointCloudGpu(cv_cuda::GpuMat *mat, bool copy)
   return retrieveMeasureGpu(mat, sl::zed::MEASURE::XYZRGBA, copy);
 }
 
-} /* namespace video */
+}  // namespace video
+}  // namespace ait

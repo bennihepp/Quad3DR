@@ -12,7 +12,7 @@
 //#include <opencv2/highgui.hpp>
 
 #include <tclap/CmdLine.h>
-#include <video_source_zed.h>
+#include <ait/video/video_source_zed.h>
 
 
 // TODO
@@ -534,6 +534,8 @@ std::string showImagesAndWaitForCommand(
 
 int main(int argc, char **argv)
 {
+  namespace avo = ait::video;
+
   try
   {
     TCLAP::CmdLine cmd("Stereo calibration tool", ' ', "0.1");
@@ -549,7 +551,7 @@ int main(int argc, char **argv)
     TCLAP::ValueArg<double> scale_arg("s", "scale", "Square scale", false, 1.0, "au", cmd);
     TCLAP::ValueArg<int> num_frames_arg("n", "num_frames", "Number of frames", false, 10, "integer", cmd);
     TCLAP::ValueArg<double> aspect_ratio_arg("", "aspect-ratio", "Aspect ratio", false, 1.0, "double", cmd);
-    TCLAP::ValueArg<std::string> output_filename_arg("o", "output-filename", "Output filename", false, "camera_calibration", "filename", cmd);
+    TCLAP::ValueArg<std::string> output_filename_prefix_arg("o", "output-prefix", "Output filename prefix", false, "camera_calibration", "filename", cmd);
     TCLAP::ValueArg<std::string> frames_prefix_arg("", "frames-prefix", "Frames prefix", false, "frame", "string", cmd);
     TCLAP::SwitchArg live_capture_arg("", "capture", "Live capture", cmd, false);
 
@@ -558,9 +560,9 @@ int main(int argc, char **argv)
     bool undistort_image = false;
     bool live_capture = live_capture_arg.getValue();
 
-    std::string output_filename_left = output_filename_arg.getValue() + "_left.yml";
-    std::string output_filename_right = output_filename_arg.getValue() + "_right.yml";
-    std::string output_filename_stereo = output_filename_arg.getValue() + "_stereo.yml";
+    std::string output_filename_left = output_filename_prefix_arg.getValue() + "_left.yml";
+    std::string output_filename_right = output_filename_prefix_arg.getValue() + "_right.yml";
+    std::string output_filename_stereo = output_filename_prefix_arg.getValue() + "_stereo.yml";
 
     int flags = 0;
     bool showUndistorted;
@@ -636,7 +638,7 @@ int main(int argc, char **argv)
       std::cout << liveCaptureHelp << std::endl;
     }
 
-    video::VideoSourceZED video;
+    avo::VideoSourceZED video;
 
     if (live_capture)
     {
@@ -722,6 +724,7 @@ int main(int argc, char **argv)
           {
             throw std::runtime_error("Unable to read right image");
           }
+          std::cout << "Press 'n' to go to next image" << std::endl;
           ++next_i;
         }
       }

@@ -13,6 +13,7 @@
 //#define OPENCV_3_1 1
 
 #include "video_source.h"
+#include <ait/stereo/stereo_calibration.h>
 #include <zed/Camera.hpp>
 #include <zed/utils/GlobalDefine.hpp>
 #if OPENCV_3
@@ -22,6 +23,8 @@
   #include <opencv2/gpu/gpumat.hpp>
 #endif
 
+namespace ait
+{
 namespace video
 {
 
@@ -72,6 +75,8 @@ public:
 
   const sl::zed::InitParams& getInitParameters() const;
   sl::zed::InitParams& getInitParameters();
+
+  ait::stereo::StereoCameraCalibration getStereoCalibration() const;
 
   void open(sl::zed::ZEDResolution_mode mode=sl::zed::HD720);
   void open(const std::string &svo_filename);
@@ -152,4 +157,5 @@ public:
   }
 };
 
-} /* namespace video */
+}  // namespace video
+}  // namespace ait

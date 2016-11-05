@@ -8,8 +8,8 @@
 #include <opencv2/opencv.hpp>
 #include <gst/gst.h>
 #include <gst/app/gstappsrc.h>
-#include <video_source_opencv.h>
-#include <video_source_zed.h>
+#include <ait/video/video_source_opencv.h>
+#include <ait/video/video_source_zed.h>
 
 struct AppSrcData
 {
@@ -105,6 +105,9 @@ void pushNewFrame(GstAppSrc *appsrc, AppSrcData *data)
   GST_BUFFER_PTS(buffer) = cst_elapsed_time;
 //  GST_BUFFER_PTS(buffer) = data->timestamp;
   GST_BUFFER_DURATION(buffer) = gst_util_uint64_scale_int(1, GST_SECOND, data->framerate);
+  ///* Set its timestamp and duration */
+  //GST_BUFFER_TIMESTAMP(buffer) = gst_util_uint64_scale(data->num_samples, GST_SECOND, SAMPLE_RATE);
+  //GST_BUFFER_DURATION(buffer) = gst_util_uint64_scale(CHUNK_SIZE, GST_SECOND, SAMPLE_RATE);
 //  data->timestamp += GST_BUFFER_DURATION(buffer);
 //  std::cout << "time: " << (GST_BUFFER_PTS(buffer) / ((double)GST_SECOND)) << std::endl;
 //  std::cout << "duration" << (GST_BUFFER_DURATION(buffer) / ((double)GST_SECOND)) << std::endl;
@@ -131,6 +134,8 @@ void pushNewFrame(GstAppSrc *appsrc, AppSrcData *data)
 
 int main(int argc, char **argv)
 {
+  namespace avo = ait::video;
+
   GError *gst_err;
   gboolean gst_initialized = gst_init_check(&argc, &argv, &gst_err);
   if (gst_initialized == FALSE)
@@ -280,11 +285,11 @@ int main(int argc, char **argv)
 
     double camera_framerate;
     std::function<bool (cv::Mat*)> retrieve_frame_fn;
-    video::VideoSource *video_ptr;
+    avo::VideoSource *video_ptr;
 
     if (zed_arg.getValue())
     {
-      video::VideoSourceZED *zed_video_ptr = new video::VideoSourceZED();
+      avo::VideoSourceZED *zed_video_ptr = new avo::VideoSourceZED();
       zed_video_ptr->open(static_cast<sl::zed::ZEDResolution_mode>(zed_mode_arg.getValue()));
       if (camera_fps_arg.isSet())
       {
@@ -351,7 +356,7 @@ int main(int argc, char **argv)
     }
     else
     {
-      video::VideoSourceOpenCV *cv_video_ptr = new video::VideoSourceOpenCV();
+      avo::VideoSourceOpenCV *cv_video_ptr = new avo::VideoSourceOpenCV();
       if (cv_video_arg.isSet())
       {
         cv_video_ptr->open(cv_video_arg.getValue());

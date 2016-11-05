@@ -12,16 +12,18 @@
 #include <tclap/CmdLine.h>
 #include <opencv2/opencv.hpp>
 #if OPENCV_3_1
-  #include <opencv2/xfeatures2d.hpp>
+  //#include <opencv2/xfeatures2d.hpp>
   #include <opencv2/ximgproc.hpp>
   #include <opencv2/cudastereo.hpp>
 #endif
 #include <opencv2/calib3d.hpp>
-#include <sparse_stereo_matcher.h>
-#include <utilities.h>
+#include <ait/stereo/sparse_stereo_matcher.h>
+#include <ait/utilities.h>
 
 // TODO: For profiling (bug in oprofile eclipse plugin)
 #include <unistd.h>
+
+namespace ast = ait::stereo;
 
 #if OPENCV_2_4
   namespace cv_cuda = cv::gpu;
@@ -35,11 +37,11 @@
 
 template <typename T>
 void chessboardTriangulation(
-    const stereo::SparseStereoMatcher<T> &matcher,
+    const ast::SparseStereoMatcher<T> &matcher,
     const cv::InputArray left_input_img, cv::InputArray right_input_img,
     const cv::Size &board_size)
 {
-  using Utilities = stereo::Utilities;
+  using Utilities = ait::Utilities;
 
   cv::Mat left_img = Utilities::convertToGrayscale(left_input_img);
   cv::Mat right_img = Utilities::convertToGrayscale(right_input_img);
@@ -78,9 +80,9 @@ void chessboardTriangulation(
 }
 
 template <typename T>
-void sparseStereoMatchingFull(const stereo::SparseStereoMatcher<T> &matcher, const cv::InputArray left_img, cv::InputArray right_img)
+void sparseStereoMatchingFull(const ast::SparseStereoMatcher<T> &matcher, const cv::InputArray left_img, cv::InputArray right_img)
 {
-  using Utilities = stereo::Utilities;
+  using Utilities = ait::Utilities;
 
   std::cout << "channels: " << left_img.channels() << ", dtype: " << left_img.type() << ", continuous: " << left_img.getMat().isContinuous() << ", depth: " << left_img.depth() << std::endl;
   std::cout << "width: " << left_img.getMat().cols << ", height: " << left_img.getMat().rows << ", elementSize: " << left_img.getMat().elemSize1() << std::endl;
@@ -100,11 +102,11 @@ void sparseStereoMatchingFull(const stereo::SparseStereoMatcher<T> &matcher, con
 
 template <typename T>
 void profileSparseStereoMatching(
-    stereo::SparseStereoMatcher<T> &matcher,
+    ast::SparseStereoMatcher<T> &matcher,
     cv::InputArray left_input_img, cv::InputArray right_input_img)
 {
   int num_of_iterations = 5;
-  stereo::Timer timer;
+  ait::Timer timer;
   for (int i = 0; i < num_of_iterations; ++i)
   {
     std::vector<cv::Point2d> image_points;
@@ -116,14 +118,14 @@ void profileSparseStereoMatching(
 #if OPENCV_3_1
 template <typename T>
 void denseStereoMatching(
-    stereo::SparseStereoMatcher<T> &matcher,
+    ast::SparseStereoMatcher<T> &matcher,
     cv::InputArray left_input_img, cv::InputArray right_input_img)
 {
-  stereo::Timer timer;
+  ait::Timer timer;
   double vis_mult = 1.0;
 
-  cv::Mat left_img = stereo::Utilities::convertToGrayscale(left_input_img);
-  cv::Mat right_img = stereo::Utilities::convertToGrayscale(right_input_img);
+  cv::Mat left_img = ait::Utilities::convertToGrayscale(left_input_img);
+  cv::Mat right_img = ait::Utilities::convertToGrayscale(right_input_img);
 
   // CUDA StereoBM
 //  cv::Ptr<cv::cuda::StereoBM> left_matcher = cv::cuda::createStereoBM(max_disp, wsize);
@@ -220,7 +222,7 @@ int main(int argc, char **argv)
       throw std::runtime_error("Unable to read right image");
     }
 
-    stereo::StereoCameraCalibration calib = stereo::Utilities::readStereoCalibration(calib_arg.getValue());
+    ast::StereoCameraCalibration calib = ast::StereoCameraCalibration::readStereoCalibration(calib_arg.getValue());
 
 #if OPENCV_2_4
     // FREAK
@@ -240,15 +242,15 @@ int main(int argc, char **argv)
     // Create feature detector
 //    cv::Ptr<DetectorType> detector_2 = detector;
 //    cv::Ptr<DescriptorType> descriptor_computer_2 = descriptor_computer;
-    using FeatureDetectorType = stereo::FeatureDetectorOpenCV<DetectorType, DescriptorType>;
+    using FeatureDetectorType = ast::FeatureDetectorOpenCV<DetectorType, DescriptorType>;
     cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(detector, detector_2, descriptor_computer, descriptor_computer_2);
-//    using FeatureDetectorType = stereo::FeatureDetectorOpenCVSurfCuda<FeatureType>;
+//    using FeatureDetectorType = ast::FeatureDetectorOpenCVSurfCuda<FeatureType>;
 //    cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(feature_computer);
-//      using FeatureDetectorType = stereo::FeatureDetectorOpenCVCuda<FeatureType>;
+//      using FeatureDetectorType = ast::FeatureDetectorOpenCVCuda<FeatureType>;
 //      cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(feature_computer);
 
     // Create sparse matcher
-    using SparseStereoMatcherType = stereo::SparseStereoMatcher<FeatureDetectorType>;
+    using SparseStereoMatcherType = ast::SparseStereoMatcher<FeatureDetectorType>;
     SparseStereoMatcherType matcher(feature_detector, calib);
 
     // FREAK
@@ -260,17 +262,17 @@ int main(int argc, char **argv)
 //    cv::Ptr<FeatureType> feature_computer = cv::makePtr<FeatureType>();
 
     // SURF
-    using DetectorType = cv::xfeatures2d::SURF;
-    using DescriptorType = cv::xfeatures2d::SURF;
-    const int hessian_threshold = 400;
-    cv::Ptr<DescriptorType> detector = DetectorType::create(hessian_threshold);
-    cv::Ptr<DescriptorType> descriptor_computer = detector;
+    //using DetectorType = cv::xfeatures2d::SURF;
+    //using DescriptorType = cv::xfeatures2d::SURF;
+    //const int hessian_threshold = 400;
+    //cv::Ptr<DescriptorType> detector = DetectorType::create(hessian_threshold);
+    //cv::Ptr<DescriptorType> descriptor_computer = detector;
 
     // ORB
-//    using DetectorType = cv::ORB;
-//    using DescriptorType = cv::ORB;
-//    cv::Ptr<DetectorType> detector = DetectorType::create();
-//    cv::Ptr<DescriptorType> descriptor_computer = detector;
+    using DetectorType = cv::ORB;
+    using DescriptorType = cv::ORB;
+    cv::Ptr<DetectorType> detector = DetectorType::create();
+    cv::Ptr<DescriptorType> descriptor_computer = detector;
 
     // ORB CUDA
 //    using FeatureType = cv::cuda::ORB;
@@ -287,15 +289,15 @@ int main(int argc, char **argv)
     // Create feature detector
     cv::Ptr<DetectorType> detector_2 = detector;
     cv::Ptr<DescriptorType> descriptor_computer_2 = descriptor_computer;
-    using FeatureDetectorType = stereo::FeatureDetectorOpenCV<DetectorType, DescriptorType>;
+    using FeatureDetectorType = ast::FeatureDetectorOpenCV<DetectorType, DescriptorType>;
     cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(detector, detector_2, descriptor_computer, descriptor_computer_2);
-//    using FeatureDetectorType = stereo::FeatureDetectorOpenCVSurfCuda<FeatureType>;
+//    using FeatureDetectorType = ast::FeatureDetectorOpenCVSurfCuda<FeatureType>;
 //    cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(feature_computer);
-//      using FeatureDetectorType = stereo::FeatureDetectorOpenCVCuda<FeatureType>;
+//      using FeatureDetectorType = ast::FeatureDetectorOpenCVCuda<FeatureType>;
 //      cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(feature_computer);
 
     // Create sparse matcher
-    using SparseStereoMatcherType = stereo::SparseStereoMatcher<FeatureDetectorType>;
+    using SparseStereoMatcherType = ast::SparseStereoMatcher<FeatureDetectorType>;
     SparseStereoMatcherType matcher(feature_detector, calib);
 
     // ORB
@@ -312,8 +314,8 @@ int main(int argc, char **argv)
     matcher.setRatioTestThreshold(1.0);
     matcher.setEpipolarConstraintThreshold(1.0);
 
-    cv::Mat left_img_grayscale = stereo::Utilities::convertToGrayscale(left_img);
-    cv::Mat right_img_grayscale = stereo::Utilities::convertToGrayscale(right_img);
+    cv::Mat left_img_grayscale = ait::Utilities::convertToGrayscale(left_img);
+    cv::Mat right_img_grayscale = ait::Utilities::convertToGrayscale(right_img);
 
     denseStereoMatching(matcher, left_img_grayscale, right_img_grayscale);
 //    profileSparseStereoMatching(matcher, left_img_grayscale, right_img_grayscale);

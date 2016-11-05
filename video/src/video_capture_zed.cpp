@@ -10,11 +10,13 @@
 #include <stdexcept>
 #include <tclap/CmdLine.h>
 #include <opencv2/opencv.hpp>
-#include <video_source_zed.h>
+#include <ait/video/video_source_zed.h>
 
 
 int main(int argc, char **argv)
 {
+  namespace avo = ait::video;
+
   try
   {
     TCLAP::CmdLine cmd("Video capture tool", ' ', "0.1");
@@ -27,14 +29,14 @@ int main(int argc, char **argv)
 
     cmd.parse(argc, argv);
 
-    video::VideoSourceZED video;
+    avo::VideoSourceZED video;
 
     if (zed_params_arg.isSet())
     {
       video.getInitParameters().load(zed_params_arg.getValue());
     }
     video.open(static_cast<sl::zed::ZEDResolution_mode>(mode_arg.getValue()));
-    video.getInitParameters().save("MyParam");
+    //video.getInitParameters().save("MyParam");
 
     if (fps_arg.isSet())
     {

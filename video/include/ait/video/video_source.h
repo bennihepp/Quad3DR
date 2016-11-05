@@ -11,6 +11,8 @@
 
 #pragma once
 
+namespace ait
+{
 namespace video
 {
 
@@ -41,4 +43,5 @@ public:
   virtual bool retrieveConfidence(cv::Mat *mat);
 };
 
-} /* namespace video */
+}  // namespace video
+}  // namespace ait

@@ -17,6 +17,8 @@
 #endif
 #include "stereo_calibration.h"
 
+namespace ait
+{
 namespace stereo
 {
 
@@ -53,11 +55,11 @@ cv::Mat match(
     bool verbose=true,
     cv_cuda::Stream &stream=cv_cuda::Stream::Null())
 {
-  stereo::Timer timer;
+  ait::Timer timer;
   double vis_mult = 1.0;
 
-  cv::Mat left_img = stereo::Utilities::convertToGrayscale(left_input_img);
-  cv::Mat right_img = stereo::Utilities::convertToGrayscale(right_input_img);
+  cv::Mat left_img = ait::Utilities::convertToGrayscale(left_input_img);
+  cv::Mat right_img = ait::Utilities::convertToGrayscale(right_input_img);
 
   int num_disp = 128;
   int block_size = 31;
@@ -118,4 +120,5 @@ cv::Mat match(
 
 };
 
-} /* namespace stereo */
+}  // namespace stereo
+}  // namespace ait

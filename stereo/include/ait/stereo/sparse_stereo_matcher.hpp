@@ -6,7 +6,7 @@
 //  Created on: Sep 3, 2016
 //==================================================
 
-#include <utilities.h>
+#include <ait/utilities.h>
 #include <limits>
 #include <thread>
 #include <opencv2/features2d.hpp>
@@ -19,6 +19,8 @@
   #include <opencv2/gpu/gpumat.hpp>
 #endif
 
+namespace ait
+{
 namespace stereo
 {
 
@@ -1095,7 +1097,7 @@ template <typename T>
 double SparseStereoMatcher<T>::computeEpipolarConstraint(const cv::Mat &point1, const cv::Mat &point2) const
 {
   CV_Assert(point1.type() == point2.type());
-  if (point1.type() == CV_32FC2)
+  if (point1.type() == CV_64FC2)
   {
     cv::Mat point1_flat(point1.rows, 2, CV_64FC1);
     point1_flat.at<cv::Point2d>(0, 0) = point1.at<cv::Point2d>(0, 0);
@@ -1216,17 +1218,17 @@ std::vector<cv::Point3d> SparseStereoMatcher<T>::match(
 
   // For debugging
 //  timer = ProfilingTimer();
-//  auto left_img_with_keypoints = stereo::Utilities::drawPoints(left_input_img.getMat().clone(), left_points);
-//  auto right_img_with_keypoints = stereo::Utilities::drawPoints(right_input_img.getMat().clone(), right_points);
+//  auto left_img_with_keypoints = ait::Utilities::drawPoints(left_input_img.getMat().clone(), left_points);
+//  auto right_img_with_keypoints = ait::Utilities::drawPoints(right_input_img.getMat().clone(), right_points);
 //  cv::imshow("Left keypoints", left_img_with_keypoints);
 //  cv::imshow("Right keypoints", right_img_with_keypoints);
 //  timer.stopAndPrintTiming("drawing keypoints");
 
   timer = ProfilingTimer();
 //  std::vector<cv::DMatch> matches = matchFeaturesBf(left_descriptors, right_descriptors);
-  std::vector<cv::DMatch> matches = matchFeaturesBfKnn2(left_descriptors, right_descriptors, -1.0, verbose);
+//  std::vector<cv::DMatch> matches = matchFeaturesBfKnn2(left_descriptors, right_descriptors, -1.0, verbose);
 //  std::vector<cv::DMatch> matches = matchFeaturesFlannKnn2(left_descriptors, right_descriptors, -1.0, verbose);
-//  std::vector<cv::DMatch> matches = matchFeaturesCustom(left_points, right_points, left_descriptors, right_descriptors, verbose);
+  std::vector<cv::DMatch> matches = matchFeaturesCustom(left_points, right_points, left_descriptors, right_descriptors, verbose);
   timer.stopAndPrintTiming("feature matching");
 
   if (matches.size() == 0)
@@ -1244,7 +1246,7 @@ std::vector<cv::Point3d> SparseStereoMatcher<T>::match(
 //  left_points = left_debug_points;
 //  right_points = right_debug_points;
 //  timer = ProfilingTimer();
-//  auto match_img = stereo::Utilities::drawPointMatches(left_input_img.getMat().clone(), left_debug_points, right_input_img.getMat().clone(), right_debug_points);
+//  auto match_img = ait::Utilities::drawPointMatches(left_input_img.getMat().clone(), left_debug_points, right_input_img.getMat().clone(), right_debug_points);
 //  cv::imshow("Keypoint matches", match_img);
 //  timer.stopAndPrintTiming("drawing matches");
 //  cv::waitKey();
@@ -1269,7 +1271,7 @@ std::vector<cv::Point3d> SparseStereoMatcher<T>::match(
 
   // For debugging
 //  timer = ProfilingTimer();
-//  auto best_match_img = stereo::Utilities::drawPointMatches(left_input_img.getMat().clone(), left_best_points, right_input_img.getMat().clone(), right_best_points);
+//  auto best_match_img = ait::Utilities::drawPointMatches(left_input_img.getMat().clone(), left_best_points, right_input_img.getMat().clone(), right_best_points);
 //  cv::imshow("Best keypoint matches", best_match_img);
 //  timer.stopAndPrintTiming("drawing matches");
 //  cv::waitKey();
@@ -1284,15 +1286,15 @@ std::vector<cv::Point3d> SparseStereoMatcher<T>::match(
 
   // For debugging
 //  timer = ProfilingTimer();
-  auto left_img_with_keypoints = stereo::Utilities::drawPoints(left_input_img.getMat().clone(), left_best_points);
-  auto right_img_with_keypoints = stereo::Utilities::drawPoints(right_input_img.getMat().clone(), right_best_points);
+  auto left_img_with_keypoints = ait::Utilities::drawPoints(left_input_img.getMat().clone(), left_best_points);
+  auto right_img_with_keypoints = ait::Utilities::drawPoints(right_input_img.getMat().clone(), right_best_points);
   cv::imshow("Left keypoints", left_img_with_keypoints);
   cv::imshow("Right keypoints", right_img_with_keypoints);
 //  timer.stopAndPrintTiming("drawing keypoints");
 
   // For debugging
 //  timer = ProfilingTimer();
-  auto match_img = stereo::Utilities::drawPointMatches(left_input_img.getMat().clone(), left_best_points, right_input_img.getMat().clone(), right_best_points);
+  auto match_img = ait::Utilities::drawPointMatches(left_input_img.getMat().clone(), left_best_points, right_input_img.getMat().clone(), right_best_points);
   cv::imshow("Keypoint matches", match_img);
 //  timer.stopAndPrintTiming("drawing matches");
 
@@ -1435,4 +1437,5 @@ SparseMatchResult SparseStereoMatcher<T>::matchFull(const cv::InputArray left_in
   return match_result;
 }
 
-} /* namespace stereo */
+}  // namespace stereo
+}  // namespace ait

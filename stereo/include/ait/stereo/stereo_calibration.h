@@ -10,24 +10,47 @@
 
 #include <vector>
 #include <opencv2/opencv.hpp>
+#include <Eigen/Dense>
+#if WITH_ZED
+	#include <zed\Camera.hpp>
+#endif
 
+namespace ait
+{
 namespace stereo
 {
 
 struct CameraCalibration
 {
-  CameraCalibration();
-  virtual ~CameraCalibration();
-
   // Matrices as returned from cv::calibrateCamera
   cv::Mat camera_matrix;
   cv::Mat dist_coeffs;
+
+
+  CameraCalibration();
+  virtual ~CameraCalibration();
+
+  Eigen::Matrix3d getCameraMatrixEigen() const;
+  Eigen::VectorXd getDistCoeffEigen() const;
 };
 
 struct StereoCameraCalibration
 {
+#if WITH_ZED
+	static CameraCalibration getCameraCalibrationFromZED(const sl::zed::CamParameters& params);
+	static StereoCameraCalibration getStereoCalibrationFromZED(sl::zed::Camera* zed);
+#endif
+	static StereoCameraCalibration getStereoCalibrationFromOpenCV(const std::string &filename);
+	static StereoCameraCalibration readStereoCalibration(const std::string &filename);
+
   StereoCameraCalibration();
   virtual ~StereoCameraCalibration();
+
+  Eigen::Matrix3d getRotationEigen() const;
+  Eigen::Vector3d getTranslationEigen() const;
+
+  Eigen::Matrix4d getLeftExtrinsicsEigen() const;
+  Eigen::Matrix4d getRightExtrinsicsEigen() const;
 
   void computeProjectionMatrices();
 
@@ -56,5 +79,6 @@ struct StereoCameraCalibration
   cv::Mat disparity_to_depth_map;
 };
 
-} /* namespace stereo */
+}  // namespace stereo
+}  // namespace ait
 

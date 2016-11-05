@@ -18,23 +18,25 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/features2d.hpp>
 #if OPENCV_3
-  #include <opencv2/xfeatures2d.hpp>
-  #include <opencv2/sfm.hpp>
+  //#include <opencv2/xfeatures2d.hpp>
+#include <opencv2/xfeatures2d/cuda.hpp>
+  //#include <opencv2/sfm.hpp>
   #include <opencv2/cudafeatures2d.hpp>
-  #include <opencv2/xfeatures2d/cuda.hpp>
   #include <opencv2/cudaimgproc.hpp>
 #else
   #include <opencv2/gpu/gpu.hpp>
   #include <opencv2/gpu/gpumat.hpp>
 #endif
 
-#include <video_source_zed.h>
-#include <sparse_stereo_matcher.h>
-#include <dense_stereo_matcher.h>
-#include <sparse_stereo.h>
-#include <utilities.h>
-#include <mLibInclude.h>
+#include <ait/video/video_source_zed.h>
+#include <ait/stereo/sparse_stereo_matcher.h>
+#include <ait/stereo/dense_stereo_matcher.h>
+#include <ait/stereo/sparse_stereo.h>
+#include <ait/utilities.h>
+#include <ait/mLibInclude.h>
 
+
+namespace ast = ait::stereo;
 
 template <typename T>
 struct LockedQueue
@@ -47,8 +49,8 @@ template <typename T>
 struct SparseStereoThreadData
 {
   cv::Ptr<T> matcher_ptr;
-  stereo::StereoCameraCalibration calib;
-  LockedQueue<stereo::StereoAndDepthImageData> images_queue;
+  ast::StereoCameraCalibration calib;
+  LockedQueue<ast::StereoAndDepthImageData> images_queue;
   std::condition_variable queue_filled_condition;
   bool stop = false;
   bool save_pointclouds = false;
@@ -58,7 +60,7 @@ template <typename T>
 void runSparseStereoMatching(SparseStereoThreadData<T> &thread_data)
 {
   const cv::Ptr<T> &matcher_ptr = thread_data.matcher_ptr;
-  LockedQueue<stereo::StereoAndDepthImageData> &images_queue = thread_data.images_queue;
+  LockedQueue<ast::StereoAndDepthImageData> &images_queue = thread_data.images_queue;
   std::condition_variable &queue_filled_condition = thread_data.queue_filled_condition;
   bool &stop = thread_data.stop;
 
@@ -73,13 +75,13 @@ void runSparseStereoMatching(SparseStereoThreadData<T> &thread_data)
     }
     if (!images_queue.queue.empty())
     {
-      stereo::ProfilingTimer prof_timer;
-      stereo::StereoAndDepthImageData images(std::move(images_queue.queue.back()));
+      ait::ProfilingTimer prof_timer;
+      ast::StereoAndDepthImageData images(std::move(images_queue.queue.back()));
       images_queue.queue.pop_back();
       bool save_pointclouds = thread_data.save_pointclouds;
       lock.unlock();
       prof_timer.stopAndPrintTiming("Popping from queue and moving");
-      stereo::stereoMatchingTest(
+      ast::stereoMatchingTest(
           matcher_ptr, images, thread_data.calib, save_pointclouds);
 
       // Computing frame rate
@@ -102,8 +104,87 @@ void runSparseStereoMatching(SparseStereoThreadData<T> &thread_data)
   } while (!stop);
 }
 
+ait::stereo::CameraCalibration getCameraCalibrationFromZED(const sl::zed::CamParameters& params)
+{
+  ait::stereo::CameraCalibration calib;
+  calib.camera_matrix = cv::Mat::zeros(3, 3, CV_64F);
+  calib.camera_matrix.at<double>(0, 0) = params.fx;
+  calib.camera_matrix.at<double>(1, 1) = params.fx;
+  calib.camera_matrix.at<double>(2, 2) = 1;
+  calib.camera_matrix.at<double>(0, 2) = params.cx;
+  calib.camera_matrix.at<double>(1, 2) = params.cy;
+  calib.dist_coeffs = cv::Mat::zeros(5, 1, CV_64F);
+  // ZED SDK returns undistorted images
+//  calib.dist_coeffs.at<double>(0, 0) = params.disto[0]; // k1
+//  calib.dist_coeffs.at<double>(1, 0) = params.disto[1]; // k2
+//  calib.dist_coeffs.at<double>(2, 0) = params.disto[3]; // r1 = p1
+//  calib.dist_coeffs.at<double>(3, 0) = params.disto[4]; // r2 = p2
+//  calib.dist_coeffs.at<double>(4, 0) = params.disto[2]; // k3
+  return calib;
+}
+
+ait::stereo::StereoCameraCalibration getStereoCalibrationFromZED(sl::zed::Camera* zed)
+{
+  const sl::zed::StereoParameters* stereo_params = zed->getParameters();
+  ait::stereo::StereoCameraCalibration calib;
+
+  calib.image_size.width = zed->getImageSize().width;
+  calib.image_size.height = zed->getImageSize().height;
+
+  calib.left = getCameraCalibrationFromZED(stereo_params->LeftCam);
+  calib.right = getCameraCalibrationFromZED(stereo_params->RightCam);
+
+  calib.translation = cv::Mat::zeros(3, 1, CV_64F);
+  calib.translation.at<double>(0, 0) = -stereo_params->baseline;
+  calib.translation.at<double>(1, 0) = -stereo_params->Ty;
+  calib.translation.at<double>(2, 0) = -stereo_params->Tz;
+
+  cv::Mat rotVecX = cv::Mat::zeros(3, 1, CV_64F);
+  cv::Mat rotVecY = cv::Mat::zeros(3, 1, CV_64F);
+  cv::Mat rotVecZ = cv::Mat::zeros(3, 1, CV_64F);
+  rotVecX = stereo_params->Rx;
+  rotVecY = stereo_params->convergence;
+  rotVecZ = stereo_params->Rz;
+  cv::Mat rotX;
+  cv::Mat rotY;
+  cv::Mat rotZ;
+  cv::Rodrigues(rotVecX, rotX);
+  cv::Rodrigues(rotVecY, rotY);
+  cv::Rodrigues(rotVecZ, rotZ);
+  calib.rotation = rotX * rotY * rotZ;
+
+  cv::Mat translation_cross = cv::Mat::zeros(3, 3, CV_64F);
+  translation_cross.at<double>(1, 2) = -calib.translation.at<double>(0, 0);
+  translation_cross.at<double>(2, 1) = +calib.translation.at<double>(0, 0);
+  translation_cross.at<double>(0, 2) = +calib.translation.at<double>(1, 0);
+  translation_cross.at<double>(2, 0) = -calib.translation.at<double>(1, 0);
+  translation_cross.at<double>(0, 1) = -calib.translation.at<double>(2, 0);
+  translation_cross.at<double>(1, 0) = +calib.translation.at<double>(2, 0);
+
+  calib.essential_matrix = translation_cross * calib.rotation;
+  calib.fundamental_matrix = calib.right.camera_matrix.t().inv() * calib.essential_matrix * calib.left.camera_matrix.inv();
+  calib.fundamental_matrix /= calib.fundamental_matrix.at<double>(2, 2);
+
+  std::cout << "width: " << calib.image_size.width << std::endl;
+  std::cout << "height: " << calib.image_size.height << std::endl;
+  std::cout << "translation: " << calib.translation << std::endl;
+  std::cout << "rotation: " << calib.rotation << std::endl;
+  std::cout << "left.camera_matrix: " << calib.left.camera_matrix << std::endl;
+  std::cout << "left.dist_coeffs: " << calib.left.dist_coeffs << std::endl;
+  std::cout << "right.camera_matrix: " << calib.right.camera_matrix << std::endl;
+  std::cout << "right.dist_coeffs: " << calib.right.dist_coeffs << std::endl;
+  std::cout << "essential_matrix: " << calib.essential_matrix << std::endl;
+  std::cout << "fundamental_matrix: " << calib.fundamental_matrix << std::endl;
+
+  calib.computeProjectionMatrices();
+
+  return calib;
+}
+
 int main(int argc, char **argv)
 {
+  namespace avo = ait::video;
+
   try
   {
     TCLAP::CmdLine cmd("Sparse stereo matching ZED", ' ', "0.1");
@@ -124,7 +205,7 @@ int main(int argc, char **argv)
     cv_cuda::printCudaDeviceInfo(cv_cuda::getDevice());
 //    cv_cuda::printShortCudaDeviceInfo(cv_cuda::getDevice());
 
-    video::VideoSourceZED video(sl::zed::STANDARD, true, true, true);
+    avo::VideoSourceZED video(sl::zed::STANDARD, true, true, true);
 
     if (zed_params_arg.isSet())
     {
@@ -150,7 +231,9 @@ int main(int argc, char **argv)
     }
     std::cout << "ZED framerate: " << video.getFPS() << std::endl;
 
-    stereo::StereoCameraCalibration calib = stereo::Utilities::readStereoCalibration(calib_arg.getValue());
+    ast::StereoCameraCalibration calib = ast::StereoCameraCalibration::readStereoCalibration(calib_arg.getValue());
+    // TODO
+    calib = getStereoCalibrationFromZED(video.getNativeCamera());
 
 #if OPENCV_2_4
     // FREAK
@@ -178,13 +261,13 @@ int main(int argc, char **argv)
     // Create feature detector
 //    cv::Ptr<DetectorType> detector_2 = detector;
 //    cv::Ptr<DescriptorType> descriptor_computer_2 = descriptor_computer;
-    using FeatureDetectorType = stereo::FeatureDetectorOpenCV<DetectorType, DescriptorType>;
+    using FeatureDetectorType = ast::FeatureDetectorOpenCV<DetectorType, DescriptorType>;
     cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(detector, detector_2, descriptor_computer, descriptor_computer_2);
-//      using FeatureDetectorType = stereo::FeatureDetectorOpenCVCuda<FeatureType>;
+//      using FeatureDetectorType = ast::FeatureDetectorOpenCVCuda<FeatureType>;
 //      cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(feature_computer);
 
     // Create sparse matcher
-    using SparseStereoMatcherType = stereo::SparseStereoMatcher<FeatureDetectorType>;
+    using SparseStereoMatcherType = ast::SparseStereoMatcher<FeatureDetectorType>;
     SparseStereoMatcherType matcher(feature_detector, calib);
 
     // ORB and FREAK
@@ -198,7 +281,7 @@ int main(int argc, char **argv)
     // SURF
     using DetectorType = cv::xfeatures2d::SURF;
     using DescriptorType = cv::xfeatures2d::SURF;
-    const int hessian_threshold = 200;
+    const int hessian_threshold = 1000;
     cv::Ptr<DescriptorType> detector = DetectorType::create(hessian_threshold);
     cv::Ptr<DescriptorType> descriptor_computer = detector;
 
@@ -224,15 +307,15 @@ int main(int argc, char **argv)
     // Create feature detector
     cv::Ptr<DetectorType> detector_2 = detector;
     cv::Ptr<DescriptorType> descriptor_computer_2 = descriptor_computer;
-    using FeatureDetectorType = stereo::FeatureDetectorOpenCV<DetectorType, DescriptorType>;
+    using FeatureDetectorType = ast::FeatureDetectorOpenCV<DetectorType, DescriptorType>;
     cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(detector, detector_2, descriptor_computer, descriptor_computer_2);
-//    using FeatureDetectorType = stereo::FeatureDetectorOpenCVSurfCuda<FeatureType>;
+//    using FeatureDetectorType = ast::FeatureDetectorOpenCVSurfCuda<FeatureType>;
 //    cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(feature_computer);
-//      using FeatureDetectorType = stereo::FeatureDetectorOpenCVCuda<FeatureType>;
+//      using FeatureDetectorType = ast::FeatureDetectorOpenCVCuda<FeatureType>;
 //      cv::Ptr<FeatureDetectorType> feature_detector = cv::makePtr<FeatureDetectorType>(feature_computer);
 
     // Create sparse matcher
-    using SparseStereoMatcherType = stereo::SparseStereoMatcher<FeatureDetectorType>;
+    using SparseStereoMatcherType = ast::SparseStereoMatcher<FeatureDetectorType>;
     cv::Ptr<SparseStereoMatcherType> matcher_ptr = cv::makePtr<SparseStereoMatcherType>(feature_detector, calib);
 
     // ORB
@@ -246,7 +329,7 @@ int main(int argc, char **argv)
 
     // General
 //    feature_detector->setMaxNumOfKeypoints(500);
-    matcher_ptr->setRatioTestThreshold(0.5);
+    matcher_ptr->setRatioTestThreshold(0.7);
     matcher_ptr->setEpipolarConstraintThreshold(5.0);
 
     SparseStereoThreadData<SparseStereoMatcherType> sparse_stereo_thread_data;
@@ -327,7 +410,7 @@ int main(int argc, char **argv)
           depth_img_gpu.download(depth_img, stream);
 #endif
           cv::extractChannel(depth_img, depth_img, 0);
-          cv::imshow("depth", stereo::Utilities::drawImageWithColormap(depth_img));
+          cv::imshow("depth", ait::Utilities::drawImageWithColormap(depth_img));
         }
         else
         {
@@ -350,15 +433,15 @@ int main(int argc, char **argv)
         }
       }
 
-      stereo::ProfilingTimer timer;
+      ait::ProfilingTimer timer;
       // Convert stereo image to grayscale
       cv_cuda::GpuMat left_img_grayscale_gpu;
       cv_cuda::GpuMat right_img_grayscale_gpu;
       if (left_img_gpu.channels() != 1 || right_img_gpu.channels() != 1)
       {
-        timer = stereo::ProfilingTimer();
-        stereo::Utilities::convertToGrayscaleGpu(left_img_gpu, &left_img_grayscale_gpu, stream);
-        stereo::Utilities::convertToGrayscaleGpu(right_img_gpu, &right_img_grayscale_gpu, stream);
+        timer = ait::ProfilingTimer();
+        ait::Utilities::convertToGrayscaleGpu(left_img_gpu, &left_img_grayscale_gpu, stream);
+        ait::Utilities::convertToGrayscaleGpu(right_img_gpu, &right_img_grayscale_gpu, stream);
         timer.stopAndPrintTiming("Converting images to grayscale");
       }
       else
@@ -368,12 +451,12 @@ int main(int argc, char **argv)
       }
 
       // Download stereo image to Host memory
-      stereo::StereoAndDepthImageData images(
+      ast::StereoAndDepthImageData images(
           left_img_grayscale_gpu.rows, left_img_grayscale_gpu.cols,
           left_img_grayscale_gpu.type(),
           left_img_gpu.type(),
           depth_float_img_gpu.type());
-      timer = stereo::ProfilingTimer();
+      timer = ait::ProfilingTimer();
 #if OPENCV_2_4
       stream.enqueueDownload(left_img_grayscale_gpu, images.left_img);
       stream.enqueueDownload(right_img_grayscale_gpu, images.right_img);
@@ -393,7 +476,7 @@ int main(int argc, char **argv)
       timer.stopAndPrintTiming("Downloading images from GPU");
 //
       // Push stereo image to queue and notify sparse matcher thread
-      timer = stereo::ProfilingTimer();
+      timer = ait::ProfilingTimer();
       {
         std::lock_guard<std::mutex> lock(sparse_stereo_thread_data.images_queue.mutex);
         sparse_stereo_thread_data.images_queue.queue.clear();

@@ -1,12 +1,15 @@
 #include <iostream>
+#include <cstdint>
 #include <stdexcept>
 #include <tclap/CmdLine.h>
 #include <opencv2/opencv.hpp>
-#include <video_source_opencv.h>
+#include <ait/video/video_source_opencv.h>
 
 
 int main(int argc, char **argv)
 {
+  namespace avo = ait::video;
+
   try
   {
     TCLAP::CmdLine cmd("Video capture tool", ' ', "0.1");
@@ -19,7 +22,7 @@ int main(int argc, char **argv)
 
     cmd.parse(argc, argv);
 
-    video::VideoSourceOpenCV video;
+    avo::VideoSourceOpenCV video;
 
     if (video_arg.isSet())
     {

@@ -13,7 +13,7 @@
 #include <opencv2/opencv.hpp>
 
 #include <tclap/CmdLine.h>
-#include <video_source_zed.h>
+#include <ait/video/video_source_zed.h>
 
 std::string showImagesAndWaitForCommand(
     const std::vector<std::pair<cv::Mat, std::string>> &images_and_names,
@@ -61,6 +61,8 @@ std::string showImagesAndWaitForCommand(
 
 int main(int argc, char **argv)
 {
+  namespace avo = ait::video;
+
   try
   {
     TCLAP::CmdLine cmd("Stereo calibration tool", ' ', "0.1");
@@ -72,6 +74,7 @@ int main(int argc, char **argv)
     TCLAP::ValueArg<std::string> zed_params_arg("", "zed-params", "ZED parameter file", false, "", "filename", cmd);
     TCLAP::ValueArg<int> num_frames_arg("n", "num_frames", "Number of frames", false, 10, "integer", cmd);
     TCLAP::ValueArg<std::string> frames_prefix_arg("", "frames-prefix", "Frames prefix", false, "frame", "string", cmd);
+    TCLAP::SwitchArg record_depth_arg("", "record-depth", "Record depth images", cmd, false);
 
     cmd.parse(argc, argv);
 
@@ -79,7 +82,7 @@ int main(int argc, char **argv)
 
     int num_frames = num_frames_arg.getValue();
 
-    video::VideoSourceZED video;
+    avo::VideoSourceZED video;
 
     if (zed_params_arg.isSet())
     {
@@ -104,19 +107,27 @@ int main(int argc, char **argv)
 
     cv::namedWindow("Left", 1);
     cv::namedWindow("Right", 1);
+    cv::namedWindow("Depth", 1);
 
     std::ofstream list_file_left;
     std::ofstream list_file_right;
+    std::ofstream list_file_depth;
     list_file_left.open(frames_prefix_arg.getValue() + "_left_list.txt");
     list_file_right.open(frames_prefix_arg.getValue() + "_right_list.txt");
+    if (record_depth_arg.getValue())
+    {
+      list_file_depth.open(frames_prefix_arg.getValue() + "_right_list.txt");
+    }
 
     cv::Size image_size;
     int next_i = 0;
     int i = 0;
     cv::Mat view_left_orig;
     cv::Mat view_right_orig;
+    cv::Mat view_depth_orig;
     cv::Mat view_left;
     cv::Mat view_right;
+    cv::Mat view_depth;
     while (i < num_frames)
     {
       video.grab();
@@ -125,6 +136,12 @@ int main(int argc, char **argv)
 
       view_left_orig.copyTo(view_left);
       view_right_orig.copyTo(view_right);
+
+      if (record_depth_arg.getValue())
+      {
+        video.retrieveDepth(&view_depth_orig);
+        view_depth_orig.copyTo(view_depth);
+      }
 
       image_size = view_left.size();
       CV_Assert(image_size == view_right.size());
@@ -148,6 +165,11 @@ int main(int argc, char **argv)
 
       cv::imshow("Left", view_left);
       cv::imshow("Right", view_right);
+      if (record_depth_arg.getValue())
+      {
+        cv::imshow("Depth", view_depth);
+      }
+
       int key = 0xff & cv::waitKey(10);
 
       if ((key & 255) == 27 || key == 'q')
@@ -172,6 +194,10 @@ int main(int argc, char **argv)
         if (d_stamp > 0.1 * CLOCKS_PER_SEC)
         {
           std::vector<std::pair<cv::Mat, std::string>> images_and_names = {{view_left, "Left"}, {view_right, "Right"}};
+          if (record_depth_arg.getValue())
+          {
+            images_and_names.push_back({view_depth, "Depth"});
+          }
           std::vector<std::pair<std::string, char>> commands_and_keys = {{"keep", 'k'}, {"discard", 'd'}};
           std::string command = showImagesAndWaitForCommand(images_and_names, commands_and_keys);
           if (command == "keep")
@@ -189,6 +215,16 @@ int main(int argc, char **argv)
             out << frames_prefix_arg.getValue() << "_right_" << i << ".png";
             cv::imwrite(out.str(), view_right_orig);
             list_file_right << out.str() << std::endl;
+
+            if (record_depth_arg.getValue())
+            {
+              out.str("");
+              out.clear();
+              out << frames_prefix_arg.getValue() << "_depth_" << i << ".png";
+              cv::imwrite(out.str(), view_depth_orig);
+              list_file_depth << out.str() << std::endl;
+            }
+
             ++i;
           }
           else if (command.empty())
@@ -200,6 +236,7 @@ int main(int argc, char **argv)
     }
     list_file_left.close();
     list_file_right.close();
+    list_file_depth.close();
   }
   catch (TCLAP::ArgException &err)
   {

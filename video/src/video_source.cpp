@@ -6,8 +6,10 @@
 //  Created on: Aug 19, 2016
 //==================================================
 
-#include "video_source.h"
+#include <ait/video/video_source.h>
 
+namespace ait
+{
 namespace video
 {
 
@@ -55,4 +57,5 @@ namespace video
     throw Error("Unable to grab confidence frame from non-depth camera");
   }
 
+}
 }
