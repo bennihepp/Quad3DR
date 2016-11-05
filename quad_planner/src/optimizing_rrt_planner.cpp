@@ -77,6 +77,7 @@ void OptimizingRRT::clear()
   if (nn_)
     nn_->clear();
   lastGoalMotion_ = nullptr;
+  startMotions_.clear();
 
   bestCost_ = ob::Cost(std::numeric_limits<double>::quiet_NaN());
 }
@@ -189,15 +190,25 @@ ob::PlannerStatus OptimizingRRT::solveWithMinNumOfValidSamples(int fixed_num_of_
 ob::PlannerStatus OptimizingRRT::solve(const ob::PlannerTerminationCondition &ptc)
 {
   checkValidity();
-  ob::Goal                 *goal   = pdef_->getGoal().get();
-  ob::GoalSampleableRegion *goal_s = dynamic_cast<ob::GoalSampleableRegion*>(goal);
+  ob::Goal *goal = pdef_->getGoal().get();
+  ob::GoalSampleableRegion *goal_s = dynamic_cast<ob::GoalSampleableRegion *>(goal);
 
-  while (const ob::State *st = pis_.nextStart())
+  bool symCost = opt_->isSymmetric();
+
+  // Check if there are more starts
+  if (pis_.haveMoreStartStates() == true)
   {
-    Motion *motion = new Motion(si_);
-    si_->copyState(motion->state, st);
-    nn_->add(motion);
+    // There are, add them
+    while (const ob::State *st = pis_.nextStart())
+    {
+      auto *motion = new Motion(si_);
+      si_->copyState(motion->state, st);
+      motion->cost = opt_->identityCost();
+      nn_->add(motion);
+      startMotions_.push_back(motion);
+    }
   }
+  // No else
 
   if (nn_->size() == 0)
   {
@@ -205,21 +216,35 @@ ob::PlannerStatus OptimizingRRT::solve(const ob::PlannerTerminationCondition &pt
     return ob::PlannerStatus::INVALID_START;
   }
 
-  if (!sampler_)
+  // Allocate a sampler if necessary
+  if (!sampler_) {
     sampler_ = si_->allocStateSampler();
+  }
 
   OMPL_INFORM("%s: Starting planning with %u states already in datastructure", getName().c_str(), nn_->size());
 
-  Motion *solution  = nullptr;
-  Motion *approxsol = nullptr;
-//  double  approxdif = std::numeric_limits<double>::infinity();
-  double  approxdif = 0.1;
-  Motion *rmotion   = new Motion(si_);
+  const ob::ReportIntermediateSolutionFn intermediateSolutionCallback = pdef_->getIntermediateSolutionCallback();
+
+  Motion *solution = lastGoalMotion_;
+  ob::Cost bestCost(std::numeric_limits<double>::infinity());
+
+  Motion *approximation = nullptr;
+  double approximatedist = std::numeric_limits<double>::infinity();
+  bool sufficientlyShort = false;
+
+  auto *rmotion = new Motion(si_);
   ob::State *rstate = rmotion->state;
   ob::State *xstate = si_->allocState();
 
+  std::vector<ob::Cost> costs;
+
   num_of_sampled_states_ = 0;
   num_of_valid_sampled_states_ = 0;
+
+  if (solution) {
+    OMPL_INFORM("%s: Starting planning with existing solution of cost %.5f", getName().c_str(),
+                solution->cost.value());
+  }
 
   while (ptc == false)
   {
@@ -250,21 +275,27 @@ ob::PlannerStatus OptimizingRRT::solve(const ob::PlannerTerminationCondition &pt
       Motion *motion = new Motion(si_);
       si_->copyState(motion->state, dstate);
       motion->parent = nmotion;
+      motion->incCost = opt_->motionCost(nmotion->state, motion->state);
+      motion->cost = opt_->combineCosts(nmotion->cost, motion->incCost);
 
       nn_->add(motion);
       double dist = 0.0;
       bool sat = goal->isSatisfied(motion->state, &dist);
       if (sat)
       {
-        approxdif = dist;
-        solution = motion;
-        break;
+        approximatedist = dist;
+        if (opt_->isCostBetterThan(motion->cost, bestCost)) {
+          solution = motion;
+          bestCost = motion->cost;
+          std::cout << "Cost of best solution so far: " << bestCost << std::endl;
+        }
+//        break;
       }
-      if (dist < approxdif)
+      if (dist < approximatedist)
       {
-        approxdif = dist;
-        approxsol = motion;
-        std::cout << "Approximate distance to goal: " << approxdif << std::endl;
+        approximatedist = dist;
+        approximation = motion;
+        std::cout << "Approximate distance to goal: " << approximatedist << std::endl;
       }
       std::cout << "Sampled states: " << num_of_sampled_states_ << " of which " << num_of_valid_sampled_states_ << " are valid" << std::endl;
     }
@@ -274,33 +305,35 @@ ob::PlannerStatus OptimizingRRT::solve(const ob::PlannerTerminationCondition &pt
   bool approximate = false;
   if (solution == nullptr)
   {
-    solution = approxsol;
+    solution = approximation;
     approximate = true;
   }
 
-  if (solution != nullptr)
-  {
+  if (solution != nullptr) {
     lastGoalMotion_ = solution;
+
+    std::cout << "Found solution with cost: " << bestCost << std::endl;
 
     /* construct the solution path */
     std::vector<Motion*> mpath;
-    while (solution != nullptr)
-    {
+    while (solution != nullptr) {
       mpath.push_back(solution);
       solution = solution->parent;
     }
 
     /* set the solution path */
     og::PathGeometric *path = new og::PathGeometric(si_);
-    for (int i = mpath.size() - 1 ; i >= 0 ; --i)
+    for (int i = mpath.size() - 1 ; i >= 0 ; --i) {
       path->append(mpath[i]->state);
-    pdef_->addSolutionPath(ob::PathPtr(path), approximate, approxdif, getName());
+    }
+    pdef_->addSolutionPath(ob::PathPtr(path), approximate, approximatedist, getName());
     solved = true;
   }
 
   si_->freeState(xstate);
-  if (rmotion->state)
+  if (rmotion->state) {
     si_->freeState(rmotion->state);
+  }
   delete rmotion;
 
   OMPL_INFORM("%s: Created %u states", getName().c_str(), nn_->size());

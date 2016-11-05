@@ -301,7 +301,7 @@ std::shared_ptr<ob::ProblemDefinition> QuadPlanner::run()
   pdef->print(std::cout);
 
   // attempt to solve the problem within one second of planning time
-  ob::PlannerStatus solved = planner_->solveWithMinNumOfValidSamples(10000);
+  ob::PlannerStatus solved = planner_->solveWithMinNumOfValidSamples(1000, 2.0);
 //  ob::PlannerStatus solved = planner_->ob::Planner::solve(5.0);
 
   if (solved)

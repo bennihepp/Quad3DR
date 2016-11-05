@@ -206,7 +206,9 @@ void ShaderProgram::setUniform(const std::string &name, float value)
     glUniform1f(location, value);
   }
   else {
+#if _DEBUG
     std::cerr << "WARNING: Uniform '" << name << "' is not used by shader" << std::endl;
+#endif
   }
 }
 void ShaderProgram::setUniform(const std::string &name, const glm::mat4 &matrix)

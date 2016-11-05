@@ -141,6 +141,13 @@ protected:
     /** \brief The parent motion in the exploration tree */
     Motion            *parent;
 
+    /** \brief The cost up to this motion */
+    ob::Cost cost;
+
+    /** \brief The incremental cost of this motion's parent to this motion (this is stored to save distance
+     * computations in the updateChildCosts() method) */
+    ob::Cost incCost;
+
   };
 
   /** \brief Free the memory allocated by this planner */
@@ -169,6 +176,9 @@ protected:
 
   /** \brief Objective we're optimizing */
   ob::OptimizationObjectivePtr opt_;
+
+  /** \brief Stores the start states as Motions. */
+  std::vector<Motion *> startMotions_;
 
   /** \brief Best cost found so far by algorithm */
   ob::Cost bestCost_;
