@@ -265,6 +265,7 @@ int main(int argc, char **argv)
 			retrieve_frame_fn(left_frame, right_frame, depth_frame);
 
 			if (rotate) {
+				std::swap(left_frame, right_frame);
 				const int flipCode = -1;
 #pragma omp parallel sections
 				{
