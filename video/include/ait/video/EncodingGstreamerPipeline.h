@@ -151,7 +151,7 @@ protected:
 		//std::string encoder_branch_str = "queue ! jpegenc";
 
 		// TODO
-		//    g_signal_connect(source, "need-data", G_CALLBACK(appsrcNeedDataCallback), &data);
+		//g_signal_connect(source, "need-data", G_CALLBACK(appsrcNeedDataCallback), &data);
 
 		// Create preprocessing bin
 		GstElement *preprocess_bin = gst_parse_bin_from_description(preprocess_branch_str.c_str(), true, nullptr);

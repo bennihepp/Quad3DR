@@ -325,6 +325,10 @@ public:
 		return queue_.empty();
 	}
 
+	size_t size() const {
+		return queue_.size();
+	}
+
 	template <typename TMutex>
 	T popFront(const std::unique_lock<TMutex>& lock) {
 		if (!lock) {
@@ -379,13 +383,16 @@ private:
 };
 
 template <typename TUserData>
-class AppSinkQueue : public SPSCFixedQueue<std::tuple<GstSampleWrapper, GstreamerBufferInfo, TUserData>>
+class GstreamerPipeline;
+
+template <typename TUserData>
+class AppSinkQueue : public SPSCFixedQueue<std::tuple<std::vector<uint8_t>, GstreamerBufferInfo, TUserData>>
 {
 public:
 	const unsigned int FRAME_DROP_REPORT_RATE = 10;
 
-	AppSinkQueue(unsigned int max_queue_size = 5)
-		: SPSCFixedQueue(max_queue_size), first_frame_removed_(false), src_overflow_counter_(0), sink_overflow_counter_(0) {
+	AppSinkQueue(unsigned int max_queue_size = 5, unsigned int user_data_queu_size = 3)
+		: SPSCFixedQueue(max_queue_size), user_data_queu_size_(user_data_queu_size), first_frame_removed_(false), src_overflow_counter_(0), sink_overflow_counter_(0) {
 	}
 
 	bool pushData(GstAppSrc* appsrc, GstBufferWrapper buffer, const GstreamerBufferInfo& buffer_info, const TUserData& user_data) {
@@ -394,7 +401,8 @@ public:
 		GstFlowReturn ret = gst_app_src_push_buffer(appsrc, buffer.get());
 		if (ret == GST_FLOW_OK) {
 			std::lock_guard<std::mutex> lock(getMutex());
-			if (user_data_queue_.size() >= getMaxQueueSize()) {
+			if (user_data_queue_.size() >= user_data_queu_size_) {
+				// This is kind of hacky to ensure the user data queue is not blocking new frames
 				user_data_queue_.pop_front();
 				++src_overflow_counter_;
 				if (src_overflow_counter_ >= FRAME_DROP_REPORT_RATE) {
@@ -410,11 +418,9 @@ public:
 		}
 	}
 
-	static GstFlowReturn newSampleCallbackStatic(GstElement* sink, AppSinkQueue* data) {
-		return data->newSampleCallback(GST_APP_SINK(sink));
-	}
-
 private:
+	friend class GstreamerPipeline<TUserData>;
+
 	GstFlowReturn newSampleCallback(GstAppSink* appsink) {
 		// Retrieve the sample
 		GstSample* gst_sample = gst_app_sink_pull_sample(appsink);
@@ -429,6 +435,15 @@ private:
 		}
 		else {
 			GstSampleWrapper sample(gst_sample);
+			// Copy buffer
+			std::vector<uint8_t> buffer_data;
+			{
+				GstBufferWrapper buffer = sample.getBuffer();
+				buffer_data.resize(buffer.getSize());
+				std::copy(buffer.getData(), buffer.getData() + buffer.getSize(), buffer_data.begin());
+				// Delete sample as fast as possible so that appsink has free buffers available
+				GstSampleWrapper deleted_sample(std::move(sample));
+			}
 			// TODO: Check if this can be guaranteed to work
 			//if (!first_frame_removed_) {
 			//	// The first frame will usually be lost in the Gstreamer pipeline. Here we delete the corresponding info and user data
@@ -445,10 +460,13 @@ private:
 				std::cerr << "WARNING: More userdata available than frames (" << user_data_queue_.size() << "). Either frames are coming in too fast or frames get dropped in the pipeline" << std::endl;
 			}
 			std::pair<GstreamerBufferInfo, TUserData> pair(std::move(user_data_queue_.front()));
-			user_data_queue_.pop_front();
+			// This is kind of hacky to ensure the user data queue is never empty
+			if (user_data_queue_.size() > 1) {
+				user_data_queue_.pop_front();
+			}
 			const GstreamerBufferInfo& buffer_info = pair.first;
 			const TUserData& user_data = pair.second;
-			auto sample_tuple = std::make_tuple(std::move(sample), buffer_info, user_data);
+			auto sample_tuple = std::make_tuple(std::move(buffer_data), buffer_info, user_data);
 			if (!pushBack(sample_tuple)) {
 				++sink_overflow_counter_;
 				if (sink_overflow_counter_ >= FRAME_DROP_REPORT_RATE) {
@@ -462,6 +480,7 @@ private:
 	}
 
 	std::deque<std::pair<GstreamerBufferInfo, TUserData>> user_data_queue_;
+	unsigned int user_data_queu_size_;
 	bool first_frame_removed_;
 	unsigned int src_overflow_counter_;
 	unsigned int sink_overflow_counter_;
@@ -471,6 +490,10 @@ template <typename TUserData>
 class GstreamerPipeline
 {
 public:
+	using clock = std::chrono::system_clock;
+	const unsigned int WATCHDOG_RESET_COUNT = 10;
+	const std::chrono::seconds WATCHDOG_TIMEOUT = std::chrono::seconds(2);
+
 	GstreamerPipeline()
 		: pipeline_(nullptr), pipeline_state(GST_STATE_NULL) {
 	}
@@ -491,16 +514,23 @@ public:
 		if (appsrc_ == nullptr) {
 			throw std::runtime_error("Unable to create app source element");
 		}
-		g_object_set(appsrc_, "stream-type", 0, "format", GST_FORMAT_TIME, nullptr);
-		//g_object_set(appsrc_, "stream-type", 0, "format", GST_FORMAT_BYTES, nullptr);
+		g_object_set(appsrc_, "stream-type", GST_APP_STREAM_TYPE_STREAM, nullptr);
+		//g_object_set(appsrc_, "format", GST_FORMAT_TIME, nullptr);
+		g_object_set(appsrc_, "format", GST_FORMAT_BYTES, nullptr);
+		//g_object_set(appsrc_, "format", GST_FORMAT_BUFFERS, nullptr);
+		g_object_set(appsrc_, "block", TRUE, nullptr);
+		g_object_set(appsrc_, "max-bytes", 200000, nullptr);
 
 		appsink_ = GST_APP_SINK(gst_element_factory_make("appsink", "sink"));
 		if (appsink_ == nullptr) {
 			throw std::runtime_error("Unable to create app sink element");
 		}
 		g_object_set(appsink_, "emit-signals", TRUE, nullptr);
-		// Connect new smaple signal to AppSinkQueue
-		g_signal_connect(appsink_, "new-sample", G_CALLBACK(AppSinkQueue<TUserData>::newSampleCallbackStatic), &appsink_queue_);
+		g_object_set(appsink_, "sync", FALSE, nullptr);
+		//g_object_set(appsink_, "drop", TRUE, nullptr);
+		//g_object_set(appsink_, "max-buffers", 5, nullptr);
+		// Connect new sample signal to AppSinkQueue
+		g_signal_connect(appsink_, "new-sample", G_CALLBACK(GstreamerPipeline<TUserData>::newAppsinkSampleCallbackStatic), this);
 
 		pipeline_ = createPipeline(appsrc_, appsink_);
 	}
@@ -557,12 +587,67 @@ public:
 		ensureInitialized();
 		MLIB_ASSERT(GST_IS_BUFFER(buffer.get()));
 
+		clock::time_point now = clock::now();
+		if (now - last_appsink_sample_time_ >= WATCHDOG_TIMEOUT) {
+			++watchdog_counter_;
+			if (watchdog_counter_ >= WATCHDOG_RESET_COUNT) {
+				std::cout << "WARNING: Pipeline watchdog activated. Restarting pipeline" << std::endl;
+				stop();
+				start();
+				return false;
+			}
+		}
+		else if (watchdog_counter_ > 0) {
+			watchdog_counter_ = 0;
+		}
+
 		GstreamerBufferInfo buffer_info;
 		buffer_info.pts = GST_BUFFER_PTS(buffer.get());
 		buffer_info.dts = GST_BUFFER_DTS(buffer.get());
 		buffer_info.duration = GST_BUFFER_DURATION(buffer.get());
 		buffer_info.offset = GST_BUFFER_OFFSET(buffer.get());
 		buffer_info.offset_end = GST_BUFFER_OFFSET_END(buffer.get());
+
+		// TODO: get from appsrc caps
+		double frame_period = 1 / 10.;
+		// Overwrite timing information to make sure that pipeline runs through
+		static guint64 frame_counter = 0;
+		GstClock* clock = gst_pipeline_get_clock(getNativePipeline());
+		GstClockTime time_now = gst_clock_get_time(clock);
+		GstClockTime gst_frame_period = static_cast<guint64>(GST_SECOND * frame_period);
+		static GstClockTime time_previous = time_now - gst_frame_period;
+
+		if (time_now - time_previous <= gst_frame_period) {
+			GST_BUFFER_PTS(buffer.get()) = time_previous + gst_frame_period;
+		}
+		else {
+			GST_BUFFER_PTS(buffer.get()) = time_now;
+		}
+		GST_BUFFER_DTS(buffer.get()) = GST_CLOCK_TIME_NONE;
+		GST_BUFFER_DURATION(buffer.get()) = static_cast<guint64>(GST_SECOND * frame_period);
+		GST_BUFFER_OFFSET(buffer.get()) = frame_counter;
+		GST_BUFFER_OFFSET_END(buffer.get()) = GST_BUFFER_OFFSET_NONE;
+
+		// TODO: get from appsrc caps
+		//double frame_period = 1 / 10.;
+		//static GstClockTime time_start = gst_clock_get_time(clock);
+		//GST_BUFFER_PTS(buffer.get()) = time_start + static_cast<guint64>(GST_SECOND * frame_counter * frame_period);
+		//GST_BUFFER_DTS(buffer.get()) = GST_CLOCK_TIME_NONE;
+		//GST_BUFFER_DURATION(buffer.get()) = static_cast<guint64>(GST_SECOND * frame_period);
+		//GST_BUFFER_OFFSET(buffer.get()) = frame_counter;
+		//GST_BUFFER_OFFSET_END(buffer.get()) = GST_BUFFER_OFFSET_NONE;
+
+		++frame_counter;
+		time_previous = time_now;
+
+		// Disable timing information in buffer
+		//static unsigned int buffer_counter = 0;
+		//GST_BUFFER_PTS(buffer.get()) = GST_CLOCK_TIME_NONE;
+		//GST_BUFFER_DTS(buffer.get()) = GST_CLOCK_TIME_NONE;
+		//GST_BUFFER_DURATION(buffer.get()) = GST_CLOCK_TIME_NONE;
+		//GST_BUFFER_OFFSET(buffer.get()) = buffer_counter;
+		//GST_BUFFER_OFFSET_END(buffer.get()) = GST_BUFFER_OFFSET_NONE;
+		//++buffer_counter;
 
 		return appsink_queue_.pushData(appsrc_, std::move(buffer), buffer_info, user_data);
 	}
@@ -578,6 +663,8 @@ public:
 			gst_object_unref(pipeline_);
 			throw std::runtime_error("Unable to set pipeline state");
 		}
+		watchdog_counter_ = 0;
+		last_appsink_sample_time_ = clock::now();
 		terminate_ = false;
 		message_thread_ = std::thread([this]() {
 			this->gstreamerLoop();
@@ -667,11 +754,24 @@ private:
 		}
 	}
 
+	static GstFlowReturn newAppsinkSampleCallbackStatic(GstElement* sink, GstreamerPipeline* data) {
+		return data->newAppsinkSampleCallback(GST_APP_SINK(sink));
+	}
+
+	GstFlowReturn newAppsinkSampleCallback(GstAppSink* appsink) {
+		MLIB_ASSERT(appsink == appsink_);
+		last_appsink_sample_time_ = clock::now();
+		return appsink_queue_.newSampleCallback(appsink_);
+	}
+
 	GstPipeline* pipeline_;
 	GstState pipeline_state;
 	GstAppSrc* appsrc_;
 	GstAppSink* appsink_;
 	AppSinkQueue<TUserData> appsink_queue_;
+	using clock = std::chrono::system_clock;
+	unsigned int watchdog_counter_;
+	std::chrono::time_point<clock> last_appsink_sample_time_;
 	std::atomic_bool terminate_;
 	std::thread message_thread_;
 	std::function<void(GstState, GstState, GstState)> state_change_callback_;

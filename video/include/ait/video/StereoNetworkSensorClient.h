@@ -117,26 +117,19 @@ public:
 	}
 
 #if WITH_GSTREAMER
-	void sendGstreamerBuffer(GstBufferWrapper buffer, const TUserData& user_data) {
+	void sendGstreamerBuffer(const std::vector<uint8_t>& buffer_data, const GstreamerBufferInfo& buffer_info, const TUserData& user_data) {
 		StereoPacketHeader packet_header;
 		packet_header.client_type = client_type_;
 		packet_header.packet_type = StereoPacketType::CLIENT_2_SERVER_GSTREAMER_BUFFER;
-		packet_header.packet_size = sizeof(TUserData) + sizeof(GstreamerBufferInfo) + buffer.getSize();
+		packet_header.packet_size = sizeof(TUserData) + sizeof(GstreamerBufferInfo) + buffer_data.size();
 		packet_header.packet_size_decompressed = packet_header.packet_size;
 		network_client_->sendDataBlocking(packet_header);
 
 		network_client_->sendDataBlocking(user_data);
 
-		GstreamerBufferInfo buffer_info;
-		buffer_info.pts = GST_BUFFER_PTS(buffer.get());
-		buffer_info.dts = GST_BUFFER_DTS(buffer.get());
-		buffer_info.duration = GST_BUFFER_DURATION(buffer.get());
-		buffer_info.offset = GST_BUFFER_OFFSET(buffer.get());
-		buffer_info.offset_end = GST_BUFFER_OFFSET_END(buffer.get());
 		network_client_->sendDataBlocking(buffer_info);
 
-		MLIB_ASSERT(GST_IS_BUFFER(buffer.get()));
-		network_client_->sendDataBlocking(buffer.getData(), buffer.getSize());
+		network_client_->sendDataBlocking(buffer_data);
 	}
 
 	void sendGstreamerCaps(GstCapsWrapper gst_caps) {

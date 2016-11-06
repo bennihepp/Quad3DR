@@ -114,20 +114,19 @@ namespace ait
 						AppSinkQueue<StereoFrameUserData>& appsink_queue = pipeline_.getAppSinkQueue();
 						bool appsinkCapsSent = false;
 						RateCounter frame_rate_counter;
+						size_t byte_counter = 0;
 						while (!terminate_ || !appsink_queue.empty()) {
 							std::unique_lock<std::mutex> lock(appsink_queue.getMutex());
 							appsink_queue.getQueueFilledCondition().wait_for(lock, std::chrono::milliseconds(100), [&appsink_queue]() { return !appsink_queue.empty(); });
 							if (!appsink_queue.empty()) {
-								std::tuple<GstSampleWrapper, GstreamerBufferInfo, StereoFrameUserData> sample_tuple(std::move(appsink_queue.popFront(lock)));
-								GstSampleWrapper& sample = std::get<0>(sample_tuple);
+								std::tuple<std::vector<uint8_t>, GstreamerBufferInfo, StereoFrameUserData> sample_tuple(std::move(appsink_queue.popFront(lock)));
+								std::vector<uint8_t>& buffer_data = std::get<0>(sample_tuple);
 								const GstreamerBufferInfo& buffer_info = std::get<1>(sample_tuple);
 								const StereoFrameUserData& user_data = std::get<2>(sample_tuple);
 								lock.unlock();
 								if (!pipeline_.isPlaying()) {
 									continue;
 								}
-								GstBufferWrapper buffer(gst_sample_get_buffer(sample.get()), false);
-								MLIB_ASSERT(GST_IS_BUFFER(buffer.get()));
 								try {
 									if (!appsinkCapsSent) {
 										GstCapsWrapper appsink_caps = pipeline_.getAppSinkCaps();
@@ -136,20 +135,17 @@ namespace ait
 										appsinkCapsSent = true;
 									}
 
-									// Set buffer_info data on buffer
-									GST_BUFFER_PTS(buffer.get()) = buffer_info.pts;
-									GST_BUFFER_DTS(buffer.get()) = buffer_info.dts;
-									GST_BUFFER_DURATION(buffer.get()) = buffer_info.duration;
-									GST_BUFFER_OFFSET(buffer.get()) = buffer_info.offset;
-									GST_BUFFER_OFFSET_END(buffer.get()) = buffer_info.offset_end;
-
 									frame_rate_counter.count();
 									double rate;
+									unsigned int frame_count = frame_rate_counter.getCount();
+									byte_counter += sizeof(StereoPacketHeader) + sizeof(StereoFrameHeader) + sizeof(GstreamerBufferInfo) + buffer_data.size();
 									if (frame_rate_counter.reportRate(rate)) {
-										std::cout << "Sending Gstreamer Buffer, offset=" << GST_BUFFER_OFFSET(buffer.get()) << ", pts=" << GST_BUFFER_PTS(buffer.get()) << ", size=" << buffer.getSize() << std::endl;
-										std::cout << "Sending Gstreamer buffers with " << rate << " Hz" << std::endl;
+										double bandwidth = rate * byte_counter / static_cast<double>(frame_count) / 1024.0;
+										byte_counter = 0;
+										std::cout << "Sending Gstreamer buffers with " << rate << " Hz. Bandwidth: " << bandwidth << "kB/s" << std::endl;
 									}
-									stereo_sensor_client_.sendGstreamerBuffer(std::move(buffer), user_data);
+									stereo_sensor_client_.sendGstreamerBuffer(buffer_data, buffer_info, user_data);
+
 								}
 								catch (const typename TNetworkClient::Error& err) {
 									std::cerr << "Network error occured: " << err.what() << std::endl;
