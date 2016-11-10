@@ -1,3 +1,11 @@
+//==================================================
+// BoostNetworkClientUDP.h
+//
+//  Copyright (c) 2016 Benjamin Hepp.
+//  Author: Benjamin Hepp
+//  Created on: Nov 7, 2016
+//==================================================
+
 #pragma once
 
 #include <iostream>

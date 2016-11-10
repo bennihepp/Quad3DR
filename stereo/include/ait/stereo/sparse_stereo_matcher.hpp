@@ -11,8 +11,8 @@
 #include <thread>
 #include <opencv2/features2d.hpp>
 #if OPENCV_3
-  #include <opencv2/xfeatures2d.hpp>
-  #include <opencv2/sfm.hpp>
+//  #include <opencv2/xfeatures2d.hpp>
+//  #include <opencv2/sfm.hpp>
   #include <opencv2/core/cuda.hpp>
 #else
   #include <opencv2/gpu/gpu.hpp>

@@ -7,6 +7,11 @@ include("cmake/CheckC11.cmake")
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules/;${CMAKE_MODULE_PATH}")
 #set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
 
+find_package(Threads REQUIRED)
+if (Threads_FOUND)
+  link_libraries (${CMAKE_THREAD_LIBS_INIT})
+endif (Threads_FOUND)
+
 set(WITH_ZED True CACHE BOOL "Use ZED SDK")
 set(USE_OPENCV_VERSION "3.1" CACHE STRING "OpenCV version")
 set(WITH_PROFILING True CACHE BOOL "Enable profiling output")
@@ -71,7 +76,6 @@ endif()
 
 if("${WITH_ZED}")
   find_package(CUDA REQUIRED)
-  add_definitions(-DWITH_ZED=1)
 endif()
 
 # Set profiling preprocessor macro

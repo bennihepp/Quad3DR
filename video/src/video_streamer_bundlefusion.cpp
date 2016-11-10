@@ -1,7 +1,17 @@
+//==================================================
+// video_streamer_bundlefusion.cpp
+//
+//  Copyright (c) 2016 Benjamin Hepp.
+//  Author: Benjamin Hepp
+//  Created on: Nov 7, 2016
+//==================================================
+
 #define WITH_GSTREAMER 1
 #define SIMULATE_ZED 0
+#define DEBUG_IMAGE_COMPRESSION 1
 
-#include <ait/mLib.h>
+#include <ait/BoostNetworkClientTCP.h>
+#include <ait/BoostNetworkClientUDP.h>
 #include <iostream>
 #include <stdexcept>
 #include <algorithm>
@@ -18,11 +28,9 @@
 #endif
 #include <boost/program_options.hpp>
 #include <opencv2/opencv.hpp>
+#include <ait/math.h>
 #include <ait/video/video_source_zed.h>
-#include <ait/BoostNetworkClientTCP.h>
-#include <ait/BoostNetworkClientUDP.h>
 #include <ait/video/StereoNetworkSensorManager.h>
-#include <ait/video/StereoNetworkSensorClient.h>
 #if WITH_GSTREAMER
 #include <ait/video/EncodingGstreamerPipeline.h>
 #endif
@@ -61,30 +69,31 @@ private:
 	std::chrono::duration<double> desired_period_;
 	std::chrono::duration<double> time_ahead_;
 };
+
 StereoCalibration convertStereoCalibration(const ait::stereo::StereoCameraCalibration& stereo_calibration)
 {
 	StereoCalibration stereo_sensor_calibration;
 	// Image widths and heights
-	stereo_sensor_calibration.m_ColorImageWidthLeft = stereo_calibration.image_size.width;
-	stereo_sensor_calibration.m_ColorImageHeightLeft = stereo_calibration.image_size.height;
-	stereo_sensor_calibration.m_ColorImageWidthRight = stereo_calibration.image_size.width;
-	stereo_sensor_calibration.m_ColorImageHeightRight = stereo_calibration.image_size.height;
-	stereo_sensor_calibration.m_DepthImageWidth = stereo_calibration.image_size.width;
-	stereo_sensor_calibration.m_DepthImageHeight = stereo_calibration.image_size.height;
+	stereo_sensor_calibration.color_image_width_left = stereo_calibration.image_size.width;
+	stereo_sensor_calibration.color_image_height_left = stereo_calibration.image_size.height;
+	stereo_sensor_calibration.color_image_width_right = stereo_calibration.image_size.width;
+	stereo_sensor_calibration.color_image_height_right = stereo_calibration.image_size.height;
+	stereo_sensor_calibration.depth_image_width = stereo_calibration.image_size.width;
+	stereo_sensor_calibration.depth_image_height = stereo_calibration.image_size.height;
 	// Left intrinsics and extrinsics
-	ml::mat4f left_intrinsics = ml::mat4f::identity();
-	left_intrinsics.setMatrix3x3(ml::eigenutil::EigenToMlib(stereo_calibration.left.getCameraMatrixEigen()));
-	ml::mat4f left_extrinsics;
-	left_extrinsics = ml::eigenutil::EigenToMlib(stereo_calibration.getLeftExtrinsicsEigen());
-	stereo_sensor_calibration.m_CalibrationColorLeft.setMatrices(left_intrinsics, left_extrinsics);
+	ait::Mat4f left_intrinsics = ait::Mat4f::Identity();
+	left_intrinsics.block<3, 3>(0, 0) = stereo_calibration.left.getCameraMatrixEigen().cast<float>();
+	ait::Mat4f  left_extrinsics;
+	left_extrinsics = stereo_calibration.getLeftExtrinsicsEigen().cast<float>();
+	stereo_sensor_calibration.calibration_color_left.setMatrices(left_intrinsics, left_extrinsics);
 	// Depth intrinsics and extrinsics
-	stereo_sensor_calibration.m_CalibrationDepth.setMatrices(left_intrinsics, left_extrinsics);
+	stereo_sensor_calibration.calibration_depth.setMatrices(left_intrinsics, left_extrinsics);
 	// Right intrinsics and extrinsics
-	ml::mat4f right_intrinsics = ml::mat4f::identity();
-	right_intrinsics.setMatrix3x3(ml::eigenutil::EigenToMlib(stereo_calibration.right.getCameraMatrixEigen()));
-	ml::mat4f right_extrinsics;
-	right_extrinsics = ml::eigenutil::EigenToMlib(stereo_calibration.getRightExtrinsicsEigen());
-	stereo_sensor_calibration.m_CalibrationColorRight.setMatrices(right_intrinsics, right_extrinsics);
+	ait::Mat4f right_intrinsics = ait::Mat4f::Identity();
+	right_intrinsics.block<3, 3>(0, 0) = stereo_calibration.right.getCameraMatrixEigen().cast<float>();
+	ait::Mat4f right_extrinsics;
+	right_extrinsics = stereo_calibration.getRightExtrinsicsEigen().cast<float>();
+	stereo_sensor_calibration.calibration_color_right.setMatrices(right_intrinsics, right_extrinsics);
 
 	return stereo_sensor_calibration;
 }
@@ -111,6 +120,12 @@ int main(int argc, char **argv)
 		std::string remote_ip;
 		int remote_port;
 
+#if WITH_GSTREAMER
+		std::string preprocess_branch;
+    std::string encoder_branch;
+    std::string display_branch;
+#endif
+
 		po::options_description generic_options("Allowed options");
 		generic_options.add_options()
 			("help", "Produce help message")
@@ -134,10 +149,22 @@ int main(int argc, char **argv)
 			("compress", po::bool_switch(&use_compression)->default_value(false), "Use compression")
 			;
 
+#if WITH_GSTREAMER
+    po::options_description gstreamer_options("Gstreamer options");
+    gstreamer_options.add_options()
+      ("preprocess-branch", po::value<std::string>(&preprocess_branch), "Preprocessing branch description")
+      ("encoder-branch", po::value<std::string>(&encoder_branch), "Encoder branch description")
+      ("display-branch", po::value<std::string>(&display_branch), "Display branch description")
+      ;
+#endif
+
 		po::options_description options;
 		options.add(generic_options);
 		options.add(zed_options);
 		options.add(network_options);
+#if WITH_GSTREAMER
+    options.add(gstreamer_options);
+#endif
 		po::variables_map vm;
 		po::store(po::command_line_parser(argc, argv).options(options).run(), vm);
 		if (vm.count("help"))
@@ -174,7 +201,6 @@ int main(int argc, char **argv)
 		}
 		camera_framerate = video_ptr->getFPS();
 #endif
-		video_ptr = video_ptr;
 		retrieve_frame_fn = [video_ptr](cv::Mat& left_frame, cv::Mat& right_frame, cv::Mat& depth_frame) -> bool
 		{
 		//  cv::Size display_size(data->video_ptr->getWidth(), data->video_ptr->getHeight());
@@ -223,18 +249,27 @@ int main(int argc, char **argv)
 #if SIMULATE_ZED
 		StereoCalibration stereo_sensor_calibration;
 		memset(&stereo_sensor_calibration, 0, sizeof(stereo_sensor_calibration));
-		stereo_sensor_calibration.m_ColorImageWidthLeft = 640;
-		stereo_sensor_calibration.m_ColorImageWidthRight = 640;
-		stereo_sensor_calibration.m_DepthImageWidth = 640;
-		stereo_sensor_calibration.m_ColorImageHeightLeft = 360;
-		stereo_sensor_calibration.m_ColorImageHeightRight = 360;
-		stereo_sensor_calibration.m_DepthImageHeight = 360;
+		stereo_sensor_calibration.color_image_width_left = 640;
+		stereo_sensor_calibration.color_image_width_right = 640;
+		stereo_sensor_calibration.depth_image_width = 640;
+		stereo_sensor_calibration.color_image_height_left = 360;
+		stereo_sensor_calibration.color_image_height_right = 360;
+		stereo_sensor_calibration.depth_image_height = 360;
 #else
 		//// Read stereo calibration
 		ait::stereo::StereoCameraCalibration stereo_calibration = video_ptr->getStereoCalibration();
 		StereoCalibration stereo_sensor_calibration = convertStereoCalibration(stereo_calibration);
 #endif
 		ait::video::StereoNetworkSensorManager<NetworkClient> manager(stereo_sensor_calibration, StereoClientType::CLIENT_ZED, remote_ip, remote_port);
+		if (!preprocess_branch.empty()) {
+		  manager.getPipeline().setPreProcessBranchStr(preprocess_branch);
+		}
+		if (!encoder_branch.empty()) {
+		  manager.getPipeline().setEncoderBranchStr(encoder_branch);
+		}
+		if (!display_branch.empty()) {
+		  manager.getPipeline().setDisplayBranchStr(display_branch);
+		}
 		manager.setUseCompression(use_compression);
 		manager.setDepthTruncation(1.0f, 12.0f);
 		manager.setInverseDepth(false);
@@ -248,7 +283,7 @@ int main(int argc, char **argv)
 			desired_framerate = camera_framerate;
 		}
 
-		std::chrono::seconds wait_for_playing_timeout(1);
+		std::chrono::seconds wait_for_playing_timeout(3);
 		cv::Mat left_frame, right_frame, depth_frame;
 		auto start_time = std::chrono::high_resolution_clock::now();
 		RateCounter frame_rate_counter;
@@ -262,7 +297,10 @@ int main(int argc, char **argv)
 				}
 			}
 
+#if !SIMULATE_ZED
+//			std::cout << "Retrieving frame ..." << std::endl;
 			retrieve_frame_fn(left_frame, right_frame, depth_frame);
+//      std::cout << "Done" << std::endl;
 
 			if (rotate) {
 				const int flipCode = -1;
@@ -282,7 +320,11 @@ int main(int argc, char **argv)
 				}
 			}
 
+//      std::cout << "Pushing frame into pipeline ..." << std::endl;
 			manager.pushNewStereoFrame(left_frame, right_frame, depth_frame);
+//      std::cout << "Done" << std::endl;
+
+#endif
 
 			frame_rate_counter.count();
 			double rate;

@@ -11,9 +11,9 @@
 #include <vector>
 #include <opencv2/opencv.hpp>
 #if OPENCV_3_1
-  #include <opencv2/xfeatures2d.hpp>
-  #include <opencv2/ximgproc.hpp>
-  #include <opencv2/cudastereo.hpp>
+//  #include <opencv2/xfeatures2d.hpp>
+//  #include <opencv2/ximgproc.hpp>
+//  #include <opencv2/cudastereo.hpp>
 #endif
 #include "stereo_calibration.h"
 

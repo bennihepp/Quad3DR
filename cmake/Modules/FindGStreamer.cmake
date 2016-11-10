@@ -54,7 +54,7 @@ find_package(PkgConfig)
 #   _component_prefix is prepended to the _INCLUDE_DIRS and _LIBRARIES variables (eg. "GSTREAMER_AUDIO")
 #   _pkgconfig_name is the component's pkg-config name (eg. "gstreamer-1.0", or "gstreamer-video-1.0").
 #   _library is the component's library name (eg. "gstreamer-1.0" or "gstvideo-1.0")
-macro(FIND_GSTREAMER_COMPONENT _component_prefix _pkgconfig_name _library)
+macro(FIND_GSTREAMER_COMPONENT_PKGCONFIG _component_prefix _pkgconfig_name _library)
 
     string(REGEX MATCH "(.*)>=(.*)" _dummy "${_pkgconfig_name}")
     if ("${CMAKE_MATCH_2}" STREQUAL "")
@@ -71,26 +71,43 @@ macro(FIND_GSTREAMER_COMPONENT _component_prefix _pkgconfig_name _library)
     #)
 endmacro()
 
+macro(FIND_GSTREAMER_COMPONENT _component_prefix _pkgconfig_name _header _library)
+    pkg_check_modules(PC_${_component_prefix} QUIET ${_pkgconfig_name})
+
+    find_path(${_component_prefix}_INCLUDE_DIRS
+        NAMES ${_header}
+        HINTS ${PC_${_component_prefix}_INCLUDE_DIRS} ${PC_${_component_prefix}_INCLUDEDIR}
+        PATH_SUFFIXES gstreamer-1.0
+    )
+
+    find_library(${_component_prefix}_LIBRARIES
+        NAMES ${_library}
+        HINTS ${PC_${_component_prefix}_LIBRARY_DIRS} ${PC_${_component_prefix}_LIBDIR}
+    )
+endmacro()
+
 # ------------------------
 # 1. Find GStreamer itself
 # ------------------------
 
 # 1.1. Find headers and libraries
-FIND_GSTREAMER_COMPONENT(GSTREAMER gstreamer-1.0 gstreamer-1.0)
-FIND_GSTREAMER_COMPONENT(GSTREAMER_BASE gstreamer-base-1.0 gstbase-1.0)
+FIND_GSTREAMER_COMPONENT_PKGCONFIG(GSTREAMER gstreamer-1.0 gstconfig.h)
+FIND_GSTREAMER_COMPONENT_PKGCONFIG(GSTREAMER_BASE gstreamer-base-1.0 gstbase-1.0)
+FIND_GSTREAMER_COMPONENT(GSTREAMER_CONFIG gstreamer-1.0 gst/gstconfig.h gstreamer-1.0)
+SET(GSTREAMER_INCLUDE_DIRS "${GSTREAMER_INCLUDE_DIRS};${GSTREAMER_CONFIG_INCLUDE_DIRS}" CACHE PATH "" FORCE)
 
 # -------------------------
 # 2. Find GStreamer plugins
 # -------------------------
 
-FIND_GSTREAMER_COMPONENT(GSTREAMER_APP gstreamer-app-1.0 gstapp-1.0)
-FIND_GSTREAMER_COMPONENT(GSTREAMER_AUDIO gstreamer-audio-1.0 gstaudio-1.0)
-FIND_GSTREAMER_COMPONENT(GSTREAMER_FFT gstreamer-fft-1.0 gstfft-1.0)
-FIND_GSTREAMER_COMPONENT(GSTREAMER_GL gstreamer-gl-1.0>=1.8.0 gstgl-1.0)
-FIND_GSTREAMER_COMPONENT(GSTREAMER_MPEGTS gstreamer-mpegts-1.0>=1.4.0 gstmpegts-1.0)
-FIND_GSTREAMER_COMPONENT(GSTREAMER_PBUTILS gstreamer-pbutils-1.0 gstpbutils-1.0)
-FIND_GSTREAMER_COMPONENT(GSTREAMER_TAG gstreamer-tag-1.0 gsttag-1.0)
-FIND_GSTREAMER_COMPONENT(GSTREAMER_VIDEO gstreamer-video-1.0 gstvideo-1.0)
+FIND_GSTREAMER_COMPONENT_PKGCONFIG(GSTREAMER_APP gstreamer-app-1.0 gstapp-1.0)
+FIND_GSTREAMER_COMPONENT_PKGCONFIG(GSTREAMER_AUDIO gstreamer-audio-1.0 gstaudio-1.0)
+FIND_GSTREAMER_COMPONENT_PKGCONFIG(GSTREAMER_FFT gstreamer-fft-1.0 gstfft-1.0)
+FIND_GSTREAMER_COMPONENT_PKGCONFIG(GSTREAMER_GL gstreamer-gl-1.0>=1.8.0 gstgl-1.0)
+FIND_GSTREAMER_COMPONENT_PKGCONFIG(GSTREAMER_MPEGTS gstreamer-mpegts-1.0>=1.4.0 gstmpegts-1.0)
+FIND_GSTREAMER_COMPONENT_PKGCONFIG(GSTREAMER_PBUTILS gstreamer-pbutils-1.0 gstpbutils-1.0)
+FIND_GSTREAMER_COMPONENT_PKGCONFIG(GSTREAMER_TAG gstreamer-tag-1.0 gsttag-1.0)
+FIND_GSTREAMER_COMPONENT_PKGCONFIG(GSTREAMER_VIDEO gstreamer-video-1.0 gstvideo-1.0)
 
 # ------------------------------------------------
 # 3. Process the COMPONENTS passed to FIND_PACKAGE

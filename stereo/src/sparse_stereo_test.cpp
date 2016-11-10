@@ -13,7 +13,7 @@
 #include <opencv2/opencv.hpp>
 #if OPENCV_3_1
   //#include <opencv2/xfeatures2d.hpp>
-  #include <opencv2/ximgproc.hpp>
+//  #include <opencv2/ximgproc.hpp>
   #include <opencv2/cudastereo.hpp>
 #endif
 #include <opencv2/calib3d.hpp>

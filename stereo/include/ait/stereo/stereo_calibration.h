@@ -12,7 +12,7 @@
 #include <opencv2/opencv.hpp>
 #include <Eigen/Dense>
 #if WITH_ZED
-	#include <zed\Camera.hpp>
+	#include <zed/Camera.hpp>
 #endif
 
 namespace ait

@@ -1,3 +1,11 @@
+//==================================================
+// EncodingGstreamerPipeline.h
+//
+//  Copyright (c) 2016 Benjamin Hepp.
+//  Author: Benjamin Hepp
+//  Created on: Nov 7, 2016
+//==================================================
+
 #pragma once
 
 #include "GstreamerPipeline.h"
@@ -7,13 +15,36 @@
 template <typename TUserData>
 class EncodingGstreamerPipeline : public GstreamerPipeline<TUserData>
 {
+  using Base = GstreamerPipeline<TUserData>;
+
 public:
 	EncodingGstreamerPipeline()
-		: frame_counter_(0), negotiated_(false)
-	{
+		: frame_counter_(0), negotiated_(false) {
+		pre_process_branch_str_ = "videoconvert";
+		display_branch_str_ = "queue ! autovideosink";
+		//display_branch_str_ = "queue ! videoconvert ! video/x-raw, format=RGBA ! videoconvert ! autovideosink";
+		//encoder_branch_str_ = "identity";
+		encoder_branch_str_ = "x264enc bitrate=4096 pass=qual quantizer=20 tune=zerolatency speed-preset=medium threads=4 key-int-max=10";
+//		encoder_branch_str_ = "omxh264enc low-latency=0 control-rate=1 bitrate=1000000";
+		//encoder_branch_str_ = "openh264enc bitrate=2048";
+		//encoder_branch_str_ = "vp8enc target-bitrate=1024";
+		//encoder_branch_str_ = "queue ! videoconvert ! video/x-raw, format=RGBA ! pngenc";
+		//encoder_branch_str_ = "queue ! jpegenc";
 	}
 
-	void pushNewFrame(const cv::Mat& frame_in, const TUserData& user_data)
+	void setPreProcessBranchStr(const std::string& pre_process_branch_str) {
+		pre_process_branch_str_ = pre_process_branch_str;
+	}
+
+	void setEncoderBranchStr(const std::string& encoder_branch_str) {
+		encoder_branch_str_ = encoder_branch_str;
+	}
+
+	void setDisplayBranchStr(const std::string& display_branch_str) {
+		display_branch_str_ = display_branch_str;
+	}
+
+	void pushInput(const cv::Mat& frame_in, const TUserData& user_data)
 	{
 		cv::Mat frame;
 		if (frame_in.isContinuous()) {
@@ -62,7 +93,7 @@ public:
 				"bpp", G_TYPE_INT, 8 * frame.elemSize1(),
 				//"framerate", GST_TYPE_FRACTION, 10, 1,
 				nullptr);
-			gst_app_src_set_caps(GST_APP_SRC(getNativeAppSrc()), caps);
+			gst_app_src_set_caps(GST_APP_SRC(Base::getNativeAppSrc()), caps);
 			negotiated_ = true;
 			//start_time_ = std::chrono::system_clock::now();
 		}
@@ -95,7 +126,7 @@ public:
 		//std::cout << "duration" << (GST_BUFFER_DURATION(buffer) / ((double)GST_SECOND)) << std::endl;
 
 		// Overwrite timing information to make sure that pipeline runs through
-		GstClock* clock = gst_pipeline_get_clock(getNativePipeline());
+		GstClock* clock = gst_pipeline_get_clock(Base::getNativePipeline());
 		GstClockTime time_now = gst_clock_get_time(clock);
 		static GstClockTime time_previous = gst_clock_get_time(clock);
 
@@ -120,7 +151,7 @@ public:
 		//	std::cerr << "pushNewFrame() failed: push-buffer signal returned error" << std::endl;
 		//}
 
-		if (!pushBufferToAppsrc(buffer, user_data)) {
+		if (!Base::pushInput(buffer, user_data)) {
 			std::cerr << "pushNewFrame() failed: push-buffer signal returned error" << std::endl;
 		}
 	}
@@ -139,22 +170,12 @@ protected:
 
 		GstElement* sink = GST_ELEMENT(appsink);
 
-		std::string preprocess_branch_str = "videoconvert";
-		//std::string display_branch_str = "queue ! autovideosink";
-		std::string display_branch_str = "queue ! videoconvert ! video/x-raw, format=RGBA ! videoconvert ! autovideosink";
-		//std::string encoder_branch_str = "queue
-		//std::string encoder_branch_str = "identity";
-		std::string encoder_branch_str = "x264enc bitrate=4096 pass=qual quantizer=20 tune=zerolatency speed-preset=medium threads=4 key-int-max=10";
-		//std::string encoder_branch_str = "openh264enc bitrate=2048";
-		//std::string encoder_branch_str = "vp8enc target-bitrate=1024";
-		//std::string encoder_branch_str = "queue ! videoconvert ! video/x-raw, format=RGBA ! pngenc";
-		//std::string encoder_branch_str = "queue ! jpegenc";
-
 		// TODO
 		//g_signal_connect(source, "need-data", G_CALLBACK(appsrcNeedDataCallback), &data);
 
 		// Create preprocessing bin
-		GstElement *preprocess_bin = gst_parse_bin_from_description(preprocess_branch_str.c_str(), true, nullptr);
+		std::cout << "Preprocess branch: " << pre_process_branch_str_ << std::endl;
+		GstElement *preprocess_bin = gst_parse_bin_from_description(pre_process_branch_str_.c_str(), true, nullptr);
 		if (preprocess_bin == nullptr) {
 			throw std::runtime_error("Unable to create preprocess elements");
 		}
@@ -166,13 +187,15 @@ protected:
 		}
 
 		// Create display branch
-		GstElement *display_bin = gst_parse_bin_from_description(display_branch_str.c_str(), true, nullptr);
+    std::cout << "Display branch: " << display_branch_str_ << std::endl;
+		GstElement *display_bin = gst_parse_bin_from_description(display_branch_str_.c_str(), true, nullptr);
 		if (display_bin == nullptr) {
 			throw std::runtime_error("Unable to create display elements");
 		}
 
 		// Create streaming branch
-		GstElement *encoder_bin = gst_parse_bin_from_description(encoder_branch_str.c_str(), true, nullptr);
+    std::cout << "Encoder branch: " << encoder_branch_str_ << std::endl;
+		GstElement *encoder_bin = gst_parse_bin_from_description(encoder_branch_str_.c_str(), true, nullptr);
 		if (encoder_bin == nullptr) {
 			throw std::runtime_error("Unable to create streaming elements");
 		}
@@ -248,4 +271,8 @@ private:
 	guint64 frame_counter_;
 	bool negotiated_;
 	//std::chrono::time_point<std::chrono::system_clock> start_time_;
+
+	std::string encoder_branch_str_;
+	std::string pre_process_branch_str_;
+	std::string display_branch_str_;
 };

@@ -11,7 +11,7 @@
 #include <vector>
 #include <opencv2/opencv.hpp>
 #if OPENCV_3
-  #include <opencv2/xfeatures2d/cuda.hpp>
+//  #include <opencv2/xfeatures2d/cuda.hpp>
 #else
   #include <opencv2/gpu/gpu.hpp>
   #include <opencv2/gpu/gpumat.hpp>
@@ -19,7 +19,6 @@
 #include <ait/stereo/sparse_stereo_matcher.h>
 #include <ait/stereo/dense_stereo_matcher.h>
 #include <ait/utilities.h>
-#include <ait/mLibInclude.h>
 
 namespace ait
 {

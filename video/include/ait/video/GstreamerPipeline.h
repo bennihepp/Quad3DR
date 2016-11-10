@@ -1,3 +1,11 @@
+//==================================================
+// GstreamerPipeline.h
+//
+//  Copyright (c) 2016 Benjamin Hepp.
+//  Author: Benjamin Hepp
+//  Created on: Nov 7, 2016
+//==================================================
+
 #pragma once
 
 #include <iostream>
@@ -5,13 +13,19 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <string>
 #include <condition_variable>
 
-#include <gst\gst.h>
-#include <gst\app\gstappsink.h>
-#include <gst\app\gstappsrc.h>
+#include <gst/gst.h>
+#include <gst/app/gstappsink.h>
+#include <gst/app/gstappsrc.h>
 
-#define ANNOTATE_EXC(type, s) type ## (std::string(FUNCTION_LINE_STRING).append(": ").append(s))
+#include <ait/common.h>
+
+#include "GstMetaCorrespondence.h"
+
+#define FUNCTION_LINE_STRING (std::string(__FILE__) + " [" + std::string(__FUNCTION__) + ":" + std::to_string(__LINE__) + "]")
+#define ANNOTATE_EXC(type, s) type (std::string(FUNCTION_LINE_STRING).append(": ").append(s))
 
 class RateCounter
 {
@@ -301,14 +315,6 @@ protected:
 	}
 };
 
-struct GstreamerBufferInfo {
-	GstClockTime pts;
-	GstClockTime dts;
-	GstClockTime duration;
-	guint64 offset;
-	guint64 offset_end;
-};
-
 template <typename T>
 class SPSCFixedQueue
 {
@@ -327,6 +333,10 @@ public:
 
 	size_t size() const {
 		return queue_.size();
+	}
+
+	void clear() {
+		return queue_.clear();
 	}
 
 	template <typename TMutex>
@@ -386,31 +396,67 @@ template <typename TUserData>
 class GstreamerPipeline;
 
 template <typename TUserData>
-class AppSinkQueue : public SPSCFixedQueue<std::tuple<std::vector<uint8_t>, GstreamerBufferInfo, TUserData>>
+class AppSrcSinkQueue : public SPSCFixedQueue<std::tuple<GstBufferWrapper, TUserData>>
 {
+	using ElementType = std::tuple<GstBufferWrapper, TUserData>;
+	using Base = SPSCFixedQueue<ElementType>;
+
 public:
 	const unsigned int FRAME_DROP_REPORT_RATE = 10;
+	const unsigned int CORRESPONDENCE_FAIL_REPORT_RATE = 5;
+	const size_t MAX_USER_DATA_QUEUE_SIZE = 100;
 
-	AppSinkQueue(unsigned int max_queue_size = 5, unsigned int user_data_queu_size = 3)
-		: SPSCFixedQueue(max_queue_size), user_data_queu_size_(user_data_queu_size), first_frame_removed_(false), src_overflow_counter_(0), sink_overflow_counter_(0) {
+	class Error : public std::runtime_error
+	{
+	public:
+		Error(const std::string &str)
+			: std::runtime_error(str) {
+		}
+	};
+
+	AppSrcSinkQueue(unsigned int max_queue_size = 5, unsigned int user_data_queu_size = 3)
+		: Base(max_queue_size), output_byte_counter_(0), input_byte_counter_(0),
+		src_overflow_counter_(0), sink_overflow_counter_(0), correspondence_fail_counter_(0) {
 	}
 
-	bool pushData(GstAppSrc* appsrc, GstBufferWrapper buffer, const GstreamerBufferInfo& buffer_info, const TUserData& user_data) {
+	bool pushData(GstAppSrc* appsrc, GstBufferWrapper buffer, const TUserData& user_data) {
 		gst_buffer_ref(buffer.get());
-		MLIB_ASSERT(GST_IS_BUFFER(buffer.get()));
+		AIT_ASSERT(GST_IS_BUFFER(buffer.get()));
+		//        std::cout << "Pushing buffer into appsrc" << std::endl;
 		GstFlowReturn ret = gst_app_src_push_buffer(appsrc, buffer.get());
+		//    std::cout << "Done" << std::endl;
 		if (ret == GST_FLOW_OK) {
-			std::lock_guard<std::mutex> lock(getMutex());
-			if (user_data_queue_.size() >= user_data_queu_size_) {
+			std::lock_guard<std::mutex> lock(user_data_queue_mutex_);
+			if (user_data_queue_.size() >= MAX_USER_DATA_QUEUE_SIZE) {
 				// This is kind of hacky to ensure the user data queue is not blocking new frames
 				user_data_queue_.pop_front();
 				++src_overflow_counter_;
 				if (src_overflow_counter_ >= FRAME_DROP_REPORT_RATE) {
-					std::cout << "WARNING: Appsrc user data queue is full. Dropped " << FRAME_DROP_REPORT_RATE << " user data entries" << std::endl;
+					std::cout << "WARNING: AppSrcSinkQueue user data queue is full. Dropped " << FRAME_DROP_REPORT_RATE << " user data entries" << std::endl;
 					src_overflow_counter_ = 0;
 				}
 			}
-			user_data_queue_.push_back(std::make_pair(buffer_info, user_data));
+
+			GstreamerBufferInfo buffer_info;
+			buffer_info.pts = GST_BUFFER_PTS(buffer.get());
+			buffer_info.dts = GST_BUFFER_DTS(buffer.get());
+			buffer_info.duration = GST_BUFFER_DURATION(buffer.get());
+			buffer_info.offset = GST_BUFFER_OFFSET(buffer.get());
+			buffer_info.offset_end = GST_BUFFER_OFFSET_END(buffer.get());
+
+			user_data_queue_.push_back(std::make_tuple(buffer_info, user_data));
+
+			// Compute input bandwidth
+			input_frame_rate_counter_.count();
+			double rate;
+			unsigned int frame_count = input_frame_rate_counter_.getCount();
+			input_byte_counter_ += buffer.getSize();
+			if (input_frame_rate_counter_.reportRate(rate)) {
+				double bandwidth = rate * input_byte_counter_ / static_cast<double>(frame_count) / 1024.0;
+				input_byte_counter_ = 0;
+				std::cout << "Pushing Gstreamer buffers into pipeline with " << rate << " Hz. Bandwidth: " << bandwidth << "kB/s" << std::endl;
+			}
+
 			return true;
 		}
 		else {
@@ -435,42 +481,79 @@ private:
 		}
 		else {
 			GstSampleWrapper sample(gst_sample);
+			// Get buffer correspondence
+			GstBufferWrapper buffer = sample.getBuffer();
+#if !SIMULATE_ZED
+			int correspondence_id;
+			if (!gst_buffer_correspondence_meta_has(buffer.get())) {
+				correspondence_id = -1;
+			}
+			else {
+				correspondence_id = gst_buffer_correspondence_meta_get_id(buffer.get());
+			}
+			if (correspondence_id == -1) {
+				++correspondence_fail_counter_;
+				if (correspondence_fail_counter_ >= CORRESPONDENCE_FAIL_REPORT_RATE) {
+					std::cout << "WARNING: Could not establish correspondence of frame and user data" << std::endl;
+					correspondence_fail_counter_ = 0;
+				}
+				return GST_FLOW_OK;
+			}
+#endif
+			//std::cout << "correspondence_id=" << correspondence_id << std::endl;
 			// Copy buffer
-			std::vector<uint8_t> buffer_data;
 			{
-				GstBufferWrapper buffer = sample.getBuffer();
-				buffer_data.resize(buffer.getSize());
-				std::copy(buffer.getData(), buffer.getData() + buffer.getSize(), buffer_data.begin());
+				GstBuffer* gst_buffer_copy = gst_buffer_copy_deep(buffer.get());
+				if (gst_buffer_copy == nullptr) {
+					throw ANNOTATE_EXC(Error, "Unable to copy Gstreamer buffer");
+				}
+				GstBufferWrapper buffer_copy(gst_buffer_copy);
+				std::swap(buffer, buffer_copy);
 				// Delete sample as fast as possible so that appsink has free buffers available
 				GstSampleWrapper deleted_sample(std::move(sample));
 			}
-			// TODO: Check if this can be guaranteed to work
-			//if (!first_frame_removed_) {
-			//	// The first frame will usually be lost in the Gstreamer pipeline. Here we delete the corresponding info and user data
-			//	if (user_data_queue_.size() > 1) {
-			//		user_data_queue_.pop_front();
-			//		first_frame_removed_ = true;
-			//	}
-			//	else {
-			//		std::cerr << "WARNING: No lost frame detected in Gstreamer pipeline" << std::endl;
-			//	}
-			//}
-			if (user_data_queue_.size() > 10) {
-				// Warn if we cannot ensure correspondence of frames and user data
-				std::cerr << "WARNING: More userdata available than frames (" << user_data_queue_.size() << "). Either frames are coming in too fast or frames get dropped in the pipeline" << std::endl;
+
+			// Compute output bandwidth
+			output_frame_rate_counter_.count();
+			double rate;
+			unsigned int frame_count = output_frame_rate_counter_.getCount();
+			output_byte_counter_ += buffer.getSize();
+			if (output_frame_rate_counter_.reportRate(rate)) {
+				double bandwidth = rate * output_byte_counter_ / static_cast<double>(frame_count) / 1024.0;
+				output_byte_counter_ = 0;
+				std::cout << "Outputting Gstreamer buffers with " << rate << " Hz. Bandwidth: " << bandwidth << "kB/s" << std::endl;
 			}
-			std::pair<GstreamerBufferInfo, TUserData> pair(std::move(user_data_queue_.front()));
-			// This is kind of hacky to ensure the user data queue is never empty
-			if (user_data_queue_.size() > 1) {
-				user_data_queue_.pop_front();
+
+			std::tuple<GstreamerBufferInfo, TUserData> tuple;
+#if !SIMULATE_ZED
+			{
+				if (user_data_queue_.empty()) {
+					throw ANNOTATE_EXC(Error, "Received output frame but user data queue is empty");
+					//std::cerr << "ERROR: Received output frame but user data queue is empty." << std::endl;
+				}
+				std::lock_guard<std::mutex> lock(user_data_queue_mutex_);
+				do {
+					tuple = std::move(user_data_queue_.front());
+					user_data_queue_.pop_front();
+					if (correspondence_id < std::get<0>(tuple).offset) {
+						throw ANNOTATE_EXC(Error, "Correspondence id is smaller than first element in user data queue");
+					}
+				} while (correspondence_id > std::get<0>(tuple).offset);
 			}
-			const GstreamerBufferInfo& buffer_info = pair.first;
-			const TUserData& user_data = pair.second;
-			auto sample_tuple = std::make_tuple(std::move(buffer_data), buffer_info, user_data);
-			if (!pushBack(sample_tuple)) {
+#endif
+			GstreamerBufferInfo& buffer_info = std::get<0>(tuple);
+			const TUserData& user_data = std::get<1>(tuple);
+			GST_BUFFER_PTS(buffer.get()) = buffer_info.pts;
+			GST_BUFFER_DTS(buffer.get()) = buffer_info.dts;
+			GST_BUFFER_DURATION(buffer.get()) = buffer_info.duration;
+			GST_BUFFER_OFFSET(buffer.get()) = buffer_info.offset;
+			GST_BUFFER_OFFSET_END(buffer.get()) = buffer_info.offset_end;
+
+			ElementType output_tuple = std::make_tuple(std::move(buffer), user_data);
+			if (!Base::pushBack(output_tuple)) {
 				++sink_overflow_counter_;
 				if (sink_overflow_counter_ >= FRAME_DROP_REPORT_RATE) {
-					std::cout << "WARNING: Appsink sample queue is full. Dropped " << FRAME_DROP_REPORT_RATE << " frames" << std::endl;
+					std::cout << "WARNING: Appsrcsink output queue is full. Dropped " << FRAME_DROP_REPORT_RATE << " frames" << std::endl;
 					sink_overflow_counter_ = 0;
 				}
 			}
@@ -479,11 +562,17 @@ private:
 		return GST_FLOW_OK;
 	}
 
-	std::deque<std::pair<GstreamerBufferInfo, TUserData>> user_data_queue_;
-	unsigned int user_data_queu_size_;
-	bool first_frame_removed_;
+	std::deque<std::tuple<GstreamerBufferInfo, TUserData>> user_data_queue_;
+	std::mutex user_data_queue_mutex_;
+
+	RateCounter output_frame_rate_counter_;
+	size_t output_byte_counter_;
+	RateCounter input_frame_rate_counter_;
+	size_t input_byte_counter_;
+
 	unsigned int src_overflow_counter_;
 	unsigned int sink_overflow_counter_;
+	unsigned int correspondence_fail_counter_;
 };
 
 template <typename TUserData>
@@ -494,15 +583,21 @@ public:
 	const unsigned int WATCHDOG_RESET_COUNT = 10;
 	const std::chrono::seconds WATCHDOG_TIMEOUT = std::chrono::seconds(2);
 
+	using OutputTupleType = std::tuple<GstBufferWrapper, TUserData>;
+
 	GstreamerPipeline()
-		: pipeline_(nullptr), pipeline_state(GST_STATE_NULL) {
+		: pipeline_(nullptr), pipeline_state(GST_STATE_NULL),
+		appsink_(nullptr), appsrc_(nullptr),
+		watchdog_counter_(0), frame_counter_(0) {
 	}
 
 	GstreamerPipeline(const GstreamerPipeline&) = delete;
 	void operator=(const GstreamerPipeline&) = delete;
 
-	~GstreamerPipeline() {
-		stop();
+	virtual ~GstreamerPipeline() {
+		if (pipeline_ != nullptr) {
+			stop();
+		}
 		gst_object_unref(pipeline_);
 	}
 
@@ -519,7 +614,7 @@ public:
 		g_object_set(appsrc_, "format", GST_FORMAT_BYTES, nullptr);
 		//g_object_set(appsrc_, "format", GST_FORMAT_BUFFERS, nullptr);
 		g_object_set(appsrc_, "block", TRUE, nullptr);
-		g_object_set(appsrc_, "max-bytes", 200000, nullptr);
+		g_object_set(appsrc_, "max-bytes", 5000000, nullptr);
 
 		appsink_ = GST_APP_SINK(gst_element_factory_make("appsink", "sink"));
 		if (appsink_ == nullptr) {
@@ -529,10 +624,12 @@ public:
 		g_object_set(appsink_, "sync", FALSE, nullptr);
 		//g_object_set(appsink_, "drop", TRUE, nullptr);
 		//g_object_set(appsink_, "max-buffers", 5, nullptr);
-		// Connect new sample signal to AppSinkQueue
+		// Connect new sample signal to AppSrcSinkQueue
 		g_signal_connect(appsink_, "new-sample", G_CALLBACK(GstreamerPipeline<TUserData>::newAppsinkSampleCallbackStatic), this);
 
 		pipeline_ = createPipeline(appsrc_, appsink_);
+
+		std::cout << "Gstreamer pipeline initialized successfully" << std::endl;
 	}
 
 	GstPipeline* getNativePipeline() {
@@ -550,42 +647,72 @@ public:
 		return appsink_;
 	}
 
-	bool hasSamples() const {
-		ensureInitialized();
-		GstClockTime timeout = 0;
-		GstSample* gst_sample = gst_app_sink_try_pull_sample(appsink_, timeout);
-		if (gst_sample == nullptr) {
-			if (gst_app_sink_is_eos(appsink_) == TRUE) {
-			}
-			return false;
-		}
-		return true;
-	}
+	//    bool hasSamples() const {
+	//        ensureInitialized();
+	//        GstClockTime timeout = 0;
+	//        GstSample* gst_sample = gst_app_sink_try_pull_sample(appsink_, timeout);
+	//        if (gst_sample == nullptr) {
+	//            if (gst_app_sink_is_eos(appsink_) == TRUE) {
+	//            }
+	//            return false;
+	//        }
+	//        return true;
+	//    }
 
-	AppSinkQueue<TUserData>& getAppSinkQueue() {
-		ensureInitialized();
-		return appsink_queue_;
-	}
+	//AppSrcSinkQueue<TUserData>& getAppSrcSinkQueue() {
+	//    ensureInitialized();
+	//    return appsrcsink_queue_;
+	//}
 
-	GstCapsWrapper getAppSinkCaps() {
+	GstCapsWrapper getOutputCaps() {
 		GstPad *appsink_sink_pad = gst_element_get_static_pad(GST_ELEMENT(appsink_), "sink");
 		if (appsink_sink_pad == nullptr) {
 			throw std::runtime_error("Unable to get appsink sink pad");
 		}
 		GstCaps* gst_caps = gst_pad_get_current_caps(appsink_sink_pad);
-		GstCapsWrapper appsink_caps(gst_caps);
-		return appsink_caps;
+		GstCapsWrapper output_caps(gst_caps);
+		return output_caps;
 	}
 
-	bool setAppsrcCaps(const GstCapsWrapper& caps) {
+	bool setInputCaps(const GstCapsWrapper& caps) {
 		ensureInitialized();
 		gst_app_src_set_caps(appsrc_, caps.get());
 		return true;
 	}
 
-	bool pushBufferToAppsrc(GstBufferWrapper& buffer, const TUserData& user_data) {
+	bool hasOutput() const {
+		return !appsrcsink_queue_.empty();
+	}
+
+	size_t getAvailableOutputSize() const {
+		return appsrcsink_queue_.size();
+	}
+
+	template <typename TMutex>
+	OutputTupleType popOutput(const std::unique_lock<TMutex>& lock) {
+		return appsrcsink_queue_.popFront(lock);
+	}
+
+	template <typename TMutex>
+	OutputTupleType popOutput(const std::lock_guard<TMutex>& lock) {
+		return appsrcsink_queue_.popFront(lock);
+	}
+
+	OutputTupleType popOutput() {
+		return appsrcsink_queue_.popFront();
+	}
+
+	std::mutex& getMutex() {
+		return appsrcsink_queue_.getMutex();
+	}
+
+	std::condition_variable& getOutputCondition() {
+		return appsrcsink_queue_.getQueueFilledCondition();
+	}
+
+	bool pushInput(GstBufferWrapper& buffer, const TUserData& user_data) {
 		ensureInitialized();
-		MLIB_ASSERT(GST_IS_BUFFER(buffer.get()));
+		AIT_ASSERT(GST_IS_BUFFER(buffer.get()));
 
 		clock::time_point now = clock::now();
 		if (now - last_appsink_sample_time_ >= WATCHDOG_TIMEOUT) {
@@ -601,17 +728,9 @@ public:
 			watchdog_counter_ = 0;
 		}
 
-		GstreamerBufferInfo buffer_info;
-		buffer_info.pts = GST_BUFFER_PTS(buffer.get());
-		buffer_info.dts = GST_BUFFER_DTS(buffer.get());
-		buffer_info.duration = GST_BUFFER_DURATION(buffer.get());
-		buffer_info.offset = GST_BUFFER_OFFSET(buffer.get());
-		buffer_info.offset_end = GST_BUFFER_OFFSET_END(buffer.get());
-
 		// TODO: get from appsrc caps
 		double frame_period = 1 / 10.;
 		// Overwrite timing information to make sure that pipeline runs through
-		static guint64 frame_counter = 0;
 		GstClock* clock = gst_pipeline_get_clock(getNativePipeline());
 		GstClockTime time_now = gst_clock_get_time(clock);
 		GstClockTime gst_frame_period = static_cast<guint64>(GST_SECOND * frame_period);
@@ -625,7 +744,7 @@ public:
 		}
 		GST_BUFFER_DTS(buffer.get()) = GST_CLOCK_TIME_NONE;
 		GST_BUFFER_DURATION(buffer.get()) = static_cast<guint64>(GST_SECOND * frame_period);
-		GST_BUFFER_OFFSET(buffer.get()) = frame_counter;
+		GST_BUFFER_OFFSET(buffer.get()) = frame_counter_;
 		GST_BUFFER_OFFSET_END(buffer.get()) = GST_BUFFER_OFFSET_NONE;
 
 		// TODO: get from appsrc caps
@@ -637,9 +756,6 @@ public:
 		//GST_BUFFER_OFFSET(buffer.get()) = frame_counter;
 		//GST_BUFFER_OFFSET_END(buffer.get()) = GST_BUFFER_OFFSET_NONE;
 
-		++frame_counter;
-		time_previous = time_now;
-
 		// Disable timing information in buffer
 		//static unsigned int buffer_counter = 0;
 		//GST_BUFFER_PTS(buffer.get()) = GST_CLOCK_TIME_NONE;
@@ -649,11 +765,17 @@ public:
 		//GST_BUFFER_OFFSET_END(buffer.get()) = GST_BUFFER_OFFSET_NONE;
 		//++buffer_counter;
 
-		return appsink_queue_.pushData(appsrc_, std::move(buffer), buffer_info, user_data);
+		attachMetadataToBuffer(buffer, static_cast<int>(GST_BUFFER_OFFSET(buffer.get())));
+
+		++frame_counter_;
+		time_previous = time_now;
+
+		return appsrcsink_queue_.pushData(appsrc_, std::move(buffer), user_data);
 	}
 
 	void start() {
 		ensureInitialized();
+		appsrcsink_queue_.clear();
 		if (message_thread_.joinable()) {
 			stop();
 		}
@@ -695,6 +817,10 @@ public:
 protected:
 	virtual GstPipeline* createPipeline(GstAppSrc* appsrc, GstAppSink* appsink) const = 0;
 
+	virtual void attachMetadataToBuffer(GstBufferWrapper& buffer, int id) {
+		gst_buffer_add_correspondence_meta(buffer.get(), id);
+	};
+
 	virtual void gstreamerLoop()
 	{
 		// Wait until error or EOS
@@ -724,9 +850,9 @@ protected:
 					gst_message_parse_state_changed(msg, &old_state, &new_state, &pending_state);
 					if (GST_MESSAGE_SRC(msg) == GST_OBJECT(pipeline_)) {
 						//if (new_state == GST_STATE_PLAYING) {
-						//	//std::cout << "Resetting time" << std::endl;
-						//	//data.start_time = std::chrono::system_clock::now();
-						//	//data.timestamp = 0;
+						//    //std::cout << "Resetting time" << std::endl;
+						//    //data.start_time = std::chrono::system_clock::now();
+						//    //data.timestamp = 0;
 						//}
 						pipeline_state = new_state;
 						std::cout << "Pipeline state changed from " << gst_element_state_get_name(old_state)
@@ -759,19 +885,22 @@ private:
 	}
 
 	GstFlowReturn newAppsinkSampleCallback(GstAppSink* appsink) {
-		MLIB_ASSERT(appsink == appsink_);
+		AIT_ASSERT(appsink == appsink_);
 		last_appsink_sample_time_ = clock::now();
-		return appsink_queue_.newSampleCallback(appsink_);
+		return appsrcsink_queue_.newSampleCallback(appsink_);
 	}
 
 	GstPipeline* pipeline_;
 	GstState pipeline_state;
+
 	GstAppSrc* appsrc_;
 	GstAppSink* appsink_;
-	AppSinkQueue<TUserData> appsink_queue_;
-	using clock = std::chrono::system_clock;
+	AppSrcSinkQueue<TUserData> appsrcsink_queue_;
+
+	guint64 frame_counter_;
 	unsigned int watchdog_counter_;
 	std::chrono::time_point<clock> last_appsink_sample_time_;
+
 	std::atomic_bool terminate_;
 	std::thread message_thread_;
 	std::function<void(GstState, GstState, GstState)> state_change_callback_;
