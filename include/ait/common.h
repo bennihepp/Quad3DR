@@ -9,6 +9,8 @@
 #pragma once
 
 #include <stdexcept>
+#include <chrono>
+#include <thread>
 
 #ifndef _MSC_VER
 #define NOEXCEPT noexcept
@@ -89,5 +91,83 @@ public:
 void warningFunction(const std::string& description);
 void errorFunction(const std::string& description);
 void assertFunction(bool predicate, const std::string& description);
+
+
+class RateCounter
+{
+public:
+    using clock = std::chrono::high_resolution_clock;
+
+    RateCounter(unsigned int report_count = 10)
+        : report_count_(report_count) {
+        reset();
+    }
+
+    void reset() {
+        counter_ = 0;
+        start_time_ = clock::now();
+    }
+
+    void count() {
+        ++counter_;
+    }
+
+    unsigned int getCount() const {
+        return counter_;
+    }
+
+    double getRate() const {
+        auto cur_time = clock::now();
+        auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(cur_time - start_time_);
+        double rate = counter_ / (0.001 * duration_ms.count());
+        return rate;
+    }
+
+    bool reportRate(double& rate) {
+        if (counter_ >= report_count_) {
+            auto cur_time = clock::now();
+            auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(cur_time - start_time_);
+            rate = counter_ / (0.001 * duration_ms.count());
+            start_time_ = cur_time;
+            counter_ = 0;
+            return true;
+        }
+        else {
+            return false;
+        }
+    }
+
+private:
+    unsigned int counter_;
+    unsigned int report_count_;
+    std::chrono::time_point<clock> start_time_;
+};
+
+class PaceMaker
+{
+public:
+    using clock = std::chrono::high_resolution_clock;
+    PaceMaker(double desired_rate)
+        : desired_period_(1 / desired_rate), time_ahead_(0) {
+        last_time_ = clock::now();
+    }
+
+    void sleep() {
+        std::chrono::time_point<clock> now = clock::now();
+        std::chrono::duration<double> duration = now - last_time_;
+        time_ahead_ = time_ahead_ + desired_period_ - duration;
+        if (time_ahead_.count() < 0) {
+            time_ahead_ = std::chrono::duration<double>(0);
+        }
+        std::chrono::milliseconds sleep_time_ms(static_cast<int64_t>(1000 * time_ahead_.count()));
+        std::this_thread::sleep_for(sleep_time_ms);
+        last_time_ = now;
+    }
+
+private:
+    std::chrono::time_point<clock> last_time_;
+    std::chrono::duration<double> desired_period_;
+    std::chrono::duration<double> time_ahead_;
+};
 
 }

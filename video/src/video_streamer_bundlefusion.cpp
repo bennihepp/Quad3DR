@@ -8,10 +8,11 @@
 
 #define WITH_GSTREAMER 1
 #define SIMULATE_ZED 0
-#define DEBUG_IMAGE_COMPRESSION 1
+#define DEBUG_IMAGE_COMPRESSION 0
 
 #include <ait/BoostNetworkClientTCP.h>
 #include <ait/BoostNetworkClientUDP.h>
+
 #include <iostream>
 #include <stdexcept>
 #include <algorithm>
@@ -21,13 +22,18 @@
 #include <thread>
 #include <condition_variable>
 #include <mutex>
-#if WITH_GSTREAMER
-	#include <gst/gst.h>
-	#include <gst/app/gstappsrc.h>
-	#include <gst/app/gstappsink.h>
-#endif
+
 #include <boost/program_options.hpp>
+
 #include <opencv2/opencv.hpp>
+
+#if WITH_GSTREAMER
+    #include <gst/gst.h>
+    #include <gst/app/gstappsrc.h>
+    #include <gst/app/gstappsink.h>
+#endif
+
+#include <ait/common.h>
 #include <ait/math.h>
 #include <ait/video/video_source_zed.h>
 #include <ait/video/StereoNetworkSensorManager.h>
@@ -39,327 +45,334 @@ volatile bool g_abort;
 
 void signalHandler(int sig)
 {
-	g_abort = true;
-	std::cout << "Received CTRL-C. Aborting" << std::endl;
+    g_abort = true;
+    std::cout << "Received CTRL-C. Aborting" << std::endl;
 }
 
-class PaceMaker
+// Stereo frame retrieve function
+bool retrieve_frame(ait::video::VideoSourceZED* video_ptr, cv::Mat& left_frame, cv::Mat& right_frame, cv::Mat& depth_frame)
 {
-public:
-	using clock = std::chrono::high_resolution_clock;
-	PaceMaker(double desired_rate)
-		: desired_period_(1 / desired_rate), time_ahead_(0) {
-		last_time_ = clock::now();
-	}
-
-	void sleep() {
-		std::chrono::time_point<clock> now = clock::now();
-		std::chrono::duration<double> duration = now - last_time_;
-		time_ahead_ = time_ahead_ + desired_period_ - duration;
-		if (time_ahead_.count() < 0) {
-			time_ahead_ = std::chrono::duration<double>(0);
-		}
-		std::chrono::milliseconds sleep_time_ms(static_cast<int64_t>(1000 * time_ahead_.count()));
-		std::this_thread::sleep_for(sleep_time_ms);
-		last_time_ = now;
-	}
-
-private:
-	std::chrono::time_point<clock> last_time_;
-	std::chrono::duration<double> desired_period_;
-	std::chrono::duration<double> time_ahead_;
+//  cv::Size display_size(data->video_ptr->getWidth(), data->video_ptr->getHeight());
+//  cv::Mat left_grabbed_frame(display_size, CV_8UC4);
+//  cv::Mat right_grabbed_frame(display_size, CV_8UC4);
+//  cv::Mat depth_grabbed_frame(display_size, CV_8UC4);
+    if (!video_ptr->grab()) {
+        throw std::runtime_error("Failed to grab next frame.");
+    }
+    // Retrieve stereo and depth frames
+    if (!video_ptr->retrieveLeft(&left_frame)) {
+        throw std::runtime_error("Failed to retrieve left frame");
+    }
+    if (!video_ptr->retrieveRight(&right_frame)) {
+        throw std::runtime_error("Failed to retrieve right frame");
+    }
+    if (!video_ptr->retrieveDepthFloat(&depth_frame)) {
+        throw std::runtime_error("Failed to retrieve depth frame");
+    }
+    // Make sure all frames have the same size and type
+    if (left_frame.rows != right_frame.rows || left_frame.rows != depth_frame.rows) {
+        throw std::runtime_error("Stereo and depth frames do not have the same height");
+    }
+    if (left_frame.cols != right_frame.cols || left_frame.cols != depth_frame.cols) {
+        throw std::runtime_error("Stereo and depth frames do not have the same width");
+    }
+    if (left_frame.type() != right_frame.type()) {
+        throw std::runtime_error("Stereo frames do not have the same type");
+    }
+    if (depth_frame.type() != CV_32F) {
+        throw std::runtime_error("Depth frame does not have single-precision floating point type");
+    }
+    return true;
 };
+
 
 StereoCalibration convertStereoCalibration(const ait::stereo::StereoCameraCalibration& stereo_calibration)
 {
-	StereoCalibration stereo_sensor_calibration;
-	// Image widths and heights
-	stereo_sensor_calibration.color_image_width_left = stereo_calibration.image_size.width;
-	stereo_sensor_calibration.color_image_height_left = stereo_calibration.image_size.height;
-	stereo_sensor_calibration.color_image_width_right = stereo_calibration.image_size.width;
-	stereo_sensor_calibration.color_image_height_right = stereo_calibration.image_size.height;
-	stereo_sensor_calibration.depth_image_width = stereo_calibration.image_size.width;
-	stereo_sensor_calibration.depth_image_height = stereo_calibration.image_size.height;
-	// Left intrinsics and extrinsics
-	ait::Mat4f left_intrinsics = ait::Mat4f::Identity();
-	left_intrinsics.block<3, 3>(0, 0) = stereo_calibration.left.getCameraMatrixEigen().cast<float>();
-	ait::Mat4f  left_extrinsics;
-	left_extrinsics = stereo_calibration.getLeftExtrinsicsEigen().cast<float>();
-	stereo_sensor_calibration.calibration_color_left.setMatrices(left_intrinsics, left_extrinsics);
-	// Depth intrinsics and extrinsics
-	stereo_sensor_calibration.calibration_depth.setMatrices(left_intrinsics, left_extrinsics);
-	// Right intrinsics and extrinsics
-	ait::Mat4f right_intrinsics = ait::Mat4f::Identity();
-	right_intrinsics.block<3, 3>(0, 0) = stereo_calibration.right.getCameraMatrixEigen().cast<float>();
-	ait::Mat4f right_extrinsics;
-	right_extrinsics = stereo_calibration.getRightExtrinsicsEigen().cast<float>();
-	stereo_sensor_calibration.calibration_color_right.setMatrices(right_intrinsics, right_extrinsics);
+    StereoCalibration stereo_sensor_calibration;
+    // Image widths and heights
+    stereo_sensor_calibration.color_image_width_left = stereo_calibration.image_size.width;
+    stereo_sensor_calibration.color_image_height_left = stereo_calibration.image_size.height;
+    stereo_sensor_calibration.color_image_width_right = stereo_calibration.image_size.width;
+    stereo_sensor_calibration.color_image_height_right = stereo_calibration.image_size.height;
+    stereo_sensor_calibration.depth_image_width = stereo_calibration.image_size.width;
+    stereo_sensor_calibration.depth_image_height = stereo_calibration.image_size.height;
+    // Left intrinsics and extrinsics
+    ait::Mat4f left_intrinsics = ait::Mat4f::Identity();
+    left_intrinsics.block<3, 3>(0, 0) = stereo_calibration.left.getCameraMatrixEigen().cast<float>();
+    ait::Mat4f  left_extrinsics;
+    left_extrinsics = stereo_calibration.getLeftExtrinsicsEigen().cast<float>();
+    stereo_sensor_calibration.calibration_color_left.setMatrices(left_intrinsics, left_extrinsics);
+    // Depth intrinsics and extrinsics
+    stereo_sensor_calibration.calibration_depth.setMatrices(left_intrinsics, left_extrinsics);
+    // Right intrinsics and extrinsics
+    ait::Mat4f right_intrinsics = ait::Mat4f::Identity();
+    right_intrinsics.block<3, 3>(0, 0) = stereo_calibration.right.getCameraMatrixEigen().cast<float>();
+    ait::Mat4f right_extrinsics;
+    right_extrinsics = stereo_calibration.getRightExtrinsicsEigen().cast<float>();
+    stereo_sensor_calibration.calibration_color_right.setMatrices(right_intrinsics, right_extrinsics);
 
-	return stereo_sensor_calibration;
+    return stereo_sensor_calibration;
 }
 
-int main(int argc, char **argv)
+
+std::pair<bool, boost::program_options::variables_map> process_commandline(int argc, char** argv)
 {
-	namespace avo = ait::video;
-	namespace po = boost::program_options;
+    namespace po = boost::program_options;
 
-#if WITH_GSTREAMER
-	GError *gst_err;
-	gboolean gst_initialized = gst_init_check(&argc, &argv, &gst_err);
-	if (gst_initialized == FALSE) {
-		std::cerr << "ERROR: gst_init_check failed: " << gst_err->message << std::endl;
-		throw std::runtime_error("Unable to initialize gstreamer");
-	}
-#endif
+    po::options_description generic_options("Allowed options");
+    generic_options.add_options()
+        ("help", "Produce help message")
+        ("rotate", po::bool_switch()->default_value(false), "Rotate stereo images")
+        ("show", po::bool_switch()->default_value(false), "Render output")
+        ;
 
-	try
-	{
-		bool show = false;
-		bool rotate = false;
-		bool use_compression = false;
-		std::string remote_ip;
-		int remote_port;
+    po::options_description zed_options("ZED options");
+    zed_options.add_options()
+        ("svo-file", po::value<std::string>(), "SVO file to use")
+        ("mode", po::value<int>()->default_value(3), "ZED resolution mode")
+        ("fps", po::value<double>()->default_value(15), "Frame-rate to capture")
+        ("zed-params", po::value<std::string>(), "ZED parameter file")
+//        ("calib-file", po::value<std::string>()->default_value("camera_calibration_stereo.yml"), "Stereo calibration file.")
+        ;
 
-#if WITH_GSTREAMER
-		std::string preprocess_branch;
-    std::string encoder_branch;
-    std::string display_branch;
-#endif
+    po::options_description network_options("Network options");
+    network_options.add_options()
+        ("remote-ip", po::value<std::string>()->default_value("127.0.0.1"), "Remote IP address")
+        ("remote-port", po::value<int>()->default_value(1337), "Remote port")
+        ("compress", po::bool_switch()->default_value(false), "Use compression")
+        ;
 
-		po::options_description generic_options("Allowed options");
-		generic_options.add_options()
-			("help", "Produce help message")
-			("rotate", po::bool_switch(&rotate)->default_value(false), "Rotate stereo images")
-			("show", po::bool_switch(&show)->default_value(false), "Render output")
-			;
-
-		po::options_description zed_options("ZED options");
-		zed_options.add_options()
-			("svo-file", po::value<std::string>(), "SVO file to use")
-			("mode", po::value<int>()->default_value(3), "ZED resolution mode")
-			("fps", po::value<double>()->default_value(15), "Frame-rate to capture")
-			("zed-params", po::value<std::string>(), "ZED parameter file")
-			("calib-file", po::value<std::string>()->default_value("camera_calibration_stereo.yml"), "Stereo calibration file.")
-			;
-
-		po::options_description network_options("Network options");
-		network_options.add_options()
-			("remote-ip", po::value<std::string>(&remote_ip)->default_value("127.0.0.1"), "Remote IP address")
-			("remote-port", po::value<int>(&remote_port)->default_value(1337), "Remote port")
-			("compress", po::bool_switch(&use_compression)->default_value(false), "Use compression")
-			;
+    po::options_description frame_options("Frame options");
+    frame_options.add_options()
+        ("inverse-depth", po::bool_switch()->default_value(false), "Convert depth image to inverse-depth before encoding")
+        ("min-depth-trunc", po::value<float>()->default_value(1.0f), "Minimum depth before it is truncated to be invalid")
+        ("max-depth-trunc", po::value<float>()->default_value(12.0f), "Maximum depth before it is truncated to be invalid")
+        ;
 
 #if WITH_GSTREAMER
     po::options_description gstreamer_options("Gstreamer options");
     gstreamer_options.add_options()
-      ("preprocess-branch", po::value<std::string>(&preprocess_branch), "Preprocessing branch description")
-      ("encoder-branch", po::value<std::string>(&encoder_branch), "Encoder branch description")
-      ("display-branch", po::value<std::string>(&display_branch), "Display branch description")
+      ("preprocess-branch", po::value<std::string>(), "Preprocessing branch description")
+      ("encoder-branch", po::value<std::string>(), "Encoder branch description")
+      ("display-branch", po::value<std::string>(), "Display branch description")
       ;
 #endif
 
-		po::options_description options;
-		options.add(generic_options);
-		options.add(zed_options);
-		options.add(network_options);
+    po::options_description options;
+    options.add(generic_options);
+    options.add(zed_options);
+    options.add(network_options);
+    options.add(frame_options);
 #if WITH_GSTREAMER
     options.add(gstreamer_options);
 #endif
-		po::variables_map vm;
-		po::store(po::command_line_parser(argc, argv).options(options).run(), vm);
-		if (vm.count("help"))
-		{
-			std::cout << options << std::endl;
-			return 1;
-		}
+    po::variables_map vm;
+    po::store(po::command_line_parser(argc, argv).options(options).run(), vm);
+    if (vm.count("help"))
+    {
+        std::cout << options << std::endl;
+        return std::make_pair(false, vm);
+    }
 
-		po::notify(vm);
+    po::notify(vm);
 
-		// Initialize ZED camera
-		double camera_framerate;
-		std::function<bool (cv::Mat&, cv::Mat&, cv::Mat&)> retrieve_frame_fn;
-		avo::VideoSourceZED *video_ptr = new avo::VideoSourceZED();
-		std::cout << "Initializing ZED camera... " << std::flush;
+    return std::make_pair(true, vm);
+}
+
+#if WITH_GSTREAMER
+void initialize_gstramer(int argc, char** argv)
+{
+    GError *gst_err;
+    gboolean gst_initialized = gst_init_check(&argc, &argv, &gst_err);
+    if (gst_initialized == FALSE) {
+        std::cerr << "ERROR: gst_init_check failed: " << gst_err->message << std::endl;
+        throw std::runtime_error("Unable to initialize gstreamer");
+    }
+}
+#endif
+
+int main(int argc, char** argv)
+{
+    namespace avo = ait::video;
+    namespace po = boost::program_options;
+
+#if WITH_GSTREAMER
+    initialize_gstramer(argc, argv);
+#endif
+
+    try
+    {
+        // Handle command line
+        std::pair<bool, boost::program_options::variables_map> cmdline_result = process_commandline(argc, argv);
+        if (!cmdline_result.first) {
+            return 1;
+        }
+        boost::program_options::variables_map vm = std::move(cmdline_result.second);
+
+        bool show = vm["show"].as<bool>();
+        bool rotate = vm["rotate"].as<bool>();
+        bool use_compression = vm["compress"].as<bool>();
+        std::string remote_ip = vm["remote-ip"].as<std::string>();
+        int remote_port = vm["remote-port"].as<int>();
+        int zed_mode = vm["mode"].as<int>();
+        bool inverse_depth = vm["inverse-depth"].as<bool>();
+        float trunc_depth_min = vm["min-depth-trunc"].as<float>();
+        float trunc_depth_max = vm["max-depth-trunc"].as<float>();
+
+        // Initialize ZED camera
+        double camera_framerate;
+        avo::VideoSourceZED *video_ptr = new avo::VideoSourceZED();
+        std::cout << "Initializing ZED camera... " << std::flush;
 #if SIMULATE_ZED
-		camera_framerate = 15;
+        camera_framerate = 15;
 #else
-#if _DEBUG
-		video_ptr->open(static_cast<sl::zed::ZEDResolution_mode>(vm["mode"].as<int>()));
-#else
-		if (vm.count("svo-file")) {
-			video_ptr->open(vm["svo-file"].as<std::string>());
-		}
-		else {
-			video_ptr->open(static_cast<sl::zed::ZEDResolution_mode>(vm["mode"].as<int>()));
-		}
+// In debug compilation mode SVO files can't be opened
+    #if _DEBUG
+        video_ptr->open(static_cast<sl::zed::ZEDResolution_mode>(zed_mode));
+    #else
+        if (vm.count("svo-file")) {
+            video_ptr->open(vm["svo-file"].as<std::string>());
+        }
+        else {
+            video_ptr->open(static_cast<sl::zed::ZEDResolution_mode>(zed_mode));
+        }
+    #endif
+        std::cout << "Done." << std::endl;
+        if (vm.count("fps")) {
+            if (!video_ptr->setFPS(vm["fps"].as<double>())) {
+                std::cerr << "Setting camera FPS failed" << std::endl;
+            }
+        }
+        camera_framerate = video_ptr->getFPS();
+        std::cout << "Grabbing frames with " << camera_framerate << " Hz" << std::endl;
 #endif
-		std::cout << "Done." << std::endl;
-		if (vm.count("fps")) {
-			if (!video_ptr->setFPS(vm["fps"].as<double>())) {
-				std::cerr << "Setting camera FPS failed" << std::endl;
-			}
-		}
-		camera_framerate = video_ptr->getFPS();
-#endif
-		retrieve_frame_fn = [video_ptr](cv::Mat& left_frame, cv::Mat& right_frame, cv::Mat& depth_frame) -> bool
-		{
-		//  cv::Size display_size(data->video_ptr->getWidth(), data->video_ptr->getHeight());
-		//  cv::Mat left_grabbed_frame(display_size, CV_8UC4);
-		//  cv::Mat right_grabbed_frame(display_size, CV_8UC4);
-		//  cv::Mat depth_grabbed_frame(display_size, CV_8UC4);
-			if (!video_ptr->grab()) {
-				throw std::runtime_error("Failed to grab next frame.");
-			}
-			// Retrieve stereo and depth frames
-			if (!video_ptr->retrieveLeft(&left_frame)) {
-				throw std::runtime_error("Failed to retrieve left frame");
-			}
-			if (!video_ptr->retrieveRight(&right_frame)) {
-				throw std::runtime_error("Failed to retrieve right frame");
-			}
-			if (!video_ptr->retrieveDepthFloat(&depth_frame)) {
-				throw std::runtime_error("Failed to retrieve depth frame");
-			}
-			// Make sure all frames have the same size and type
-			if (left_frame.rows != right_frame.rows || left_frame.rows != depth_frame.rows) {
-				throw std::runtime_error("Stereo and depth frames do not have the same height");
-			}
-			if (left_frame.cols != right_frame.cols || left_frame.cols != depth_frame.cols) {
-				throw std::runtime_error("Stereo and depth frames do not have the same width");
-			}
-			if (left_frame.type() != right_frame.type()) {
-				throw std::runtime_error("Stereo frames do not have the same type");
-			}
-			if (depth_frame.type() != CV_32F) {
-				throw std::runtime_error("Depth frame does not have single-precision floating point type");
-			}
-			return true;
-		};
-		std::cout << "Grabbing frames with " << camera_framerate << " Hz" << std::endl;
 
+        // Register CTRL-C handler
+        std::signal(SIGINT, signalHandler);
 
-		std::atomic_bool terminate;
-		terminate = false;
-
-		std::signal(SIGINT, signalHandler);
-
-		using NetworkClient = ait::BoostNetworkClientTCP;
-		//using NetworkClient = ait::BoostNetworkClientUDP;
+        using NetworkClient = ait::BoostNetworkClientTCP;
+        //using NetworkClient = ait::BoostNetworkClientUDP;
 
 #if SIMULATE_ZED
-		StereoCalibration stereo_sensor_calibration;
-		memset(&stereo_sensor_calibration, 0, sizeof(stereo_sensor_calibration));
-		stereo_sensor_calibration.color_image_width_left = 640;
-		stereo_sensor_calibration.color_image_width_right = 640;
-		stereo_sensor_calibration.depth_image_width = 640;
-		stereo_sensor_calibration.color_image_height_left = 360;
-		stereo_sensor_calibration.color_image_height_right = 360;
-		stereo_sensor_calibration.depth_image_height = 360;
+        StereoCalibration stereo_sensor_calibration;
+        memset(&stereo_sensor_calibration, 0, sizeof(stereo_sensor_calibration));
+        stereo_sensor_calibration.color_image_width_left = 640;
+        stereo_sensor_calibration.color_image_width_right = 640;
+        stereo_sensor_calibration.depth_image_width = 640;
+        stereo_sensor_calibration.color_image_height_left = 360;
+        stereo_sensor_calibration.color_image_height_right = 360;
+        stereo_sensor_calibration.depth_image_height = 360;
 #else
-		//// Read stereo calibration
-		ait::stereo::StereoCameraCalibration stereo_calibration = video_ptr->getStereoCalibration();
-		StereoCalibration stereo_sensor_calibration = convertStereoCalibration(stereo_calibration);
+        //// Read stereo calibration
+        ait::stereo::StereoCameraCalibration stereo_calibration = video_ptr->getStereoCalibration();
+        StereoCalibration stereo_sensor_calibration = convertStereoCalibration(stereo_calibration);
 #endif
-		ait::video::StereoNetworkSensorManager<NetworkClient> manager(stereo_sensor_calibration, StereoClientType::CLIENT_ZED, remote_ip, remote_port);
-		if (!preprocess_branch.empty()) {
-		  manager.getPipeline().setPreProcessBranchStr(preprocess_branch);
-		}
-		if (!encoder_branch.empty()) {
-		  manager.getPipeline().setEncoderBranchStr(encoder_branch);
-		}
-		if (!display_branch.empty()) {
-		  manager.getPipeline().setDisplayBranchStr(display_branch);
-		}
-		manager.setUseCompression(use_compression);
-		manager.setDepthTruncation(1.0f, 12.0f);
-		manager.setInverseDepth(false);
-		manager.start();
 
-		double desired_framerate;
-		if (vm.count("fps")) {
-			desired_framerate = vm["fps"].as<double>();
-		}
-		else {
-			desired_framerate = camera_framerate;
-		}
+        // Create manager to handle pipeline and communication
+        ait::video::StereoNetworkSensorManager<NetworkClient> manager(stereo_sensor_calibration, StereoClientType::CLIENT_ZED, remote_ip, remote_port);
+        if (vm.count("preprocess-branch")) {
+          manager.getPipeline().setPreProcessBranchStr(vm["preprocess-branch"].as<std::string>());
+        }
+        if (vm.count("encoder-branch")) {
+          manager.getPipeline().setEncoderBranchStr(vm["encoder-branch"].as<std::string>());
+        }
+        if (vm.count("display-branch")) {
+          manager.getPipeline().setDisplayBranchStr(vm["display-branch"].as<std::string>());
+        }
+        manager.setUseCompression(use_compression);
+        manager.setDepthTruncation(trunc_depth_min, trunc_depth_max);
+        manager.setInverseDepth(inverse_depth);
+        manager.start();
 
-		std::chrono::seconds wait_for_playing_timeout(3);
-		cv::Mat left_frame, right_frame, depth_frame;
-		auto start_time = std::chrono::high_resolution_clock::now();
-		RateCounter frame_rate_counter;
-		PaceMaker pace(desired_framerate);
-		while (!terminate && !g_abort) {
-			if (!manager.getPipeline().isPlaying()) {
-				auto now = std::chrono::high_resolution_clock::now(); 
-				if (now - start_time > wait_for_playing_timeout) {
-					std::cerr << "ERROR: Pipeline did not start playing in due time" << std::endl;
-					break;
-				}
-			}
+        // We try to push frames with desired framerate into pipeline, even if camera framerate is different
+        double desired_framerate;
+        if (vm.count("fps")) {
+            desired_framerate = vm["fps"].as<double>();
+        }
+        else {
+            desired_framerate = camera_framerate;
+        }
+
+        // We keep these outside the loop. This way the memory is not allocated on each iteration
+        cv::Mat left_frame, right_frame, depth_frame;
+
+        std::chrono::seconds wait_for_playing_timeout(3);
+        auto start_time = std::chrono::high_resolution_clock::now();
+
+        std::atomic_bool terminate;
+        terminate = false;
+
+        ait::RateCounter frame_rate_counter;
+        ait::PaceMaker pace(desired_framerate);
+        while (!terminate && !g_abort) {
+            // Make sure pipeline starts after some time. Otherwise we quit.
+            if (!manager.getPipeline().isPlaying()) {
+                auto now = std::chrono::high_resolution_clock::now();
+                if (now - start_time > wait_for_playing_timeout) {
+                    std::cerr << "ERROR: Pipeline did not start playing in due time" << std::endl;
+                    break;
+                }
+            }
 
 #if !SIMULATE_ZED
-//			std::cout << "Retrieving frame ..." << std::endl;
-			retrieve_frame_fn(left_frame, right_frame, depth_frame);
-//      std::cout << "Done" << std::endl;
+            retrieve_frame(video_ptr, left_frame, right_frame, depth_frame);
 
-			if (rotate) {
-				const int flipCode = -1;
+            // For upside down stere-camera
+            if (rotate) {
+                const int flipCode = -1;
 #pragma omp parallel sections
-				{
-					if (rotate) {
-						cv::flip(left_frame, left_frame, flipCode);
-					}
+                {
+                    if (rotate) {
+                        cv::flip(left_frame, left_frame, flipCode);
+                    }
 #pragma omp section
-					if (rotate) {
-						cv::flip(right_frame, right_frame, flipCode);
-					}
+                    if (rotate) {
+                        cv::flip(right_frame, right_frame, flipCode);
+                    }
 #pragma omp section
-					if (rotate) {
-						cv::flip(depth_frame, depth_frame, flipCode);
-					}
-				}
-			}
+                    if (rotate) {
+                        cv::flip(depth_frame, depth_frame, flipCode);
+                    }
+                }
+            }
 
-//      std::cout << "Pushing frame into pipeline ..." << std::endl;
-			manager.pushNewStereoFrame(left_frame, right_frame, depth_frame);
-//      std::cout << "Done" << std::endl;
-
+            manager.pushNewStereoFrame(left_frame, right_frame, depth_frame);
 #endif
 
-			frame_rate_counter.count();
-			double rate;
-			if (frame_rate_counter.reportRate(rate)) {
-				std::cout << "Running with " << rate << " Hz" << std::endl;
-			}
+            frame_rate_counter.count();
+            double rate;
+            if (frame_rate_counter.reportRate(rate)) {
+                std::cout << "Running with " << rate << " Hz" << std::endl;
+            }
 
-			if (show) {
-				cv::imshow("left frame", left_frame);
-				cv::imshow("right frame", right_frame);
-				cv::imshow("depth frame", depth_frame);
-				if (cv::waitKey(1) == 27) {
-					terminate = true;
-				}
-			}
+            if (show) {
+                cv::imshow("left frame", left_frame);
+                cv::imshow("right frame", right_frame);
+                cv::imshow("depth frame", depth_frame);
+                if (cv::waitKey(1) == 27) {
+                    terminate = true;
+                }
+            }
 
-			pace.sleep();
-		}
-		manager.stop();
+            pace.sleep();
+        }
+        manager.stop();
 
-		//delete video_ptr;
-	}
-	catch (const po::required_option& err)
-	{
-		std::cerr << "Error parsing command line: Required option '" << err.get_option_name() << "' is missing" << std::endl;
-	}
-	catch (const po::error& err)
-	{
-		std::cerr << "Error parsing command line: " << err.what() << std::endl;
-	}
-	catch (const std::exception& err)
-	{
-		std::cerr << "Exception: << " << err.what() << std::endl;
-		throw;
-	}
+        delete video_ptr;
+    }
+    catch (const po::required_option& err)
+    {
+        std::cerr << "Error parsing command line: Required option '" << err.get_option_name() << "' is missing" << std::endl;
+    }
+    catch (const po::error& err)
+    {
+        std::cerr << "Error parsing command line: " << err.what() << std::endl;
+    }
+    catch (const std::exception& err)
+    {
+        std::cerr << "Exception: << " << err.what() << std::endl;
+        throw;
+    }
 
-	return 0;
+    return 0;
 }

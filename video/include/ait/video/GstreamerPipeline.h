@@ -27,56 +27,6 @@
 #define FUNCTION_LINE_STRING (std::string(__FILE__) + " [" + std::string(__FUNCTION__) + ":" + std::to_string(__LINE__) + "]")
 #define ANNOTATE_EXC(type, s) type (std::string(FUNCTION_LINE_STRING).append(": ").append(s))
 
-class RateCounter
-{
-public:
-	using clock = std::chrono::high_resolution_clock;
-
-	RateCounter(unsigned int report_count = 10)
-		: report_count_(report_count) {
-		reset();
-	}
-
-	void reset() {
-		counter_ = 0;
-		start_time_ = clock::now();
-	}
-
-	void count() {
-		++counter_;
-	}
-
-	unsigned int getCount() const {
-		return counter_;
-	}
-
-	double getRate() const {
-		auto cur_time = clock::now();
-		auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(cur_time - start_time_);
-		double rate = counter_ / (0.001 * duration_ms.count());
-		return rate;
-	}
-
-	bool reportRate(double& rate) {
-		if (counter_ >= report_count_) {
-			auto cur_time = clock::now();
-			auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(cur_time - start_time_);
-			rate = counter_ / (0.001 * duration_ms.count());
-			start_time_ = cur_time;
-			counter_ = 0;
-			return true;
-		}
-		else {
-			return false;
-		}
-	}
-
-private:
-	unsigned int counter_;
-	unsigned int report_count_;
-	std::chrono::time_point<clock> start_time_;
-};
-
 template <typename T>
 class GstWrapper
 {
@@ -565,9 +515,9 @@ private:
 	std::deque<std::tuple<GstreamerBufferInfo, TUserData>> user_data_queue_;
 	std::mutex user_data_queue_mutex_;
 
-	RateCounter output_frame_rate_counter_;
+	ait::RateCounter output_frame_rate_counter_;
 	size_t output_byte_counter_;
-	RateCounter input_frame_rate_counter_;
+	ait::RateCounter input_frame_rate_counter_;
 	size_t input_byte_counter_;
 
 	unsigned int src_overflow_counter_;

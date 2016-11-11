@@ -56,7 +56,7 @@ public:
 			frame_in.copyTo(frame);
 		}
 
-		int buffer_size = frame.rows * frame.cols * frame.channels() * frame.elemSize1();
+		size_t buffer_size = frame.rows * frame.cols * frame.channels() * frame.elemSize1();
 		//  std::cout << "width: " << frame.cols << std::endl;
 		//  std::cout << "height: " << frame.rows << std::endl;
 		//  std::cout << "channels: " << frame.channels() << std::endl;
@@ -207,7 +207,7 @@ protected:
 
 		// Fill pipeline
 		gst_bin_add_many(GST_BIN(pipeline), GST_ELEMENT(appsrc), preprocess_bin, tee, display_bin, encoder_bin, sink, nullptr);
-		if (gst_element_link_many(GST_ELEMENT(appsrc), preprocess_bin, tee, nullptr) != true) {
+		if (gst_element_link_many(GST_ELEMENT(appsrc), preprocess_bin, tee, nullptr) != TRUE) {
 			gst_object_unref(pipeline);
 			throw std::runtime_error("Unable to link source, preprocess and tee elements");
 		}
@@ -259,7 +259,7 @@ protected:
 		}
 
 		// Link encoder branch with sink
-		if (gst_element_link_many(encoder_bin, GST_ELEMENT(appsink), nullptr) != true) {
+		if (gst_element_link_many(encoder_bin, GST_ELEMENT(appsink), nullptr) != TRUE) {
 			gst_object_unref(pipeline);
 			throw std::runtime_error("Unable to link encoder and sink elements");
 		}
