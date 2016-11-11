@@ -53,11 +53,11 @@ public:
 			: connection_(connection) {
 		}
 
-		virtual size_t read(void* data, size_t size)  {
+		size_t _read(void* data, size_t size) override {
 			return connection_->receiveDataBlocking((uint8_t*)data, size);
 		}
 
-		virtual size_t write(const void* data, size_t size)  {
+		size_t _write(const void* data, size_t size) override {
 			return connection_->sendDataBlocking((const uint8_t*)data, size);
 		}
 

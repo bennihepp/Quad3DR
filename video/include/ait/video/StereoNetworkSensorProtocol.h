@@ -41,9 +41,6 @@ enum class StereoPacketType
 
 struct StereoPacketHeader
 {
-	//~StereoPacketHeader() override {
-	//};
-
 	StereoClientType client_type;
 	StereoPacketType packet_type;
 	size_t packet_size;
@@ -52,9 +49,6 @@ struct StereoPacketHeader
 
 struct StereoFrameHeader
 {
-	//~StereoFrameHeader() override {
-	//};
-
 	size_t left_compressed_size;
 	size_t right_compressed_size;
 	size_t depth_compressed_size;
@@ -69,9 +63,6 @@ struct StereoFrameHeader
 class Calibration
 {
 public:
-	//~Calibration() override {
-	//};
-
 	Calibration() {
 		setIdentity();
 	}
@@ -96,9 +87,6 @@ public:
 
 struct StereoCalibration
 {
-	//~StereoCalibration() override {
-	//};
-
 	unsigned int	depth_image_width;
 	unsigned int	depth_image_height;
 	unsigned int	color_image_width_left;
@@ -111,10 +99,10 @@ struct StereoCalibration
 };
 
 #if WITH_GSTREAMER
-struct GstreamerBufferInfo
+struct GstreamerBufferInfo : public Serializable<GstreamerBufferInfo>
 {
-	//~GstreamerBufferInfo() override {
-	//};
+	~GstreamerBufferInfo() override {
+	};
 
 	GstClockTime pts;
 	GstClockTime dts;
@@ -126,8 +114,8 @@ struct GstreamerBufferInfo
 
 struct GstreamerParameters : public Serializable<GstreamerParameters>
 {
-	//~GstreamerParameters() override {
-	//};
+	~GstreamerParameters() override {
+	};
 
 	std::string caps_string;
 
@@ -149,9 +137,6 @@ enum class StereoImageSide
 
 struct ValidationPixelPosition
 {
-	//~ValidationPixelPosition() override {
-	//};
-
 	StereoImageSide side;
 	uint16_t x;
 	uint16_t y;
@@ -159,8 +144,8 @@ struct ValidationPixelPosition
 
 struct StereoFrameUserParameters : public Serializable<StereoFrameUserParameters>
 {
-	//~StereoFrameUserParameters() override {
-	//};
+	~StereoFrameUserParameters() override {
+	};
 
 	std::vector<ValidationPixelPosition> validation_pixel_positions;
 
@@ -175,8 +160,8 @@ struct StereoFrameUserParameters : public Serializable<StereoFrameUserParameters
 
 struct StereoFrameUserData : public Serializable<StereoFrameUserData>
 {
-	//~StereoFrameUserData() override {
-	//};
+	~StereoFrameUserData() override {
+	};
 
 	std::uint8_t truncation_threshold;
 	bool inverse_depth;
