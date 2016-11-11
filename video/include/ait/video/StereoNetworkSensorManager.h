@@ -29,7 +29,7 @@ namespace ait
 			using clock = std::chrono::system_clock;
 
 			const std::chrono::seconds CONNECTION_ATTEMPT_TIMEOUT = std::chrono::seconds(2);
-			const uint8_t DEPTH_UINT8_TRUNCATION_THRESHOLD = 13;
+			const uint8_t DEPTH_UINT8_TRUNCATION_THRESHOLD = 5;
 
 			const unsigned int NUMBER_OF_VALIDATION_PIXELS_PER_IMAGE = 1000;
 
@@ -54,7 +54,7 @@ namespace ait
 				user_parameters_ = user_parameters;
 			}
 
-			void setDepthTruncation(double trunc_depth_min, double trunc_depth_max) {
+			void setDepthTruncation(float trunc_depth_min, float trunc_depth_max) {
 				trunc_depth_min_ = trunc_depth_min;
 				trunc_depth_max_ = trunc_depth_max;
 			}
@@ -176,7 +176,7 @@ namespace ait
 #endif
 			}
 
-		private:
+		protected:
 #if WITH_GSTREAMER
 			void pipelineOutputLoop() {
 				while (!terminate_) {
