@@ -21,6 +21,10 @@ set(PLANESWEEPLIB_LIBRARIES "$ENV{HOME}/Code/workspace/PlaneSweepLib/lib/libPSL.
 # Default library variables
 set(EIGEN3_INCLUDE_DIR "" CACHE PATH "Manual Eigen3 include dir")
 
+set(WITH_ROS False CACHE BOOL "Enable ROS support")
+set(ROS_INCLUDE_DIRS "" CACHE PATH "ROS include directories")
+set(ROS_LIBRARY_DIR "" CACHE FILEPATH "ROS library directory")
+
 option(BUILD_VIDEO "Build video project" ON)
 option(BUILD_STEREO "Build stereo project" ON)
 option(BUILD_PLANE_SWEEP_STEREO "Build plane sweep stereo project" ON)
@@ -38,7 +42,11 @@ if(WIN32)
   set(Boost_USE_MULTITHREADED      ON)
   find_package(Boost REQUIRED COMPONENTS system filesystem program_options date_time regex)
 else()
-  find_package(Boost REQUIRED COMPONENTS system filesystem program_options)
+	if(WITH_ROS)
+  	find_package(Boost REQUIRED COMPONENTS system filesystem program_options thread)
+  else()
+  	find_package(Boost REQUIRED COMPONENTS system filesystem program_options)
+  endif()
 endif()
 
 if(!WIN32)
@@ -104,6 +112,23 @@ elseif("${OpenCV_VERSION_MAJOR}" EQUAL "2")
     else()
         message("Defining OPENCV_2 macro")
     endif()
+endif()
+
+# Check for ROS includes and libraries
+if(WITH_ROS)
+	find_file(ROS_H_FOUND ros/ros.h PATHS ${ROS_INCLUDE_DIRS})
+	if(NOT ROS_H_FOUND)
+		message(FATAL_ERROR "Unable to find ROS headers")
+	endif()
+	find_file(ROS_CPPLIB_FOUND libroscpp.so PATHS ${ROS_LIBRARY_DIR})
+	if(NOT ROS_CPPLIB_FOUND)
+		message(FATAL_ERROR "Unable to find ROS libraries")
+	endif()
+	list(APPEND ROS_LIBRARIES "${ROS_LIBRARY_DIR}/libroscpp.so")
+	list(APPEND ROS_LIBRARIES "${ROS_LIBRARY_DIR}/libroscpp_serialization.so")
+	list(APPEND ROS_LIBRARIES "${ROS_LIBRARY_DIR}/librostime.so")
+	list(APPEND ROS_LIBRARIES "${ROS_LIBRARY_DIR}/librosconsole.so")
+	list(APPEND ROS_LIBRARIES "${ROS_LIBRARY_DIR}/libactionlib.so")
 endif()
 
 include_directories(

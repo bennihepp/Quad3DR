@@ -89,22 +89,44 @@ if(WITH_ZED)
 	    ${CUDA_CUDA_LIBRARY} ${CUDA_CUDART_LIBRARY} ${CUDA_npp_LIBRARY}
 	)
 
-	add_executable(video_streamer_bundlefusion_quad
-	    src/video_streamer_bundlefusion_quad.cpp
-	    src/video_source.cpp
-	    src/video_source_zed.cpp
-		src/GstMetaCorrespondence.cpp
-	    ../stereo/src/stereo_calibration.cpp
-	    ../src/common.cpp
-	)
-	target_compile_definitions(video_streamer_bundlefusion_quad PUBLIC WITH_ZED=1)
-	target_link_libraries(video_streamer_bundlefusion_quad
-	    ${Boost_LIBRARIES}
-	    ${OpenCV_LIBRARIES}
-	    ${ZED_LIBRARIES}
-	    "${GSTREAMER_LIBRARIES}"
-	    "${GSTREAMER_APP_LIBRARIES}"
-	    ${GLIB_LIBRARIES}
-	    ${CUDA_CUDA_LIBRARY} ${CUDA_CUDART_LIBRARY} ${CUDA_npp_LIBRARY}
-	)
+	if(WITH_ROS)
+		set(WITH_DJI False CACHE BOOL "Enable DJI support")
+	endif()
+
+	if(WITH_DJI)
+	
+		set(DJI_INCLUDE_DIRS "" CACHE PATH "DJI ROS include directories")
+		set(DJI_LIBRARY "" CACHE FILEPATH "DJI ROS SDK library")
+
+		# Check for DJI ROS SDK
+		find_file(DJI_H_FOUND NAMES dji_sdk_lib/DJI_Type.h dji_sdk/A3GPS.h dji_sdk/dji_sdk.h PATHS ${DJI_INCLUDE_DIRS})
+		if(NOT DJI_H_FOUND)
+			message(FATAL_ERROR "Unable to find DJI headers")
+		endif()
+		find_file(DJI_LIB_FOUND ${DJI_LIBRARY} PATHS /)
+		if(NOT DJI_LIB_FOUND)
+			message(FATAL_ERROR "Unable to find DJI library")
+		endif()
+
+		add_executable(video_streamer_bundlefusion_drone
+		    src/video_streamer_bundlefusion_drone.cpp
+		    src/video_source.cpp
+		    src/video_source_zed.cpp
+			src/GstMetaCorrespondence.cpp
+		    ../stereo/src/stereo_calibration.cpp
+		    ../src/common.cpp
+		)
+		target_include_directories(video_streamer_bundlefusion_drone PUBLIC ${ROS_INCLUDE_DIRS} ${DJI_INCLUDE_DIRS})
+		target_compile_definitions(video_streamer_bundlefusion_drone PUBLIC WITH_ZED=1 WITH_DJI=1)
+		target_link_libraries(video_streamer_bundlefusion_drone
+		    ${Boost_LIBRARIES}
+		    ${OpenCV_LIBRARIES}
+		    ${ZED_LIBRARIES}
+		    "${GSTREAMER_LIBRARIES}"
+		    "${GSTREAMER_APP_LIBRARIES}"
+		    ${GLIB_LIBRARIES}
+		    ${CUDA_CUDA_LIBRARY} ${CUDA_CUDART_LIBRARY} ${CUDA_npp_LIBRARY}
+		)
+		target_link_libraries(video_streamer_bundlefusion_drone ${ROS_LIBRARIES} ${DJI_LIBRARY})
+	endif()
 endif()

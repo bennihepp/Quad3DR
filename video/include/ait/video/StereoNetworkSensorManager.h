@@ -23,7 +23,7 @@ namespace ait
 
 	namespace video
 	{
-		template <typename TNetworkClient>
+		template <typename TNetworkClient, typename TUserData = StereoFrameUserData>
 		class StereoNetworkSensorManager
 		{
 			using clock = std::chrono::system_clock;
@@ -47,7 +47,7 @@ namespace ait
 #endif
 			}
 
-			~StereoNetworkSensorManager() {
+			virtual ~StereoNetworkSensorManager() {
 			}
 
 			void setUserParameters(const StereoFrameUserParameters& user_parameters) {
@@ -63,11 +63,11 @@ namespace ait
 				inverse_depth_ = inverse_depth;
 			}
 
-			const EncodingGstreamerPipeline<StereoFrameUserData>& getPipeline() const {
+			const EncodingGstreamerPipeline<TUserData>& getPipeline() const {
 				return pipeline_;
 			}
 
-			EncodingGstreamerPipeline<StereoFrameUserData>& getPipeline() {
+			EncodingGstreamerPipeline<TUserData>& getPipeline() {
 				return pipeline_;
 			}
 
@@ -123,51 +123,15 @@ namespace ait
 #endif
 			}
 
+			//! Push a new stereo frame into the pipeline. Also save corresponding user data. Not thread-safe!
 			void pushNewStereoFrame(const cv::Mat& left_frame, const cv::Mat& right_frame, const cv::Mat& depth_frame) {
 				//cv::cvtColor(left_frame, left_frame, CV_BGRA2RGBA);
 				//cv::cvtColor(right_frame, right_frame, CV_BGRA2RGBA);
 
 #if WITH_GSTREAMER
-				StereoFrameUserData user_data;
-				const cv::Mat& depth_frame_rgba = convertDepthFrameFloatToRGBA(depth_frame, user_data, inverse_depth_);
-				const cv::Mat& merged_frame = mergeStereoDepthFrames(left_frame, right_frame, depth_frame_rgba);
-				AIT_ASSERT(merged_frame.isContinuous());
-
-#if DEBUG_IMAGE_COMPRESSION
-				user_data.width = left_frame.cols;
-				user_data.height = left_frame.rows;
-				left_frame.copyTo(user_data.left_frame);
-				right_frame.copyTo(user_data.right_frame);
-				depth_frame.copyTo(user_data.depth_frame);
-#endif
-
-				user_data.validation_pixel_values.resize(user_parameters_.validation_pixel_positions.size());
-#pragma omp parallel for
-				for (int i = 0; i < user_parameters_.validation_pixel_positions.size(); ++i) {
-					const ValidationPixelPosition& position = user_parameters_.validation_pixel_positions[i];
-					uint8_t value;
-					switch (position.side) {
-					case StereoImageSide::LEFT:
-					{
-						const cv::Vec4b& vec = left_frame.at<cv::Vec4b>(position.y, position.x);
-						value = static_cast<uint8_t>(std::round((vec(0) + vec(1) + vec(2)) / 3.0f));
-						break;
-					}
-					case StereoImageSide::RIGHT:
-					{
-						const cv::Vec4b& vec = right_frame.at<cv::Vec4b>(position.y, position.x);
-						value = static_cast<uint8_t>(std::round((vec(0) + vec(1) + vec(2)) / 3.0f));
-						break;
-					}
-					case StereoImageSide::DEPTH:
-					{
-						const cv::Vec4b& vec = depth_frame_rgba.at<cv::Vec4b>(position.y, position.x);
-						value = static_cast<uint8_t>(std::round((vec(0) + vec(1) + vec(2)) / 3.0f));
-						break;
-					}
-					}
-					user_data.validation_pixel_values[i] = value;
-				}
+			    TUserData user_data;
+			    const cv::Mat& merged_frame = processFrames(left_frame, right_frame, depth_frame, user_data);
+                updateUserData(user_data);
 
 				pipeline_.pushInput(merged_frame, user_data);
 #else
@@ -214,9 +178,9 @@ namespace ait
 							std::unique_lock<std::mutex> lock(pipeline_.getMutex());
 							pipeline_.getOutputCondition().wait_for(lock, std::chrono::milliseconds(100), [this]() { return pipeline_.hasOutput(); });
 							if (pipeline_.hasOutput()) {
-								std::tuple<GstBufferWrapper, StereoFrameUserData> output_tuple(std::move(pipeline_.popOutput(lock)));
+								std::tuple<GstBufferWrapper, TUserData> output_tuple(std::move(pipeline_.popOutput(lock)));
 								GstBufferWrapper& buffer = std::get<0>(output_tuple);
-								const StereoFrameUserData& user_data = std::get<1>(output_tuple);
+								const TUserData& user_data = std::get<1>(output_tuple);
 								lock.unlock();
 								if (!pipeline_.isPlaying()) {
 									continue;
@@ -232,7 +196,7 @@ namespace ait
 									frame_rate_counter.count();
 									double rate;
 									unsigned int frame_count = frame_rate_counter.getCount();
-									byte_counter += sizeof(StereoPacketHeader) + sizeof(StereoFrameHeader) + sizeof(GstreamerBufferInfo) + sizeof(StereoFrameUserData)
+									byte_counter += sizeof(StereoPacketHeader) + sizeof(StereoFrameHeader) + sizeof(GstreamerBufferInfo) + sizeof(TUserData)
 										+ user_data.validation_pixel_values.size() + buffer.getSize();
 									if (frame_rate_counter.reportRate(rate)) {
 										double bandwidth = rate * byte_counter / static_cast<double>(frame_count) / 1024.0;
@@ -269,6 +233,55 @@ namespace ait
 			}
 #endif
 
+            virtual const cv::Mat processFrames(const cv::Mat& left_frame, const cv::Mat& right_frame, const cv::Mat& depth_frame, TUserData& user_data) {
+#if WITH_GSTREAMER
+                const cv::Mat& depth_frame_rgba = convertDepthFrameFloatToRGBA(depth_frame, user_data, inverse_depth_);
+                const cv::Mat& merged_frame = mergeStereoDepthFrames(left_frame, right_frame, depth_frame_rgba);
+                AIT_ASSERT(merged_frame.isContinuous());
+
+#if DEBUG_IMAGE_COMPRESSION
+                user_data.width = left_frame.cols;
+                user_data.height = left_frame.rows;
+                left_frame.copyTo(user_data.left_frame);
+                right_frame.copyTo(user_data.right_frame);
+                depth_frame.copyTo(user_data.depth_frame);
+#endif
+
+                user_data.validation_pixel_values.resize(user_parameters_.validation_pixel_positions.size());
+#pragma omp parallel for
+                for (int i = 0; i < user_parameters_.validation_pixel_positions.size(); ++i) {
+                    const ValidationPixelPosition& position = user_parameters_.validation_pixel_positions[i];
+                    uint8_t value;
+                    switch (position.side) {
+                    case StereoImageSide::LEFT:
+                    {
+                        const cv::Vec4b& vec = left_frame.at<cv::Vec4b>(position.y, position.x);
+                        value = static_cast<uint8_t>(std::round((vec(0) + vec(1) + vec(2)) / 3.0f));
+                        break;
+                    }
+                    case StereoImageSide::RIGHT:
+                    {
+                        const cv::Vec4b& vec = right_frame.at<cv::Vec4b>(position.y, position.x);
+                        value = static_cast<uint8_t>(std::round((vec(0) + vec(1) + vec(2)) / 3.0f));
+                        break;
+                    }
+                    case StereoImageSide::DEPTH:
+                    {
+                        const cv::Vec4b& vec = depth_frame_rgba.at<cv::Vec4b>(position.y, position.x);
+                        value = static_cast<uint8_t>(std::round((vec(0) + vec(1) + vec(2)) / 3.0f));
+                        break;
+                    }
+                    }
+                    user_data.validation_pixel_values[i] = value;
+                }
+
+                return merged_frame;
+            }
+
+            virtual void updateUserData(TUserData& user_data) {
+            }
+#endif
+
 			const cv::Mat& convertDepthFrameFloatToUint16(const cv::Mat& depth_frame)
 			{
 				// Convert float to uint16_t depth image (scaled by 1000)
@@ -292,7 +305,7 @@ namespace ait
 			}
 
 #if WITH_GSTREAMER
-			const cv::Mat& convertDepthFrameFloatToRGBA(const cv::Mat& depth_frame, StereoFrameUserData& user_data, bool inverse_depth = true)
+			const cv::Mat& convertDepthFrameFloatToRGBA(const cv::Mat& depth_frame, TUserData& user_data, bool inverse_depth = true)
 			{
                 const uint8_t trunc_thres = DEPTH_UINT8_TRUNCATION_THRESHOLD;
 				// Convert float to uint16_t depth image (scaled by 1000)
@@ -427,7 +440,7 @@ namespace ait
 			}
 
 #if WITH_GSTREAMER
-			EncodingGstreamerPipeline<StereoFrameUserData> pipeline_;
+			EncodingGstreamerPipeline<TUserData> pipeline_;
 			bool pipeline_initialized_;
 			std::atomic_bool terminate_;
 #endif
@@ -442,7 +455,7 @@ namespace ait
 			bool inverse_depth_;
 
 			std::thread pipeline_output_thread_;
-			StereoNetworkSensorClient<TNetworkClient, StereoFrameUserData, StereoFrameUserParameters> stereo_sensor_client_;
+			StereoNetworkSensorClient<TNetworkClient, TUserData, StereoFrameUserParameters> stereo_sensor_client_;
 
 			bool use_compression_;
 		};

@@ -7,7 +7,11 @@
 #include <ait/serializable.h>
 
 #if WITH_GSTREAMER
-#include <gst/gst.h>
+    #include <gst/gst.h>
+#endif
+
+#if WITH_DJI
+    #include <ait/dji/dji_drone.h>
 #endif
 
 using ait::Serializable;
@@ -210,5 +214,29 @@ struct StereoFrameUserData : public Serializable<StereoFrameUserData>
 		return read;
 	}
 };
+
+#if WITH_DJI
+struct StereoFrameDroneUserData : public StereoFrameUserData
+{
+    ~StereoFrameDroneUserData() override {
+    };
+
+    dji_sdk::LocalPosition local_position;
+
+    size_t _write(Writer& writer) const override {
+        size_t written = 0;
+        written += StereoFrameDroneUserData::_write(writer);
+        written += writer.write(local_position);
+        return written;
+    }
+
+    size_t _read(Reader& reader) override {
+        size_t bytes_read = 0;
+        bytes_read += StereoFrameDroneUserData::_read(reader);
+        bytes_read += reader.read(local_position);
+        return bytes_read;
+    }
+};
+#endif
 
 #endif

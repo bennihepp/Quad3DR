@@ -1,5 +1,5 @@
 //==================================================
-// video_streamer_bundlefusion.cpp
+// video_streamer_bundlefusion_drone.cpp
 //
 //  Copyright (c) 2016 Benjamin Hepp.
 //  Author: Benjamin Hepp
@@ -33,10 +33,11 @@
     #include <gst/app/gstappsink.h>
 #endif
 
-#include <ait/common.h>
+#include <ros/ros.h>
+
 #include <ait/math.h>
 #include <ait/video/video_source_zed.h>
-#include <ait/video/StereoNetworkSensorManager.h>
+#include <ait/video/StereoNetworkSensorManagerDrone.h>
 #if WITH_GSTREAMER
 #include <ait/video/EncodingGstreamerPipeline.h>
 #endif
@@ -45,8 +46,9 @@ volatile bool g_abort;
 
 void signalHandler(int sig)
 {
-    g_abort = true;
     std::cout << "Received CTRL-C. Aborting" << std::endl;
+    g_abort = true;
+    ros::shutdown();
 }
 
 // Stereo frame retrieve function
@@ -179,6 +181,14 @@ std::pair<bool, boost::program_options::variables_map> process_commandline(int a
     return std::make_pair(true, vm);
 }
 
+void initialize_ros(int argc, char** argv)
+{
+    ros::init(argc, argv, "video_streamer_bundlefusion_drone", ros::init_options::NoSigintHandler);
+    if (!ros::ok()) {
+        throw std::runtime_error("Unable to initialize ROS");
+    }
+}
+
 #if WITH_GSTREAMER
 void initialize_gstramer(int argc, char** argv)
 {
@@ -195,6 +205,8 @@ int main(int argc, char** argv)
 {
     namespace avo = ait::video;
     namespace po = boost::program_options;
+
+    initialize_ros(argc, argv);
 
 #if WITH_GSTREAMER
     initialize_gstramer(argc, argv);
@@ -269,7 +281,7 @@ int main(int argc, char** argv)
 #endif
 
         // Create manager to handle pipeline and communication
-        ait::video::StereoNetworkSensorManager<NetworkClient> manager(stereo_sensor_calibration, StereoClientType::CLIENT_ZED, remote_ip, remote_port);
+        ait::video::StereoNetworkSensorManagerDrone<NetworkClient> manager(stereo_sensor_calibration, StereoClientType::CLIENT_ZED, remote_ip, remote_port);
         if (vm.count("preprocess-branch")) {
           manager.getPipeline().setPreProcessBranchStr(vm["preprocess-branch"].as<std::string>());
         }
@@ -304,7 +316,7 @@ int main(int argc, char** argv)
 
         ait::RateCounter frame_rate_counter;
         ait::PaceMaker pace(desired_framerate);
-        while (!terminate && !g_abort) {
+        while (!terminate && !g_abort && ros::ok()) {
             // Make sure pipeline starts after some time. Otherwise we quit.
             if (!manager.getPipeline().isPlaying()) {
                 auto now = std::chrono::high_resolution_clock::now();
@@ -353,6 +365,8 @@ int main(int argc, char** argv)
                     terminate = true;
                 }
             }
+
+            ros::spinOnce();
 
             pace.sleep();
         }
