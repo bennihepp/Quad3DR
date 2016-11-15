@@ -129,10 +129,13 @@ if(WITH_ROS)
 	list(APPEND ROS_LIBRARIES "${ROS_LIBRARY_DIR}/librostime.so")
 	list(APPEND ROS_LIBRARIES "${ROS_LIBRARY_DIR}/librosconsole.so")
 	list(APPEND ROS_LIBRARIES "${ROS_LIBRARY_DIR}/libactionlib.so")
+	list(APPEND ROS_LIBRARIES "${ROS_LIBRARY_DIR}/libimage_transport.so")
+	list(APPEND ROS_LIBRARIES "${ROS_LIBRARY_DIR}/libcv_bridge.so")
 endif()
 
 include_directories(
 		include/
+		external/
     video/include/
     stereo/include/
     ${OpenCV_INCLUDE_DIRS}

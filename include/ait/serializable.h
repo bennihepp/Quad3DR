@@ -44,6 +44,12 @@ namespace ait {
 	template<class T, class Alloc>
 	struct is_vector<std::vector<T, Alloc>> : public std::true_type{};
 
+    template<class T>
+    struct is_tuple : public std::false_type {};
+
+    template<class... Types>
+    struct is_tuple<std::tuple<Types...>> : public std::true_type{};
+
 	class ISerializable
 	{
 	public:
@@ -60,6 +66,7 @@ namespace ait {
 		std::is_base_of<ISerializable, T>::value
 		|| std::is_base_of<std::string, T>::value
 		|| is_vector<T>::value
+        || is_tuple<T>::value
 	>
 	{
 	};
@@ -86,6 +93,7 @@ namespace ait {
 	{
 		static size_t read(Reader* reader, T& value) {
 			static_assert(dependent_false<T>::value, "Type is not suppoted for serialization");
+			return 0;
 		}
 	};
 
@@ -94,6 +102,7 @@ namespace ait {
 	{
 		static size_t read(Reader* reader, T& value) {
 			static_assert(dependent_false<T>::value, "Type is not suppoted for serialization");
+			return 0;
 		}
 	};
 
@@ -143,6 +152,33 @@ namespace ait {
 		}
 	};
 
+    template <size_t size, typename T>
+    struct ValueReaderTuple
+    {
+        static size_t read(Reader* reader, T& tuple) {
+            size_t bytes_read = 0;
+            bytes_read += ValueReaderTuple<size - 1, T>::write(reader, tuple);
+            bytes_read += ValueReader<typename std::tuple_element<size - 1, T>::type>::read(reader, std::get<size - 1>(tuple));
+            return bytes_read;
+        }
+    };
+
+    template <typename T>
+    struct ValueReaderTuple<0, T>
+    {
+        static size_t read(Reader* reader, T& tuple) {
+            return 0;
+        }
+    };
+
+    template <typename T>
+    struct ValueReader<T, typename std::enable_if<is_tuple<T>::value>::type>
+    {
+        static size_t read(Reader* reader, T& tuple) {
+            return ValueReaderTuple<std::tuple_size<T>::value, T>::read(reader, tuple);
+        }
+    };
+
 	template <typename T>
 	inline size_t Reader::read(T& value) {
 		return ValueReader<T>::read(this, value);
@@ -153,6 +189,7 @@ namespace ait {
 	{
 		static size_t write(Writer* writer, const T& value) {
 			static_assert(dependent_false<T>::value, "Type is not suppoted for serialization");
+			return 0;
 		}
 	};
 
@@ -161,6 +198,7 @@ namespace ait {
 	{
 		static size_t write(Writer* writer, const T& value) {
 			static_assert(dependent_false<T>::value, "Type is not suppoted for serialization");
+            return 0;
 		}
 	};
 
@@ -190,6 +228,33 @@ namespace ait {
 			return written;
 		}
 	};
+
+    template <size_t size, typename T>
+    struct ValueWriterTuple
+    {
+        static size_t write(Writer* writer, const T& tuple) {
+            size_t written = 0;
+            written += ValueWriterTuple<size - 1, T>::write(writer, tuple);
+            written += ValueWriter<typename std::tuple_element<size - 1, T>::type>::write(writer, std::get<size - 1>(tuple));
+            return written;
+        }
+    };
+
+    template <typename T>
+    struct ValueWriterTuple<0, T>
+    {
+        static size_t write(Writer* writer, const T& tuple) {
+            return 0;
+        }
+    };
+
+    template <typename T>
+    struct ValueWriter<T, typename std::enable_if<is_tuple<T>::value>::type>
+    {
+        static size_t write(Writer* writer, const T& tuple) {
+            return ValueWriterTuple<std::tuple_size<T>::value, T>::write(writer, tuple);
+        }
+    };
 
 	template <typename T>
 	struct ValueWriter<T, typename std::enable_if<is_vector<T>::value>::type>

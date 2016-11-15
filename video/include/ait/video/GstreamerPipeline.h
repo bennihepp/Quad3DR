@@ -137,10 +137,11 @@ public:
 	}
 
 	GstBufferWrapper(GstBufferWrapper&& other)
-		: GstWrapper(std::move(other)){
+		: GstWrapper(std::move(other)) {
 		owns_buffer_ = other.owns_buffer_;
 		info_ = other.info_;
 		mapped_ = other.mapped_;
+		mapped_writable_ = other.mapped_writable_;
 	}
 
 	void operator=(GstBufferWrapper&& other) {
@@ -286,7 +287,7 @@ public:
 	}
 
 	void clear() {
-		return queue_.clear();
+		queue_.clear();
 	}
 
 	template <typename TMutex>

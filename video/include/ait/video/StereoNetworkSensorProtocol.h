@@ -6,13 +6,7 @@
 #include <Eigen/Dense>
 #include <ait/serializable.h>
 
-#if WITH_GSTREAMER
-    #include <gst/gst.h>
-#endif
-
-#if WITH_DJI
-    #include <ait/dji/dji_drone.h>
-#endif
+#include <gst/gst.h>
 
 using ait::Serializable;
 using ait::Reader;
@@ -27,20 +21,11 @@ enum class StereoClientType
 
 enum class StereoPacketType
 {
-	UNKNOWN = 0,
-
 	// packets from client to server
-	CLIENT_2_SERVER_CALIBRATION = 1,
-	CLIENT_2_SERVER_FRAME_DATA = 2,
-	CLIENT_2_SERVER_DISCONNECT = 3,
-#if WITH_GSTREAMER
+	CLIENT_2_SERVER_INITIALIZATION = 0,
+
 	CLIENT_2_SERVER_GSTREAMER_PARAMETERS = 512 + 1,
 	CLIENT_2_SERVER_GSTREAMER_FRAME = 512 + 2,
-#endif
-
-	// packets from server to client
-	SERVER_2_CLIENT_PROCESSED = 1024 + 1,
-	SERVER_2_CLIENT_RESET = 1024 + 2,
 };
 
 struct StereoPacketHeader
@@ -49,19 +34,6 @@ struct StereoPacketHeader
 	StereoPacketType packet_type;
 	size_t packet_size;
 	size_t packet_size_decompressed;
-};
-
-struct StereoFrameHeader
-{
-	size_t left_compressed_size;
-	size_t right_compressed_size;
-	size_t depth_compressed_size;
-	size_t left_size;
-	size_t right_size;
-	size_t depth_size;
-	bool left_compressed;
-	bool right_compressed;
-	bool depth_compressed;
 };
 
 class Calibration
@@ -102,7 +74,12 @@ struct StereoCalibration
 	Calibration calibration_color_right;
 };
 
-#if WITH_GSTREAMER
+struct StereoInitializationPacket
+{
+	StereoClientType client_type;
+	StereoCalibration calibration;
+};
+
 struct GstreamerBufferInfo : public Serializable<GstreamerBufferInfo>
 {
 	~GstreamerBufferInfo() override {
@@ -146,9 +123,9 @@ struct ValidationPixelPosition
 	uint16_t y;
 };
 
-struct StereoFrameUserParameters : public Serializable<StereoFrameUserParameters>
+struct StereoFrameParameters : public Serializable<StereoFrameParameters>
 {
-	~StereoFrameUserParameters() override {
+	~StereoFrameParameters() override {
 	};
 
 	std::vector<ValidationPixelPosition> validation_pixel_positions;
@@ -162,13 +139,14 @@ struct StereoFrameUserParameters : public Serializable<StereoFrameUserParameters
 	}
 };
 
-struct StereoFrameUserData : public Serializable<StereoFrameUserData>
+struct StereoFrameInfo : public Serializable<StereoFrameInfo>
 {
-	~StereoFrameUserData() override {
+	~StereoFrameInfo() override {
 	};
 
-	std::uint8_t truncation_threshold;
+	double timestamp;
 	bool inverse_depth;
+	std::uint8_t truncation_threshold;
 	float min_depth;
 	float max_depth;
 	std::vector<uint8_t> validation_pixel_values;
@@ -182,6 +160,7 @@ struct StereoFrameUserData : public Serializable<StereoFrameUserData>
 
 	size_t _write(Writer& writer) const override {
 		size_t written = 0;
+		written += writer.write(timestamp);
 		written += writer.write(truncation_threshold);
 		written += writer.write(inverse_depth);
 		written += writer.write(min_depth);
@@ -198,45 +177,78 @@ struct StereoFrameUserData : public Serializable<StereoFrameUserData>
 	}
 
 	size_t _read(Reader& reader) override {
-		size_t read = 0;
-		read += reader.read(truncation_threshold);
-		read += reader.read(inverse_depth);
-		read += reader.read(min_depth);
-		read += reader.read(max_depth);
-		read += reader.read(validation_pixel_values);
+		size_t bytes_read = 0;
+		bytes_read += reader.read(truncation_threshold);
+		bytes_read += reader.read(inverse_depth);
+		bytes_read += reader.read(min_depth);
+		bytes_read += reader.read(max_depth);
+		bytes_read += reader.read(validation_pixel_values);
 #if DEBUG_IMAGE_COMPRESSION
-		read += reader.read(width);
-		read += reader.read(height);
-		read += reader.read(left_frame);
-		read += reader.read(right_frame);
-		read += reader.read(depth_frame);
+		bytes_read += reader.read(timestamp);
+		bytes_read += reader.read(width);
+		bytes_read += reader.read(height);
+		bytes_read += reader.read(left_frame);
+		bytes_read += reader.read(right_frame);
+		bytes_read += reader.read(depth_frame);
 #endif
-		return read;
+		return bytes_read;
 	}
 };
 
-#if WITH_DJI
-struct StereoFrameDroneUserData : public StereoFrameUserData
+struct StereoFrameLocationInfo : public Serializable<StereoFrameLocationInfo>
 {
-    ~StereoFrameDroneUserData() override {
-    };
+	StereoFrameLocationInfo() {
+		this->timestamp = std::numeric_limits<double>::quiet_NaN();
+		this->latitude = 0;
+		this->longitude = 0;
+		this->altitude = 0;
+		this->attitude_quaternion.setZero();
+		this->velocity.setZero();
+		this->angular_velocity.setZero();
+	};
 
-    dji_sdk::LocalPosition local_position;
+	~StereoFrameLocationInfo() override {
+	};
 
-    size_t _write(Writer& writer) const override {
-        size_t written = 0;
-        written += StereoFrameDroneUserData::_write(writer);
-        written += writer.write(local_position);
-        return written;
-    }
+	// Timestamp in seconds
+	double timestamp;
 
-    size_t _read(Reader& reader) override {
-        size_t bytes_read = 0;
-        bytes_read += StereoFrameDroneUserData::_read(reader);
-        bytes_read += reader.read(local_position);
-        return bytes_read;
-    }
+	// GPS coordinates in degrees
+	float latitude;
+	float longitude;
+
+	// Altitude in meters
+	float altitude;
+
+	// Drone attitude (x, y, z, w)
+	Eigen::Matrix<float, 4, 1> attitude_quaternion;
+
+	// Linear velocity in meters/second
+	Eigen::Vector3f velocity;
+	// Angualr velocity in radians/second
+	Eigen::Vector3f angular_velocity;
+
+	size_t _write(Writer& writer) const override {
+		size_t written = 0;
+		written += writer.write(timestamp);
+		written += writer.write(latitude);
+		written += writer.write(longitude);
+		written += writer.write(altitude);
+		written += writer.write(attitude_quaternion);
+		written += writer.write(velocity);
+		written += writer.write(angular_velocity);
+		return written;
+	}
+
+	size_t _read(Reader& reader) override {
+		size_t bytes_read = 0;
+		bytes_read += reader.read(timestamp);
+		bytes_read += reader.read(latitude);
+		bytes_read += reader.read(longitude);
+		bytes_read += reader.read(altitude);
+		bytes_read += reader.read(attitude_quaternion);
+		bytes_read += reader.read(velocity);
+		bytes_read += reader.read(angular_velocity);
+		return bytes_read;
+	}
 };
-#endif
-
-#endif

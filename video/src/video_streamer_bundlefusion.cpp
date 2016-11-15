@@ -6,7 +6,6 @@
 //  Created on: Nov 7, 2016
 //==================================================
 
-#define WITH_GSTREAMER 1
 #define SIMULATE_ZED 0
 #define DEBUG_IMAGE_COMPRESSION 0
 
@@ -27,19 +26,20 @@
 
 #include <opencv2/opencv.hpp>
 
-#if WITH_GSTREAMER
-    #include <gst/gst.h>
-    #include <gst/app/gstappsrc.h>
-    #include <gst/app/gstappsink.h>
-#endif
+#include <gst/gst.h>
+#include <gst/app/gstappsrc.h>
+#include <gst/app/gstappsink.h>
 
 #include <ait/common.h>
 #include <ait/math.h>
 #include <ait/video/video_source_zed.h>
 #include <ait/video/StereoNetworkSensorManager.h>
-#if WITH_GSTREAMER
 #include <ait/video/EncodingGstreamerPipeline.h>
-#endif
+
+// Test direct depth compression (FastLZ, zlib, Snappy)
+//#include <fastlz/fastlz.h>
+//#include <snappy/snappy.h>
+//#include <zlib.h>
 
 volatile bool g_abort;
 
@@ -50,8 +50,9 @@ void signalHandler(int sig)
 }
 
 // Stereo frame retrieve function
-bool retrieve_frame(ait::video::VideoSourceZED* video_ptr, cv::Mat& left_frame, cv::Mat& right_frame, cv::Mat& depth_frame)
+bool retrieveFrame(ait::video::VideoSourceZED* video_ptr, double* timestamp, cv::Mat& left_frame, cv::Mat& right_frame, cv::Mat& depth_frame)
 {
+    using clock = std::chrono::high_resolution_clock;
 //  cv::Size display_size(data->video_ptr->getWidth(), data->video_ptr->getHeight());
 //  cv::Mat left_grabbed_frame(display_size, CV_8UC4);
 //  cv::Mat right_grabbed_frame(display_size, CV_8UC4);
@@ -59,6 +60,7 @@ bool retrieve_frame(ait::video::VideoSourceZED* video_ptr, cv::Mat& left_frame, 
     if (!video_ptr->grab()) {
         throw std::runtime_error("Failed to grab next frame.");
     }
+    *timestamp = std::chrono::duration_cast<std::chrono::duration<double>>(clock::now().time_since_epoch());
     // Retrieve stereo and depth frames
     if (!video_ptr->retrieveLeft(&left_frame)) {
         throw std::runtime_error("Failed to retrieve left frame");
@@ -123,14 +125,15 @@ std::pair<bool, boost::program_options::variables_map> process_commandline(int a
     generic_options.add_options()
         ("help", "Produce help message")
         ("rotate", po::bool_switch()->default_value(false), "Rotate stereo images")
-        ("show", po::bool_switch()->default_value(false), "Render output")
+		("show", po::bool_switch()->default_value(false), "Render output")
+		("fps", po::value<double>()->default_value(15), "Frame-rate to stream")
         ;
 
     po::options_description zed_options("ZED options");
     zed_options.add_options()
         ("svo-file", po::value<std::string>(), "SVO file to use")
         ("mode", po::value<int>()->default_value(3), "ZED resolution mode")
-        ("fps", po::value<double>()->default_value(15), "Frame-rate to capture")
+        ("zed-fps", po::value<double>()->default_value(30), "Frame-rate to capture")
         ("zed-params", po::value<std::string>(), "ZED parameter file")
 //        ("calib-file", po::value<std::string>()->default_value("camera_calibration_stereo.yml"), "Stereo calibration file.")
         ;
@@ -149,23 +152,19 @@ std::pair<bool, boost::program_options::variables_map> process_commandline(int a
         ("max-depth-trunc", po::value<float>()->default_value(12.0f), "Maximum depth before it is truncated to be invalid")
         ;
 
-#if WITH_GSTREAMER
     po::options_description gstreamer_options("Gstreamer options");
     gstreamer_options.add_options()
       ("preprocess-branch", po::value<std::string>(), "Preprocessing branch description")
       ("encoder-branch", po::value<std::string>(), "Encoder branch description")
       ("display-branch", po::value<std::string>(), "Display branch description")
       ;
-#endif
 
     po::options_description options;
     options.add(generic_options);
     options.add(zed_options);
     options.add(network_options);
     options.add(frame_options);
-#if WITH_GSTREAMER
     options.add(gstreamer_options);
-#endif
     po::variables_map vm;
     po::store(po::command_line_parser(argc, argv).options(options).run(), vm);
     if (vm.count("help"))
@@ -179,7 +178,6 @@ std::pair<bool, boost::program_options::variables_map> process_commandline(int a
     return std::make_pair(true, vm);
 }
 
-#if WITH_GSTREAMER
 void initialize_gstramer(int argc, char** argv)
 {
     GError *gst_err;
@@ -189,16 +187,35 @@ void initialize_gstramer(int argc, char** argv)
         throw std::runtime_error("Unable to initialize gstreamer");
     }
 }
-#endif
+
+const cv::Mat& convertDepthFrameFloatToUint16(const cv::Mat& depth_frame)
+{
+    // Convert float to uint16_t depth image (scaled by 1000)
+    static cv::Mat depth_frame_uint16;
+    if (depth_frame_uint16.empty()
+        || depth_frame_uint16.rows != depth_frame.rows
+        || depth_frame_uint16.cols != depth_frame.cols) {
+        depth_frame_uint16 = cv::Mat(depth_frame.rows, depth_frame.cols, CV_16S);
+    }
+#pragma omp parallel for
+    for (int i = 0; i < depth_frame.rows * depth_frame.cols; ++i) {
+        float depth = depth_frame.at<float>(i);
+        if (std::isfinite(depth)) {
+            depth_frame_uint16.at<uint16_t>(i) = static_cast<uint16_t>(depth * 1000);
+        }
+        else {
+            depth_frame_uint16.at<uint16_t>(i) = 0.0;
+        }
+    }
+    return depth_frame_uint16;
+}
 
 int main(int argc, char** argv)
 {
     namespace avo = ait::video;
     namespace po = boost::program_options;
 
-#if WITH_GSTREAMER
     initialize_gstramer(argc, argv);
-#endif
 
     try
     {
@@ -238,8 +255,8 @@ int main(int argc, char** argv)
         }
     #endif
         std::cout << "Done." << std::endl;
-        if (vm.count("fps")) {
-            if (!video_ptr->setFPS(vm["fps"].as<double>())) {
+        if (vm.count("zed-fps")) {
+            if (!video_ptr->setFPS(vm["zed-fps"].as<double>())) {
                 std::cerr << "Setting camera FPS failed" << std::endl;
             }
         }
@@ -284,14 +301,8 @@ int main(int argc, char** argv)
         manager.setInverseDepth(inverse_depth);
         manager.start();
 
-        // We try to push frames with desired framerate into pipeline, even if camera framerate is different
-        double desired_framerate;
-        if (vm.count("fps")) {
-            desired_framerate = vm["fps"].as<double>();
-        }
-        else {
-            desired_framerate = camera_framerate;
-        }
+        // We try to push frames with streaming framerate into pipeline, even if camera framerate is different
+        double stream_framerate = vm["fps"].as<double>();
 
         // We keep these outside the loop. This way the memory is not allocated on each iteration
         cv::Mat left_frame, right_frame, depth_frame;
@@ -303,7 +314,7 @@ int main(int argc, char** argv)
         terminate = false;
 
         ait::RateCounter frame_rate_counter;
-        ait::PaceMaker pace(desired_framerate);
+		ait::PaceMaker pace(stream_framerate);
         while (!terminate && !g_abort) {
             // Make sure pipeline starts after some time. Otherwise we quit.
             if (!manager.getPipeline().isPlaying()) {
@@ -315,7 +326,8 @@ int main(int argc, char** argv)
             }
 
 #if !SIMULATE_ZED
-            retrieve_frame(video_ptr, left_frame, right_frame, depth_frame);
+            double timestamp;
+            retrieveFrame(video_ptr, &timestamp, left_frame, right_frame, depth_frame);
 
             // For upside down stere-camera
             if (rotate) {
@@ -336,7 +348,27 @@ int main(int argc, char** argv)
                 }
             }
 
-            manager.pushNewStereoFrame(left_frame, right_frame, depth_frame);
+//            // Test direct depth compression (FastLZ, zlib, Snappy)
+//            using clock = std::chrono::high_resolution_clock;
+//            cv::Mat depth_frame_uint16 = convertDepthFrameFloatToUint16(depth_frame);
+//            if (!prev_depth_frame_uint16.empty()) {
+//                size_t input_size = depth_frame_uint16.rows * depth_frame_uint16.cols * depth_frame_uint16.elemSize();
+//                size_t output_size = static_cast<size_t>(input_size * 1.1);
+////                size_t output_size = snappy::MaxCompressedLength(input_size);
+//                uint8_t* output = new uint8_t[output_size];
+//                auto start_time = clock::now();
+//    //            size_t compressed_size = static_cast<int>(fastlz_compress_level(1, depth_frame_uint16.data, input_size, output));
+//                size_t compressed_size;
+////                snappy::RawCompress((const char*)dframe.data, input_size, (char*)output, &compressed_size);
+//                int level = 5;
+//                compress2((Bytef*)output, &compressed_size, (const Bytef*)depth_frame_uint16.data, input_size, level);
+//                auto stop_time = clock::now();
+//                delete[] output;
+//                auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(stop_time - start_time).count();
+//                std::cout << "Compressed " << input_size/1024. << " kB to " << compressed_size/1024. << " kB in " << dt << " ms" << std::endl;
+//            }
+
+            manager.pushNewStereoFrame(timestamp, left_frame, right_frame, depth_frame);
 #endif
 
             frame_rate_counter.count();

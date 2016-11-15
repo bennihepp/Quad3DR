@@ -77,6 +77,10 @@ if(WITH_ZED)
 		src/GstMetaCorrespondence.cpp
 	    ../stereo/src/stereo_calibration.cpp
 	    ../src/common.cpp
+	    ../external/fastlz/fastlz.c
+	    ../external/snappy/snappy.cc
+	    ../external/snappy/snappy-stubs-internal.cc
+	    ../external/snappy/snappy-sinksource.cc
 	)
 	target_compile_definitions(video_streamer_bundlefusion PUBLIC WITH_ZED=1)
 	target_link_libraries(video_streamer_bundlefusion
@@ -127,6 +131,6 @@ if(WITH_ZED)
 		    ${GLIB_LIBRARIES}
 		    ${CUDA_CUDA_LIBRARY} ${CUDA_CUDART_LIBRARY} ${CUDA_npp_LIBRARY}
 		)
-		target_link_libraries(video_streamer_bundlefusion_drone ${ROS_LIBRARIES} ${DJI_LIBRARY})
+		target_link_libraries(video_streamer_bundlefusion_drone ${ROS_LIBRARIES} ${DJI_LIBRARY} realsense)
 	endif()
 endif()
