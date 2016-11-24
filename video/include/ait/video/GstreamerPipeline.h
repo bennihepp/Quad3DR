@@ -271,7 +271,11 @@ class SPSCFixedQueue
 {
 public:
 	SPSCFixedQueue(unsigned int max_queue_size = 5)
-		: max_queue_size_(max_queue_size) {
+		: max_queue_size_(max_queue_size), discard_everything_(false) {
+	}
+
+	void setDiscardEverything(bool discard_everything) {
+		discard_everything_ = discard_everything;
 	}
 
 	unsigned int getMaxQueueSize() const {
@@ -316,17 +320,32 @@ public:
 		return queue_filled_condition_;
 	}
 
-	bool pushBack(T& element) {
-		if (queue_.size() < max_queue_size_) {
-			{
-				std::lock_guard<std::mutex> lock(mutex_);
-				queue_.push_back(std::move(element));
+	bool pushBack(T& element, bool block = false) {
+		if (block) {
+			std::unique_lock<std::mutex> lock(mutex_);
+			while (queue_.size() >= max_queue_size_ && !discard_everything_) {
+				queue_space_available_condition_.wait_for(lock, std::chrono::milliseconds(100),
+					[&]() { return queue_.size() < max_queue_size_ || discard_everything_; });
 			}
+			if (discard_everything_) {
+				return false;
+			}
+			queue_.push_back(std::move(element));
 			queue_filled_condition_.notify_one();
 			return true;
 		}
 		else {
-			return false;
+			if (queue_.size() < max_queue_size_) {
+				{
+					std::lock_guard<std::mutex> lock(mutex_);
+					queue_.push_back(std::move(element));
+				}
+				queue_filled_condition_.notify_one();
+				return true;
+			}
+			else {
+				return false;
+			}
 		}
 	}
 
@@ -334,6 +353,7 @@ private:
 	T popFrontWithoutLocking() {
 		T element(std::move(queue_.front()));
 		queue_.pop_front();
+		queue_space_available_condition_.notify_one();
 		return element;
 	}
 
@@ -341,6 +361,8 @@ private:
 	unsigned int max_queue_size_;
 	std::mutex mutex_;
 	std::condition_variable queue_filled_condition_;
+	std::condition_variable queue_space_available_condition_;
+	std::atomic<bool> discard_everything_;
 };
 
 template <typename TUserData>
@@ -365,19 +387,32 @@ public:
 		}
 	};
 
-	AppSrcSinkQueue(unsigned int max_queue_size = 5, unsigned int user_data_queu_size = 3)
-		: Base(max_queue_size), output_byte_counter_(0), input_byte_counter_(0),
-		src_overflow_counter_(0), sink_overflow_counter_(0), correspondence_fail_counter_(0) {
+	enum DiscardMode {
+		DISCARD_INPUT_FRAMES,
+		DISCARD_OUTPUT_FRAMES,
+	};
+
+	AppSrcSinkQueue(const DiscardMode discard_mode, unsigned int max_output_queue_size = 5, unsigned int max_input_queue_size = 3)
+		: Base(max_output_queue_size),
+		discard_mode_(discard_mode),
+		output_byte_counter_(0), input_byte_counter_(0),
+		src_overflow_counter_(0), sink_overflow_counter_(0), correspondence_fail_counter_(0),
+		max_input_queue_size_(max_input_queue_size) {
 	}
 
 	bool pushData(GstAppSrc* appsrc, GstBufferWrapper buffer, const TUserData& user_data) {
-		gst_buffer_ref(buffer.get());
 		AIT_ASSERT(GST_IS_BUFFER(buffer.get()));
+		std::lock_guard<std::mutex> lock(user_data_queue_mutex_);
+		if (discard_mode_ == DISCARD_INPUT_FRAMES && user_data_queue_.size() >= max_input_queue_size_) {
+			return false;
+		}
+
+		// Increase refcount because gst_app_src_push_buffer will take ownership
+		gst_buffer_ref(buffer.get());
 		//        std::cout << "Pushing buffer into appsrc" << std::endl;
 		GstFlowReturn ret = gst_app_src_push_buffer(appsrc, buffer.get());
 		//    std::cout << "Done" << std::endl;
 		if (ret == GST_FLOW_OK) {
-			std::lock_guard<std::mutex> lock(user_data_queue_mutex_);
 			if (user_data_queue_.size() >= MAX_USER_DATA_QUEUE_SIZE) {
 				// This is kind of hacky to ensure the user data queue is not blocking new frames
 				user_data_queue_.pop_front();
@@ -478,11 +513,11 @@ private:
 			std::tuple<GstreamerBufferInfo, TUserData> tuple;
 #if !SIMULATE_ZED
 			{
-				if (user_data_queue_.empty()) {
-					throw ANNOTATE_EXC(Error, "Received output frame but user data queue is empty");
-					//std::cerr << "ERROR: Received output frame but user data queue is empty." << std::endl;
-				}
 				std::lock_guard<std::mutex> lock(user_data_queue_mutex_);
+				if (user_data_queue_.empty()) {
+					std::cerr << "ERROR: Received gstreamer sample but user data queue is empty. Discarding sample." << std::endl;
+					return GST_FLOW_OK;
+				}
 				do {
 					tuple = std::move(user_data_queue_.front());
 					user_data_queue_.pop_front();
@@ -501,7 +536,8 @@ private:
 			GST_BUFFER_OFFSET_END(buffer.get()) = buffer_info.offset_end;
 
 			ElementType output_tuple = std::make_tuple(std::move(buffer), user_data);
-			if (!Base::pushBack(output_tuple)) {
+			bool block = discard_mode_ != DiscardMode::DISCARD_OUTPUT_FRAMES;
+			if (!Base::pushBack(output_tuple, block)) {
 				++sink_overflow_counter_;
 				if (sink_overflow_counter_ >= FRAME_DROP_REPORT_RATE) {
 					std::cout << "WARNING: Appsrcsink output queue is full. Dropped " << FRAME_DROP_REPORT_RATE << " frames" << std::endl;
@@ -524,6 +560,9 @@ private:
 	unsigned int src_overflow_counter_;
 	unsigned int sink_overflow_counter_;
 	unsigned int correspondence_fail_counter_;
+
+	unsigned int max_input_queue_size_;
+	DiscardMode discard_mode_;
 };
 
 template <typename TUserData>
@@ -536,10 +575,11 @@ public:
 
 	using OutputTupleType = std::tuple<GstBufferWrapper, TUserData>;
 
-	GstreamerPipeline()
+	GstreamerPipeline(const typename AppSrcSinkQueue<TUserData>::DiscardMode discard_mode, unsigned int max_output_queue_size = 5, unsigned int max_input_queue_size = 3)
 		: pipeline_(nullptr), pipeline_state(GST_STATE_NULL),
 		appsink_(nullptr), appsrc_(nullptr),
-		watchdog_counter_(0), frame_counter_(0) {
+		appsrcsink_queue_(discard_mode, max_output_queue_size, max_input_queue_size),
+		watchdog_counter_(0), delivering_appsink_sample_(false), frame_counter_(0) {
 	}
 
 	GstreamerPipeline(const GstreamerPipeline&) = delete;
@@ -666,7 +706,7 @@ public:
 		AIT_ASSERT(GST_IS_BUFFER(buffer.get()));
 
 		clock::time_point now = clock::now();
-		if (now - last_appsink_sample_time_ >= WATCHDOG_TIMEOUT) {
+		if (!delivering_appsink_sample_ && now - last_appsink_sample_time_ >= WATCHDOG_TIMEOUT) {
 			++watchdog_counter_;
 			if (watchdog_counter_ >= WATCHDOG_RESET_COUNT) {
 				std::cout << "WARNING: Pipeline watchdog activated. Restarting pipeline" << std::endl;
@@ -698,15 +738,6 @@ public:
 		GST_BUFFER_OFFSET(buffer.get()) = frame_counter_;
 		GST_BUFFER_OFFSET_END(buffer.get()) = GST_BUFFER_OFFSET_NONE;
 
-		// TODO: get from appsrc caps
-		//double frame_period = 1 / 10.;
-		//static GstClockTime time_start = gst_clock_get_time(clock);
-		//GST_BUFFER_PTS(buffer.get()) = time_start + static_cast<guint64>(GST_SECOND * frame_counter * frame_period);
-		//GST_BUFFER_DTS(buffer.get()) = GST_CLOCK_TIME_NONE;
-		//GST_BUFFER_DURATION(buffer.get()) = static_cast<guint64>(GST_SECOND * frame_period);
-		//GST_BUFFER_OFFSET(buffer.get()) = frame_counter;
-		//GST_BUFFER_OFFSET_END(buffer.get()) = GST_BUFFER_OFFSET_NONE;
-
 		// Disable timing information in buffer
 		//static unsigned int buffer_counter = 0;
 		//GST_BUFFER_PTS(buffer.get()) = GST_CLOCK_TIME_NONE;
@@ -718,10 +749,13 @@ public:
 
 		attachMetadataToBuffer(buffer, static_cast<int>(GST_BUFFER_OFFSET(buffer.get())));
 
-		++frame_counter_;
-		time_previous = time_now;
+		bool result = appsrcsink_queue_.pushData(appsrc_, std::move(buffer), user_data);
+		if (result) {
+			++frame_counter_;
+			time_previous = time_now;
+		}
 
-		return appsrcsink_queue_.pushData(appsrc_, std::move(buffer), user_data);
+		return result;
 	}
 
 	void start() {
@@ -730,6 +764,8 @@ public:
 		if (message_thread_.joinable()) {
 			stop();
 		}
+		appsrcsink_queue_.setDiscardEverything(false);
+		terminate_ = false;
 		// Start playing
 		GstStateChangeReturn ret = gst_element_set_state(GST_ELEMENT(pipeline_), GST_STATE_PLAYING);
 		if (ret == GST_STATE_CHANGE_FAILURE) {
@@ -738,7 +774,6 @@ public:
 		}
 		watchdog_counter_ = 0;
 		last_appsink_sample_time_ = clock::now();
-		terminate_ = false;
 		message_thread_ = std::thread([this]() {
 			this->gstreamerLoop();
 		});
@@ -746,11 +781,15 @@ public:
 
 	void stop() {
 		ensureInitialized();
-		gst_element_set_state(GST_ELEMENT(pipeline_), GST_STATE_NULL);
+		appsrcsink_queue_.setDiscardEverything(true);
 		terminate_ = true;
+		std::cout << "GstreamerPipeline: Setting pipeline state" << std::endl;
+		gst_element_set_state(GST_ELEMENT(pipeline_), GST_STATE_NULL);
+		std::cout << "GstreamerPipeline: Stopping pipeline" << std::endl;
 		if (message_thread_.joinable()) {
 			message_thread_.join();
 		}
+		std::cout << "GstreamerPipeline: Pipeline stopped" << std::endl;
 	}
 
 	GstState getState() const {
@@ -837,8 +876,10 @@ private:
 
 	GstFlowReturn newAppsinkSampleCallback(GstAppSink* appsink) {
 		AIT_ASSERT(appsink == appsink_);
-		last_appsink_sample_time_ = clock::now();
+		delivering_appsink_sample_ = true;
 		return appsrcsink_queue_.newSampleCallback(appsink_);
+		last_appsink_sample_time_ = clock::now();
+		delivering_appsink_sample_ = false;
 	}
 
 	GstPipeline* pipeline_;
@@ -851,6 +892,7 @@ private:
 	guint64 frame_counter_;
 	unsigned int watchdog_counter_;
 	std::chrono::time_point<clock> last_appsink_sample_time_;
+	std::atomic<bool> delivering_appsink_sample_;
 
 	std::atomic_bool terminate_;
 	std::thread message_thread_;

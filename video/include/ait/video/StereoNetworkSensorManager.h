@@ -47,6 +47,7 @@ namespace ait
 			}
 
 			virtual ~StereoNetworkSensorManager() {
+			    stop();
 			}
 
 			void setUserParameters(const StereoFrameParameters& user_parameters) {
@@ -117,7 +118,7 @@ namespace ait
 			}
 
             //! Push a new stereo frame into the pipeline. Also save corresponding user data. Not thread-safe!
-            void pushNewStereoFrame(double timestamp, const cv::Mat& left_frame, const cv::Mat& right_frame, const cv::Mat& depth_frame,
+            bool pushNewStereoFrame(double timestamp, const cv::Mat& left_frame, const cv::Mat& right_frame, const cv::Mat& depth_frame,
                     const StereoFrameLocationInfo& location_info = StereoFrameLocationInfo()) {
                 //cv::cvtColor(left_frame, left_frame, CV_BGRA2RGBA);
                 //cv::cvtColor(right_frame, right_frame, CV_BGRA2RGBA);
@@ -126,7 +127,7 @@ namespace ait
                 frame_info.timestamp = timestamp;
                 const cv::Mat& merged_frame = processFrames(left_frame, right_frame, depth_frame, frame_info);
 
-                pipeline_.pushInput(merged_frame, std::make_tuple(frame_info, location_info));
+                return pipeline_.pushInput(merged_frame, std::make_tuple(frame_info, location_info));
             }
 
 		protected:

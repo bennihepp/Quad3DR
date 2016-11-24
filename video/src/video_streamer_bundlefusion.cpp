@@ -60,7 +60,7 @@ bool retrieveFrame(ait::video::VideoSourceZED* video_ptr, double* timestamp, cv:
     if (!video_ptr->grab()) {
         throw std::runtime_error("Failed to grab next frame.");
     }
-    *timestamp = std::chrono::duration_cast<std::chrono::duration<double>>(clock::now().time_since_epoch());
+    *timestamp = std::chrono::duration_cast<std::chrono::duration<double>>(clock::now().time_since_epoch()).count();
     // Retrieve stereo and depth frames
     if (!video_ptr->retrieveLeft(&left_frame)) {
         throw std::runtime_error("Failed to retrieve left frame");
@@ -307,8 +307,9 @@ int main(int argc, char** argv)
         // We keep these outside the loop. This way the memory is not allocated on each iteration
         cv::Mat left_frame, right_frame, depth_frame;
 
-        std::chrono::seconds wait_for_playing_timeout(3);
-        auto start_time = std::chrono::high_resolution_clock::now();
+        // TODO
+//        std::chrono::seconds wait_for_playing_timeout(3);
+//        auto start_time = std::chrono::high_resolution_clock::now();
 
         std::atomic_bool terminate;
         terminate = false;
@@ -316,14 +317,15 @@ int main(int argc, char** argv)
         ait::RateCounter frame_rate_counter;
 		ait::PaceMaker pace(stream_framerate);
         while (!terminate && !g_abort) {
+            // TODO
             // Make sure pipeline starts after some time. Otherwise we quit.
-            if (!manager.getPipeline().isPlaying()) {
-                auto now = std::chrono::high_resolution_clock::now();
-                if (now - start_time > wait_for_playing_timeout) {
-                    std::cerr << "ERROR: Pipeline did not start playing in due time" << std::endl;
-                    break;
-                }
-            }
+//            if (!manager.getPipeline().isPlaying()) {
+//                auto now = std::chrono::high_resolution_clock::now();
+//                if (now - start_time > wait_for_playing_timeout) {
+//                    std::cerr << "ERROR: Pipeline did not start playing in due time" << std::endl;
+//                    break;
+//                }
+//            }
 
 #if !SIMULATE_ZED
             double timestamp;
@@ -368,23 +370,26 @@ int main(int argc, char** argv)
 //                std::cout << "Compressed " << input_size/1024. << " kB to " << compressed_size/1024. << " kB in " << dt << " ms" << std::endl;
 //            }
 
-            manager.pushNewStereoFrame(timestamp, left_frame, right_frame, depth_frame);
-#endif
+            if (manager.pushNewStereoFrame(timestamp, left_frame, right_frame, depth_frame)) {
+                frame_rate_counter.count();
+                double rate;
+                if (frame_rate_counter.reportRate(rate)) {
+                    std::cout << "Running with " << rate << " Hz" << std::endl;
+                }
 
-            frame_rate_counter.count();
-            double rate;
-            if (frame_rate_counter.reportRate(rate)) {
-                std::cout << "Running with " << rate << " Hz" << std::endl;
-            }
-
-            if (show) {
-                cv::imshow("left frame", left_frame);
-                cv::imshow("right frame", right_frame);
-                cv::imshow("depth frame", depth_frame);
-                if (cv::waitKey(1) == 27) {
-                    terminate = true;
+                if (show) {
+                    cv::imshow("left frame", left_frame);
+                    cv::imshow("right frame", right_frame);
+                    cv::imshow("depth frame", depth_frame);
+                    if (cv::waitKey(1) == 27) {
+                        terminate = true;
+                    }
                 }
             }
+            else {
+                std::cout << "Discarding frame" << std::endl;
+            }
+#endif
 
             pace.sleep();
         }

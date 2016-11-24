@@ -84,9 +84,13 @@ public:
 	}
 
 	~BoostNetworkClientTCP() {
+	    std::cout << "BoostNetworkClientTCP: resetting work" << std::endl;
 		io_service_work_.reset();
+        std::cout << "BoostNetworkClientTCP: closing" << std::endl;
 		close();
+        std::cout << "BoostNetworkClientTCP: stopping io_service" << std::endl;
 		io_service_.stop();
+        std::cout << "BoostNetworkClientTCP: joining thread" << std::endl;
 		io_service_thread_.join();
 	}
 

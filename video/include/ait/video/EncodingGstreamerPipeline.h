@@ -19,7 +19,8 @@ class EncodingGstreamerPipeline : public GstreamerPipeline<TUserData>
 
 public:
 	EncodingGstreamerPipeline()
-		: frame_counter_(0), negotiated_(false) {
+		: GstreamerPipeline<TUserData>(AppSrcSinkQueue<TUserData>::DiscardMode::DISCARD_INPUT_FRAMES, 2, 1),
+		frame_counter_(0), negotiated_(false) {
 		pre_process_branch_str_ = "videoconvert";
 		display_branch_str_ = "queue ! autovideosink";
 		//display_branch_str_ = "queue ! videoconvert ! video/x-raw, format=RGBA ! videoconvert ! autovideosink";
@@ -44,7 +45,7 @@ public:
 		display_branch_str_ = display_branch_str;
 	}
 
-	void pushInput(const cv::Mat& frame_in, const TUserData& user_data)
+	bool pushInput(const cv::Mat& frame_in, const TUserData& user_data)
 	{
 		cv::Mat frame;
 		if (frame_in.isContinuous()) {
@@ -151,9 +152,7 @@ public:
 		//	std::cerr << "pushNewFrame() failed: push-buffer signal returned error" << std::endl;
 		//}
 
-		if (!Base::pushInput(buffer, user_data)) {
-			std::cerr << "pushNewFrame() failed: push-buffer signal returned error" << std::endl;
-		}
+		return Base::pushInput(buffer, user_data);
 	}
 
 protected:

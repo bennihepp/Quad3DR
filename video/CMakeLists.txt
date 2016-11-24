@@ -74,13 +74,13 @@ if(WITH_ZED)
 	    src/video_streamer_bundlefusion.cpp
 	    src/video_source.cpp
 	    src/video_source_zed.cpp
-		src/GstMetaCorrespondence.cpp
+			src/GstMetaCorrespondence.cpp
 	    ../stereo/src/stereo_calibration.cpp
 	    ../src/common.cpp
-	    ../external/fastlz/fastlz.c
-	    ../external/snappy/snappy.cc
-	    ../external/snappy/snappy-stubs-internal.cc
-	    ../external/snappy/snappy-sinksource.cc
+#	    ../external/fastlz/fastlz.c
+#	    ../external/snappy/snappy.cc
+#	    ../external/snappy/snappy-stubs-internal.cc
+#	    ../external/snappy/snappy-sinksource.cc
 	)
 	target_compile_definitions(video_streamer_bundlefusion PUBLIC WITH_ZED=1)
 	target_link_libraries(video_streamer_bundlefusion

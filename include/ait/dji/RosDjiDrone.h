@@ -29,6 +29,14 @@ public:
         SAFE_DELETE(dji_drone_);
     }
 
+    const DJIDrone& getDrone() const {
+        return *dji_drone_;
+    }
+
+    DJIDrone& getDrone() {
+        return *dji_drone_;
+    }
+
     DJIDrone& operator()() {
         return *dji_drone_;
     }
