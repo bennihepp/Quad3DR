@@ -1,0 +1,14 @@
+
+s_meshFilenames[0] = "./data/dabrovic-sponza/sponza.obj";
+
+s_imageWidth = 640;		// render width
+s_imageHeight = 480;	// render height
+s_cameraFov = 60.0f; 	// degrees
+
+//noise model for depth -- TODO implement
+s_addNoiseToDepth = false;
+s_depthNoiseSigma = 0.01f;
+
+s_filterDepthMap = true; 	//bilateral filter depth map
+s_depthSigmaD = 5.0f;		//bilateral filter sigma domain
+s_depthSigmaR = 0.1f;		//bilateral filter sigma range
