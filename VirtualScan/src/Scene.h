@@ -22,7 +22,7 @@ public:
 					ColorImageR8G8B8A8 tex;
 					FreeImageWrapper::loadImage(texFile, tex);
 					//tex.setPixels(vec4uc(255, 0, 0, 255));	//debug
-					m_texture.load(g, tex);
+					m_texture.init(g, tex);
 					std::cout << "done!" << std::endl;
 				}
 				catch (const std::exception& e) {
