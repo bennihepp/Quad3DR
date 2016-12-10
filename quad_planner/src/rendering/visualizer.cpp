@@ -50,8 +50,7 @@ static std::ostream& operator<<(std::ostream& stream, const glm::mat4 &mat)
 }
 
 Visualizer::Visualizer()
-: window_(nullptr), vertex_array_id_(0),
-  width_(0), height_(0),
+: window_(nullptr), width_(0), height_(0), vertex_array_id_(0),
   left_button_pressed_(false), right_button_pressed_(false)
 {
 }
@@ -72,7 +71,7 @@ void APIENTRY glDebugOutput(GLenum source,
                             GLenum severity,
                             GLsizei length,
                             const GLchar *message,
-                            void *userParam)
+                            const void *userParam)
 {
     // ignore non-significant error/warning codes
     if(id == 131169 || id == 131185 || id == 131218 || id == 131204) return;
@@ -354,9 +353,9 @@ void Visualizer::resetView(bool reset_scale /*= true*/)
 void Visualizer::updateMatricesFromInputs()
 {
   // TODO: Should be done per frame for everyone
-  static double last_time = glfwGetTime();
-  double current_time = glfwGetTime();
-  double deltaTime = current_time - last_time;
+//  static double last_time = glfwGetTime();
+//  double current_time = glfwGetTime();
+//  double deltaTime = current_time - last_time;
 
   // TODO: These should probably also be members
   static double last_cursor_pos_x;
@@ -428,7 +427,7 @@ void Visualizer::updateMatricesFromInputs()
     right_button_pressed_ = false;
   }
 
-  last_time = current_time;
+//  last_time = current_time;
 }
 
 void Visualizer::run(std::shared_ptr<ob::ProblemDefinition> pdef)
@@ -442,7 +441,7 @@ void Visualizer::run(std::shared_ptr<ob::ProblemDefinition> pdef)
   const ob::PathPtr path = pdef->getSolutionPath();
   const og::PathGeometric *geo_path = dynamic_cast<og::PathGeometric*>(path.get());
   std::vector<SceneObject> objects;
-  for (int i = 1; i < geo_path->getStateCount(); ++i) {
+  for (size_t i = 1; i < geo_path->getStateCount(); ++i) {
     auto state1 = dynamic_cast<const StateSpaceT::StateType*>(geo_path->getState(i-1));
     auto state2 = dynamic_cast<const StateSpaceT::StateType*>(geo_path->getState(i));
 //    auto state1_pos = state1->as<ompl::base::RealVectorStateSpace::StateType>(0);
@@ -455,7 +454,7 @@ void Visualizer::run(std::shared_ptr<ob::ProblemDefinition> pdef)
   }
 
   std::vector<std::shared_ptr<ColorLines3D>> lines;
-  double line_length = 10;
+//  double line_length = 10;
   auto p0 = Eigen::Vector3d(0, 0, .15);
   auto p1 = Eigen::Vector3d(-4.73269, -0.200741, 1.3174);
   auto p2 = Eigen::Vector3d(-6.88227, -0.0225858, 5.4814);

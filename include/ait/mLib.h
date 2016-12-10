@@ -30,7 +30,6 @@
 #include "mLibCore.h"
 #include "mLibFreeImage.h"
 #include "mLibDepthCamera.h"
-#include "mLibZLib.h"
 //#include "mLibLodePNG.h"
 //#include "mLibD3D11.h"
 

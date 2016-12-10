@@ -29,10 +29,6 @@ class Visualizer
   int width_;
   int height_;
 
-  // Input states
-  bool left_button_pressed_;
-  bool right_button_pressed_;
-
   std::shared_ptr<ShaderProgram> octomap_shader_ptr_;
   std::shared_ptr<ShaderProgram> arcball_shader_ptr_;
   std::shared_ptr<ShaderProgram> trajectory_shader_ptr_;
@@ -43,6 +39,10 @@ class Visualizer
   SceneObject arcball2_so_;
 
   GLuint vertex_array_id_;
+
+  // Input states
+  bool left_button_pressed_;
+  bool right_button_pressed_;
 
   glm::mat4 view_;
   glm::mat4 projection_;
