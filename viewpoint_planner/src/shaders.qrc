@@ -1,0 +1,15 @@
+<RCC>
+    <qresource prefix="/">
+        <file>shaders/octomap_shader.vertex</file>
+        <file>shaders/octomap_shader.geometry</file>
+        <file>shaders/octomap_shader.fragment</file>
+        <file>shaders/triangles.v.glsl</file>
+        <file>shaders/triangles.f.glsl</file>
+        <file>shaders/lines.v.glsl</file>
+        <file>shaders/lines.g.glsl</file>
+        <file>shaders/lines.f.glsl</file>
+        <file>shaders/points.v.glsl</file>
+        <file>shaders/points.f.glsl</file>
+    </qresource>
+</RCC>
+
