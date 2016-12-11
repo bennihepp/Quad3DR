@@ -54,6 +54,7 @@ QT5_WRAP_UI(viewpoint_planner_UIS_H src/viewer_settings_panel.ui src/viewer_info
 add_executable(viewpoint_planner WIN32
   src/viewpoint_planner_app.cpp
   ../src/mLib.cpp
+  ../src/utilities.cpp
   src/viewer_window.h
   src/viewer_window.cpp
   src/viewer_widget.h
@@ -62,6 +63,8 @@ add_executable(viewpoint_planner WIN32
   src/viewer_settings_panel.h
   src/octree_drawer.h
   src/octree_drawer.cpp
+  src/scene_object.h
+  src/scene_object.cpp
   ${viewpoint_planner_UIS_H}
 #  src/octomap_renderer.h
 #  src/octomap_renderer.cpp

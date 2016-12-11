@@ -25,7 +25,7 @@ ViewerWindow::ViewerWindow(ViewpointPlanner* planner, QWidget *parent)
     settings_dock->setWidget(settings_panel_);
     this->addDockWidget(Qt::RightDockWidgetArea, settings_dock);
 
-    viewer_widget_ = new ViewerWidget(settings_panel_, this);
+    viewer_widget_ = ViewerWidget::create(settings_panel_, this);
     this->setCentralWidget(viewer_widget_);
     viewer_widget_->showOctree(planner_->getOctree());
     viewer_widget_->showSparseReconstruction(planner_->getSparseReconstruction());
@@ -45,7 +45,7 @@ ViewerWindow::ViewerWindow(ViewpointPlanner* planner, QWidget *parent)
     camera_pose_timer_ = new QTimer(this);
 //    camera_pose_timer_->setSingleShot(false);
     connect(camera_pose_timer_, SIGNAL(timeout()), this, SLOT(onCameraPoseTimeout()));
-//    camera_pose_timer_->start(1000);
+    camera_pose_timer_->start(1000);
 }
 
 ViewerWindow::~ViewerWindow() {}

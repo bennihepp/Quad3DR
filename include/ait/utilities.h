@@ -8,26 +8,22 @@
 
 #pragma once
 
+#include <string>
 #include <vector>
 #include <utility>
 #include <cstdint>
+#include <chrono>
+#include <thread>
 
 namespace ait
 {
 
-class Clock
-{
-  Clock() = delete;
-
-public:
-  static std::int64_t getTickCount();
-  static double getTickFrequency();
-};
+using Clock = std::chrono::high_resolution_clock;
 
 class RateCounter
 {
-  int counter_;
-  std::int64_t start_ticks_;
+  std::uint64_t counter_;
+  Clock::time_point start_time_;
 
 public:
   RateCounter(bool do_start=true);
@@ -37,30 +33,29 @@ public:
   void increment();
   void increment(int n);
 
-  std::int64_t getCounts() const;
+  std::uint64_t getCounts() const;
   double getElapsedTime() const;
-  std::pair<std::int64_t, double> getCountsAndElapsedTime() const;
+  std::pair<std::uint64_t, double> getCountsAndElapsedTime() const;
   double getRate() const;
   double getRateAndReset();
 
-  double printRate(const std::string &name) const;
-  double printRateAndReset(const std::string &name);
+  double printRate(const std::string& name) const;
+  double printRateAndReset(const std::string& name);
 };
 
 class Timer
 {
-  double timing_;
-  bool running;
+  Clock::time_point time_;
 
 public:
-  Timer(bool startTimer=true);
+  Timer();
 
-  void start();
+  void reset();
   double getElapsedTime() const;
-  double stop();
+  uint64_t getElapsedTimeMs() const;
 
   double printTiming(const std::string &name) const;
-  double stopAndPrintTiming(const std::string &name);
+  uint64_t printTimingMs(const std::string &name) const;
 
 };
 
@@ -105,17 +100,5 @@ private:
     double stopAndPrintTiming(const std::string &name);
   };
 #endif
-
-////////////////////////
-// File system utilities
-////////////////////////
-
-template <typename... T>
-std::string joinPaths(T const&... paths) {
-  boost::filesystem::path result;
-  bool _[]{false, (result /= boost::filesystem::path(paths), false)...};
-  static_cast<void>(_);
-  return result.string();
-}
 
 } /* namespace ait */

@@ -70,36 +70,46 @@ public:
     }
 
 private:
-    static std::unique_ptr<SparseReconstruction>readSparseReconstruction(std::string path) {
-        std::unique_ptr<SparseReconstruction> sparse_recon(new SparseReconstruction());
-        sparse_recon->read(path);
-        return sparse_recon;
-    }
+  static std::unique_ptr<SparseReconstruction>readSparseReconstruction(std::string path) {
+    ait::Timer timer;
+    std::unique_ptr<SparseReconstruction> sparse_recon(new SparseReconstruction());
+    sparse_recon->read(path);
+    timer.printTiming("Loading sparse reconstruction");
+    return sparse_recon;
+  }
 
-    static std::unique_ptr<ViewpointPlanner::OctomapType> readOctree(std::string filename, bool binary=false) {
-        std::unique_ptr<ViewpointPlanner::OctomapType> octree;
-        if (binary) {
-            octree.reset(new ViewpointPlanner::OctomapType(filename));
-        }
-        else {
-            octree.reset(reinterpret_cast<ViewpointPlanner::OctomapType*>(ViewpointPlanner::OctomapType::read(filename)));
-        }
-        if (!octree) {
-          throw std::runtime_error("Unable to read octomap file");
-        }
-
-        std::cout << "Loaded octree" << std::endl;
-        std::cout << "Octree has " << octree->getNumLeafNodes() << " leaf nodes and " << octree->size() << " total nodes" << std::endl;
-        std::cout << "Metric extents:" << std::endl;
-        double x, y, z;
-        octree->getMetricSize(x, y, z);
-        std::cout << "  size=(" << x << ", " << y << ", " << z << ")" << std::endl;
-        octree->getMetricMin(x, y, z);
-        std::cout << "   min=(" << x << ", " << y << ", " << z << ")" << std::endl;
-        octree->getMetricMax(x, y, z);
-        std::cout << "   max=(" << x << ", " << y << ", " << z << ")" << std::endl;
-        return octree;
+  static std::unique_ptr<ViewpointPlanner::OctomapType> readOctree(std::string filename, bool binary=false) {
+    ait::Timer timer;
+    std::unique_ptr<ViewpointPlanner::OctomapType> octree;
+    if (binary) {
+      octree.reset(new ViewpointPlanner::OctomapType(filename));
     }
+    else {
+      octree.reset(reinterpret_cast<ViewpointPlanner::OctomapType*>(ViewpointPlanner::OctomapType::read(filename)));
+    }
+    if (!octree) {
+      throw std::runtime_error("Unable to read octomap file");
+    }
+    timer.printTiming("Loading octree");
+
+    std::cout << "Loaded octree" << std::endl;
+    std::cout << "Octree has " << octree->getNumLeafNodes() << " leaf nodes and " << octree->size() << " total nodes" << std::endl;
+    std::cout << "Metric extents:" << std::endl;
+    double x, y, z;
+    timer = ait::Timer();
+    octree->getMetricSize(x, y, z);
+    timer.printTiming("Computing octree size");
+    std::cout << "  size=(" << x << ", " << y << ", " << z << ")" << std::endl;
+    timer = ait::Timer();
+    octree->getMetricMin(x, y, z);
+    timer.printTiming("Computing octree min");
+    std::cout << "   min=(" << x << ", " << y << ", " << z << ")" << std::endl;
+    timer = ait::Timer();
+    octree->getMetricMax(x, y, z);
+    timer.printTiming("Computing octree max");
+    std::cout << "   max=(" << x << ", " << y << ", " << z << ")" << std::endl;
+    return octree;
+  }
 
 private:
   ViewpointPlanner *planner_ptr_;

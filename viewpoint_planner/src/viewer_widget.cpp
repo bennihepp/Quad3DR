@@ -39,9 +39,9 @@
 
 using namespace std;
 
-ViewerWidget::ViewerWidget(ViewerSettingsPanel* settings_panel, QWidget *parent)
-    : QGLViewer(parent), initialized_(false), settings_panel_(settings_panel),
-      octree_(nullptr), sparse_recon_(nullptr), draw_octree_(true), aspect_ratio_(-1) {
+ViewerWidget::ViewerWidget(const QGLFormat& format, ViewerSettingsPanel* settings_panel, QWidget *parent)
+    : QGLViewer(format, parent), initialized_(false), settings_panel_(settings_panel),
+      octree_(nullptr), sparse_recon_(nullptr), display_axes_(true), draw_octree_(true), aspect_ratio_(-1) {
     QSizePolicy policy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     policy.setHeightForWidth(true);
     setSizePolicy(policy);
@@ -76,22 +76,22 @@ void ViewerWidget::init() {
 
     // Restore previous viewer state.
     restoreStateFromFile();
+    std::cout << "QGLViewer.stateFilename: " <<stateFileName().toStdString() << std::endl;
 
     // Make camera the default manipulated frame.
     setManipulatedFrame(camera()->frame());
     // invert mousewheel (more like Blender)
     camera()->frame()->setWheelSensitivity(-1.0);
 
-    // Light initialization:
-    glEnable(GL_LIGHT0);
-
-    // Directional light
-    float pos[4] = {-1.0, 1.0, 1.0, 0.0};
-    glLightfv(GL_LIGHT0, GL_POSITION, pos);
+    // TODO
+    camera()->setSceneCenter(qglviewer::Vec(0, 0, 0));
+    camera()->setSceneRadius(50);
 
     // background color defaults to white
     this->setBackgroundColor( QColor(255,255,255) );
     this->qglClearColor( this->backgroundColor() );
+
+    initAxesDrawer();
 
     sparce_recon_drawer_.init();
     if (octree_ != nullptr) {
@@ -102,6 +102,26 @@ void ViewerWidget::init() {
     }
 
     std::cout << "zNear: " << camera()->zNear() << ", zFar: " << camera()->zFar() << std::endl;
+}
+
+void ViewerWidget::initAxesDrawer() {
+  axes_drawer_.init();
+  std::vector<OGLLineData> line_data;
+  float axes_length = 5;
+  OGLVertexData axes_origin(5, 5, 20);
+  OGLVertexData axes_end_x(axes_origin);
+  axes_end_x.x += axes_length;
+  OGLVertexData axes_end_y(axes_origin);
+  axes_end_y.y += axes_length;
+  OGLVertexData axes_end_z(axes_origin);
+  axes_end_z.z += axes_length;
+  OGLColorData color_x(1, 0, 0, 1);
+  OGLColorData color_y(0, 1, 0, 1);
+  OGLColorData color_z(0, 0, 1, 1);
+  line_data.emplace_back(OGLVertexDataRGBA(axes_origin, color_x), OGLVertexDataRGBA(axes_end_x, color_x));
+  line_data.emplace_back(OGLVertexDataRGBA(axes_origin, color_y), OGLVertexDataRGBA(axes_end_y, color_y));
+  line_data.emplace_back(OGLVertexDataRGBA(axes_origin, color_z), OGLVertexDataRGBA(axes_end_z, color_z));
+  axes_drawer_.upload(line_data);
 }
 
 void ViewerWidget::setUseDroneCamera(bool use_drone_camera) {
@@ -120,6 +140,7 @@ void ViewerWidget::setUseDroneCamera(bool use_drone_camera) {
         camera()->setFieldOfView(v_fov);
         std::cout << "Setting camera FOV to " << (v_fov * 180 / M_PI) << std::endl;
     }
+    update();
 }
 
 int ViewerWidget::heightForWidth(int w) const {
@@ -139,6 +160,7 @@ QSize ViewerWidget::sizeHint() const {
 void ViewerWidget::setImagePoseIndex(ImageId image_id) {
     const Image& image = sparse_recon_->getImages().at(image_id);
     setCameraPose(image.pose);
+    update();
 }
 
 void ViewerWidget::showOctree(const octomap::OcTree* octree) {
@@ -156,6 +178,7 @@ void ViewerWidget::showOctree(const octomap::OcTree* octree) {
     size_t memoryUsage = 0;
     size_t num_nodes = 0;
 
+    ait::Timer timer;
     // get map bbx
     double lminX, lminY, lminZ, lmaxX, lmaxY, lmaxZ;
     octree_->getMetricMin(lminX, lminY, lminZ);
@@ -180,6 +203,7 @@ void ViewerWidget::showOctree(const octomap::OcTree* octree) {
     if (lsizeZ > sizeZ) sizeZ = lsizeZ;
     memoryUsage += octree_->memoryUsage();
     num_nodes += octree_->size();
+    timer.printTiming("Computing octree metrics");
 
     octree_drawer_.enableHeightColorMode();
     refreshTree();
@@ -276,6 +300,7 @@ void ViewerWidget::setCameraPose(const Pose& pose) {
     // Convert to OpenGL camera coordinate system (x is right, y is up, z is back)
     Eigen::AngleAxisd rotate_x_pi = Eigen::AngleAxisd(M_PI, Eigen::Vector3d::UnitX());
     camera()->setOrientation(eigenToQglviewer(inv_pose.quaternion() * rotate_x_pi));
+    update();
 }
 
 void ViewerWidget::setOccupancyThreshold(double occupancy_threshold)
@@ -289,11 +314,13 @@ void ViewerWidget::setOccupancyThreshold(double occupancy_threshold)
 void ViewerWidget::setDrawFreeVoxels(bool draw_free_voxels)
 {
     octree_drawer_.setDrawFreeVoxels(draw_free_voxels);
+    update();
 }
 
 void ViewerWidget::setDisplayAxes(bool display_axes)
 {
-    octree_drawer_.setDisplayAxes(display_axes);
+  display_axes_ = display_axes;
+  update();
 }
 
 void ViewerWidget::setVoxelAlpha(double voxel_alpha)
@@ -307,6 +334,7 @@ void ViewerWidget::setRenderTreeDepth(int render_tree_depth)
 {
 //    std::cout << "Setting render tree depth to " << render_tree_depth << std::endl;
     octree_drawer_.setRenderTreeDepth(render_tree_depth);
+    update();
 }
 
 void ViewerWidget::setDrawSingleBin(bool draw_single_bin)
@@ -318,16 +346,19 @@ void ViewerWidget::setDrawSingleBin(bool draw_single_bin)
 void ViewerWidget::setDrawOctree(bool draw_octree)
 {
     draw_octree_ = draw_octree;
+    update();
 }
 
 void ViewerWidget::setDrawCameras(bool draw_cameras)
 {
     sparce_recon_drawer_.setDrawCameras(draw_cameras);
+    update();
 }
 
 void ViewerWidget::setDrawSparsePoints(bool draw_sparse_points)
 {
     sparce_recon_drawer_.setDrawSparsePoints(draw_sparse_points);
+    update();
 }
 
 void ViewerWidget::setSceneBoundingBox(const qglviewer::Vec& min, const qglviewer::Vec& max)
@@ -339,28 +370,34 @@ void ViewerWidget::setSceneBoundingBox(const qglviewer::Vec& min, const qglviewe
 
 void ViewerWidget::draw()
 {
-    // debugging: draw light in scene
-    //drawLight(GL_LIGHT0);
-
 //    glEnable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_VERTEX_PROGRAM_POINT_SIZE);
 
     glEnable(GL_LIGHTING);
-//    glCullFace(GL_BACK);
     glDisable(GL_CULL_FACE);
+//    glEnable(GL_CULL_FACE);
+//    glCullFace(GL_BACK);
 
 //    camera()->fitBoundingBox(qglviewer::Vec(-10, -10, -10), qglviewer::Vec(10, 10, 10));
 //    camera()->setSceneCenter(qglviewer::Vec(0, 0, 0));
-    QMatrix4x4 pmv_matrix;
-    camera()->getModelViewProjectionMatrix(pmv_matrix.data());
+    QMatrix4x4 pvm_matrix;
+    camera()->getModelViewProjectionMatrix(pvm_matrix.data());
+    QMatrix4x4 view_matrix;
+    camera()->getModelViewMatrix(view_matrix.data());
+    QMatrix4x4 model_matrix; // Identity
+    model_matrix.setToIdentity();
 
     // draw drawable objects:
     if (draw_octree_) {
-        octree_drawer_.draw();
+        octree_drawer_.draw(pvm_matrix, view_matrix, model_matrix);
     }
-    sparce_recon_drawer_.draw(pmv_matrix, width(), height());
+    sparce_recon_drawer_.draw(pvm_matrix, width(), height());
+
+    if (display_axes_) {
+      axes_drawer_.draw(pvm_matrix, width(), height(), 5.0f);
+    }
 }
 
 void ViewerWidget::drawWithNames()
@@ -369,39 +406,6 @@ void ViewerWidget::drawWithNames()
 
 void ViewerWidget::postDraw()
 {
-    // Reset model view matrix to world coordinates origin
-    glMatrixMode(GL_MODELVIEW);
-    glPushMatrix();
-    camera()->loadModelViewMatrix();
-    // TODO restore model loadProjectionMatrixStereo
-
-    // Save OpenGL state
-    glPushAttrib(GL_ALL_ATTRIB_BITS);
-
-    glDisable(GL_COLOR_MATERIAL);
-    qglColor(foregroundColor());
-
-    if (gridIsDrawn()){
-        glLineWidth(1.0);
-        drawGrid(5.0, 10);
-    }
-    if (axisIsDrawn()){
-        glLineWidth(2.0);
-        drawAxis(1.0);
-    }
-
-    // Restore GL state
-    glPopAttrib();
-    glPopMatrix();
-
-    bool drawAxis = axisIsDrawn();
-    bool drawGrid = gridIsDrawn();
-    setAxisIsDrawn(false);
-    setGridIsDrawn(false);
-    QGLViewer::postDraw();
-
-    setAxisIsDrawn(drawAxis);
-    setGridIsDrawn(drawGrid);
 }
 
 void ViewerWidget::postSelection(const QPoint&)

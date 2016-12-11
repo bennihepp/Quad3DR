@@ -33,11 +33,12 @@
  * along with this program. If not, see http://www.gnu.org/licenses/.
  */
 
-#include <octovis/SceneObject.h>
-#include <map>
+#include "scene_object.h"
+#include <unordered_map>
 #include "triangle_drawer.h"
+#include "voxel_drawer.h"
 
-class OcTreeDrawer: public octomap::SceneObject {
+class OcTreeDrawer: public octomap::SceneObjectAdapted {
 protected:
     struct VoxelData {
         std::vector<OGLTriangleData> triangle_data;
@@ -53,7 +54,7 @@ public:
     virtual ~OcTreeDrawer();
     void clear();
 
-    void draw() const;
+    void draw(const QMatrix4x4& pvm_matrix, const QMatrix4x4& view_matrix, const QMatrix4x4& model_matrix);
 
     // initialization of drawer  -------------------------
 
@@ -73,6 +74,7 @@ public:
 
     void updateVoxelsFromOctree();
     void updateVoxelArrays();
+    void updateVoxelArrays2();
     void updateVoxelColorHeightmap();
 
     // modification of existing drawer  ------------------
@@ -91,41 +93,20 @@ public:
 
     // set new origin (move object)
     void setOrigin(octomap::pose6d t);
-    void enableAxes(bool enabled = true) { m_update = true; m_displayAxes = enabled; };
 
 protected:
-    void drawVoxelsAboveThreshold(double occupancy_threshold, bool draw_below_threshold=false) const;
-    void drawCubes(const VoxelArrays& voxelArrays) const;
+    void drawVoxelsAboveThreshold(const QMatrix4x4& pvm_matrix, const QMatrix4x4& view_matrix, const QMatrix4x4& model_matrix,
+        double occupancy_threshold, bool draw_below_threshold=false);
 
-    void drawAxes() const;
-
-    //! setup cube template
-    void initCubeTemplate(const octomath::Pose6D& origin,
-                          std::vector<octomath::Vector3>& cube_template);
-    void generateCube(const octomap::OcTreeVolume& v,
-                      const std::vector<octomath::Vector3>& cube_template,
-                      VoxelData& voxel_data);
-    void generateCube(const octomap::OcTreeVolume& v,
-                      const std::vector<octomath::Vector3>& cube_template,
-                      VoxelArrays& voxelArrays);
-    unsigned int generateCube(const octomap::OcTreeVolume& v,
-                                          const std::vector<octomath::Vector3>& cube_template,
-                                          const unsigned int& current_array_idx,
-                                          GLfloat*** glArray);
-    void setCubeColorHeightmap(const octomap::OcTreeVolume& v, std::vector<GLfloat>& colors);
-    unsigned int setCubeColorHeightmap(const octomap::OcTreeVolume& v,
-                                          const unsigned int current_array_idx,
-                                          GLfloat** glColorArray);
-    void setCubeColorHeightmap(const octomap::OcTreeVolume& v, VoxelData& voxel_data);
-    void setVertexDataFromOctomathVector(OGLVertexData& vertex, const octomath::Vector3& vec);
+    void setCubeColorHeightmap(const octomap::point3d& position, OGLColorData& color);
+    void setVertexDataFromOctomathVector(OGLVertexDataRGBA& vertex, const octomath::Vector3& vec);
 
     const octomap::OcTree* octree_;
     octomap::pose6d origin_;
     octomap::pose6d initial_origin_;
 
-    std::map<double, VoxelArrays> voxelArraysByOccupancy_;
     std::vector<double> occupancy_bins_;
-//    std::map<double, TriangleDrawer> voxel_drawer_map_;
+    std::unordered_map<double, VoxelDrawer> voxel_drawer_map_;
 
     mutable bool m_update;
 
@@ -134,5 +115,4 @@ protected:
     double m_alphaOccupied;
     bool m_drawSingleBin;
     size_t render_tree_depth_;
-    bool m_displayAxes;
 };

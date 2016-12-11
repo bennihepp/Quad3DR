@@ -49,7 +49,16 @@ class ViewerWidget : public QGLViewer
   Q_OBJECT
 
 public:
-    ViewerWidget(ViewerSettingsPanel* settings_panel, QWidget *parent = nullptr);
+  static ViewerWidget* create(ViewerSettingsPanel* settings_panel, QWidget *parent = nullptr) {
+    QGLFormat format;
+    format.setVersion(3, 3);
+//    format.setProfile(QGLFormat::CoreProfile);
+    format.setProfile(QGLFormat::CompatibilityProfile);
+    format.setSampleBuffers(true);
+    return new ViewerWidget(format, settings_panel, parent);
+  }
+
+    ViewerWidget(const QGLFormat& format, ViewerSettingsPanel* settings_panel, QWidget *parent = nullptr);
 
     virtual void setSceneBoundingBox(const qglviewer::Vec& min, const qglviewer::Vec& max);
 
@@ -81,6 +90,7 @@ protected:
     void draw() override;
     void drawWithNames() override;
     void init() override;
+    void initAxesDrawer();
 
     void postDraw() override;
     void postSelection(const QPoint&) override;
@@ -97,8 +107,10 @@ private:
     ViewerSettingsPanel* settings_panel_;
     const octomap::OcTree* octree_;
     const SparseReconstruction* sparse_recon_;
+    bool display_axes_;
     bool draw_octree_;
 
+    LineDrawer axes_drawer_;
     OcTreeDrawer octree_drawer_;
     SparseReconstructionDrawer sparce_recon_drawer_;
     double aspect_ratio_;

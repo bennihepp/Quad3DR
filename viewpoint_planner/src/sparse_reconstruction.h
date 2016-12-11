@@ -18,6 +18,7 @@
 #include <ait/common.h>
 #include <ait/utilities.h>
 #include <ait/string_utils.h>
+#include <ait/boost_utilities.h>
 #include "pose.h"
 
 // Representations for a sparse reconstruction from Colmap.

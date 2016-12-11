@@ -18,12 +18,12 @@ struct OGLTriangleData
 {
     OGLTriangleData() {}
 
-    OGLTriangleData(const OGLVertexData& vertex1, const OGLVertexData& vertex2, const OGLVertexData& vertex3)
+    OGLTriangleData(const OGLVertexDataRGBA& vertex1, const OGLVertexDataRGBA& vertex2, const OGLVertexDataRGBA& vertex3)
     : vertex1(vertex1), vertex2(vertex2), vertex3(vertex3) {}
 
-    OGLVertexData vertex1;
-    OGLVertexData vertex2;
-    OGLVertexData vertex3;
+    OGLVertexDataRGBA vertex1;
+    OGLVertexDataRGBA vertex2;
+    OGLVertexDataRGBA vertex3;
 };
 
 inline std::ostream& operator<<(std::ostream& out, const OGLTriangleData& triangle) {
@@ -80,17 +80,17 @@ public:
         vbo_.allocate(triangle_data.data(), triangle_data.size() * sizeof(OGLTriangleData));
 
         program_.enableAttributeArray(0);
-        program_.setAttributeBuffer(0, GL_FLOAT, 0, 3, sizeof(OGLVertexData));
+        program_.setAttributeBuffer(0, GL_FLOAT, 0, 3, sizeof(OGLVertexDataRGBA));
 
         program_.enableAttributeArray(1);
-        program_.setAttributeBuffer(1, GL_FLOAT, 3 * sizeof(float), 4, sizeof(OGLVertexData));
+        program_.setAttributeBuffer(1, GL_FLOAT, 3 * sizeof(float), 4, sizeof(OGLVertexDataRGBA));
 
         vbo_.release();
         vao_.release();
         program_.release();
     }
 
-    void draw(const QMatrix4x4& pmv_matrix) {
+    void draw(const QMatrix4x4& pvm_matrix) {
         if (num_triangles_ == 0) {
             return;
         }
@@ -98,7 +98,7 @@ public:
         program_.bind();
         vao_.bind();
 
-        program_.setUniformValue("u_pmv_matrix", pmv_matrix);
+        program_.setUniformValue("u_pvm_matrix", pvm_matrix);
 
         glDrawArrays(GL_TRIANGLES, 0, 3 * num_triangles_);
 

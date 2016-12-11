@@ -16,8 +16,13 @@
 
 struct OGLLineData
 {
-    OGLVertexData vertex1;
-    OGLVertexData vertex2;
+  OGLLineData() {}
+
+  OGLLineData(const OGLVertexDataRGBA& vertex1, const OGLVertexDataRGBA& vertex2)
+  : vertex1(vertex1), vertex2(vertex2) {}
+
+    OGLVertexDataRGBA vertex1;
+    OGLVertexDataRGBA vertex2;
 };
 
 inline std::ostream& operator<<(std::ostream& out, const OGLLineData& line) {
@@ -75,18 +80,18 @@ public:
         vbo_.allocate(line_data.data(), line_data.size() * sizeof(OGLLineData));
 
         program_.enableAttributeArray(0);
-        program_.setAttributeBuffer(0, GL_FLOAT, 0, 3, sizeof(OGLVertexData));
+        program_.setAttributeBuffer(0, GL_FLOAT, 0, 3, sizeof(OGLVertexDataRGBA));
 
 
         program_.enableAttributeArray(1);
-        program_.setAttributeBuffer(1, GL_FLOAT, 3 * sizeof(float), 4, sizeof(OGLVertexData));
+        program_.setAttributeBuffer(1, GL_FLOAT, 3 * sizeof(float), 4, sizeof(OGLVertexDataRGBA));
 
         vbo_.release();
         vao_.release();
         program_.release();
     }
 
-    void draw(const QMatrix4x4& pmv_matrix, const int width, const int height, const float line_width) {
+    void draw(const QMatrix4x4& pvm_matrix, const int width, const int height, const float line_width) {
         if (num_lines_ == 0) {
             return;
         }
@@ -94,7 +99,7 @@ public:
         program_.bind();
         vao_.bind();
 
-        program_.setUniformValue("u_pmv_matrix", pmv_matrix);
+        program_.setUniformValue("u_pvm_matrix", pvm_matrix);
         program_.setUniformValue("u_inv_viewport", QVector2D(1.0f / width, 1.0f / height));
         program_.setUniformValue("u_line_width", line_width);
 

@@ -93,13 +93,13 @@ public:
         uploadPointData();
     }
 
-    void draw(const QMatrix4x4& pmv_matrix, const int width, const int height) {
+    void draw(const QMatrix4x4& pvm_matrix, const int width, const int height) {
         if (draw_cameras_) {
-            camera_triangle_drawer_.draw(pmv_matrix);
-            camera_line_drawer_.draw(pmv_matrix, width, height, CAMERA_LINE_WIDTH);
+            camera_triangle_drawer_.draw(pvm_matrix);
+            camera_line_drawer_.draw(pvm_matrix, width, height, CAMERA_LINE_WIDTH);
         }
         if (draw_sparse_points_) {
-            sparse_point_drawer_.draw(pmv_matrix, point_size_);
+            sparse_point_drawer_.draw(pvm_matrix, point_size_);
         }
     }
 
@@ -151,14 +151,14 @@ private:
             return;
         }
         const SparseReconstruction::Point3DMapType& points3D = sparse_recon_->getPoints3D();
-        std::vector<OGLVertexData> point_data;
+        std::vector<OGLVertexDataRGBA> point_data;
         point_data.reserve(points3D.size());
 
         for (const auto& entry : points3D) {
             const Point3D& point3D = entry.second;
             if (point3D.error <= RENDER_MAX_POINT_ERROR &&
                     point3D.feature_track.size() >= RENDER_MIN_TRACK_LENGTH) {
-                OGLVertexData point;
+                OGLVertexDataRGBA point;
                 point.x = static_cast<float>(point3D.pos(0));
                 point.y = static_cast<float>(point3D.pos(1));
                 point.z = static_cast<float>(point3D.pos(2));
@@ -208,38 +208,38 @@ private:
 //        std::cout << "bl=" << bl << std::endl;
 
         // Lines from sensor corners to projection center
-        lines[0].vertex1 = OGLVertexData(pc(0), pc(1), pc(2), 0.8f * r, g, b, 1);
-        lines[0].vertex2 = OGLVertexData(tl(0), tl(1), tl(2), 0.8f * r, g, b, 1);
+        lines[0].vertex1 = OGLVertexDataRGBA(pc(0), pc(1), pc(2), 0.8f * r, g, b, 1);
+        lines[0].vertex2 = OGLVertexDataRGBA(tl(0), tl(1), tl(2), 0.8f * r, g, b, 1);
 
-        lines[1].vertex1 = OGLVertexData(pc(0), pc(1), pc(2), 0.8f * r, g, b, 1);
-        lines[1].vertex2 = OGLVertexData(tr(0), tr(1), tr(2), 0.8f * r, g, b, 1);
+        lines[1].vertex1 = OGLVertexDataRGBA(pc(0), pc(1), pc(2), 0.8f * r, g, b, 1);
+        lines[1].vertex2 = OGLVertexDataRGBA(tr(0), tr(1), tr(2), 0.8f * r, g, b, 1);
 
-        lines[2].vertex1 = OGLVertexData(pc(0), pc(1), pc(2), 0.8f * r, g, b, 1);
-        lines[2].vertex2 = OGLVertexData(br(0), br(1), br(2), 0.8f * r, g, b, 1);
+        lines[2].vertex1 = OGLVertexDataRGBA(pc(0), pc(1), pc(2), 0.8f * r, g, b, 1);
+        lines[2].vertex2 = OGLVertexDataRGBA(br(0), br(1), br(2), 0.8f * r, g, b, 1);
 
-        lines[3].vertex1 = OGLVertexData(pc(0), pc(1), pc(2), 0.8f * r, g, b, 1);
-        lines[3].vertex2 = OGLVertexData(bl(0), bl(1), bl(2), 0.8f * r, g, b, 1);
+        lines[3].vertex1 = OGLVertexDataRGBA(pc(0), pc(1), pc(2), 0.8f * r, g, b, 1);
+        lines[3].vertex2 = OGLVertexDataRGBA(bl(0), bl(1), bl(2), 0.8f * r, g, b, 1);
 
-        lines[4].vertex1 = OGLVertexData(tl(0), tl(1), tl(2), 0.8f * r, g, b, 1);
-        lines[4].vertex2 = OGLVertexData(tr(0), tr(1), tr(2), 0.8f * r, g, b, 1);
+        lines[4].vertex1 = OGLVertexDataRGBA(tl(0), tl(1), tl(2), 0.8f * r, g, b, 1);
+        lines[4].vertex2 = OGLVertexDataRGBA(tr(0), tr(1), tr(2), 0.8f * r, g, b, 1);
 
-        lines[5].vertex1 = OGLVertexData(tr(0), tr(1), tr(2), 0.8f * r, g, b, 1);
-        lines[5].vertex2 = OGLVertexData(br(0), br(1), br(2), 0.8f * r, g, b, 1);
+        lines[5].vertex1 = OGLVertexDataRGBA(tr(0), tr(1), tr(2), 0.8f * r, g, b, 1);
+        lines[5].vertex2 = OGLVertexDataRGBA(br(0), br(1), br(2), 0.8f * r, g, b, 1);
 
-        lines[6].vertex1 = OGLVertexData(br(0), br(1), br(2), 0.8f * r, g, b, 1);
-        lines[6].vertex2 = OGLVertexData(bl(0), bl(1), bl(2), 0.8f * r, g, b, 1);
+        lines[6].vertex1 = OGLVertexDataRGBA(br(0), br(1), br(2), 0.8f * r, g, b, 1);
+        lines[6].vertex2 = OGLVertexDataRGBA(bl(0), bl(1), bl(2), 0.8f * r, g, b, 1);
 
-        lines[7].vertex1 = OGLVertexData(bl(0), bl(1), bl(2), 0.8f * r, g, b, 1);
-        lines[7].vertex2 = OGLVertexData(tl(0), tl(1), tl(2), 0.8f * r, g, b, 1);
+        lines[7].vertex1 = OGLVertexDataRGBA(bl(0), bl(1), bl(2), 0.8f * r, g, b, 1);
+        lines[7].vertex2 = OGLVertexDataRGBA(tl(0), tl(1), tl(2), 0.8f * r, g, b, 1);
 
         // Sensor rectangle
-        triangles[0].vertex1 = OGLVertexData(tl(0), tl(1), tl(2), r, g, b, a);
-        triangles[0].vertex2 = OGLVertexData(tr(0), tr(1), tr(2), r, g, b, a);
-        triangles[0].vertex3 = OGLVertexData(bl(0), bl(1), bl(2), r, g, b, a);
+        triangles[0].vertex1 = OGLVertexDataRGBA(tl(0), tl(1), tl(2), r, g, b, a);
+        triangles[0].vertex2 = OGLVertexDataRGBA(tr(0), tr(1), tr(2), r, g, b, a);
+        triangles[0].vertex3 = OGLVertexDataRGBA(bl(0), bl(1), bl(2), r, g, b, a);
 
-        triangles[1].vertex1 = OGLVertexData(bl(0), bl(1), bl(2), r, g, b, a);
-        triangles[1].vertex2 = OGLVertexData(tr(0), tr(1), tr(2), r, g, b, a);
-        triangles[1].vertex3 = OGLVertexData(br(0), br(1), br(2), r, g, b, a);
+        triangles[1].vertex1 = OGLVertexDataRGBA(bl(0), bl(1), bl(2), r, g, b, a);
+        triangles[1].vertex2 = OGLVertexDataRGBA(tr(0), tr(1), tr(2), r, g, b, a);
+        triangles[1].vertex3 = OGLVertexDataRGBA(br(0), br(1), br(2), r, g, b, a);
     }
 
     const SparseReconstruction* sparse_recon_;
