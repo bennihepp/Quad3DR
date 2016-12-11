@@ -65,6 +65,10 @@ add_executable(viewpoint_planner WIN32
   src/octree_drawer.cpp
   src/scene_object.h
   src/scene_object.cpp
+  src/occupancy_map.h
+  src/occupancy_map.cpp
+  src/occupancy_node.h
+  src/occupancy_node.cpp
   ${viewpoint_planner_UIS_H}
 #  src/octomap_renderer.h
 #  src/octomap_renderer.cpp

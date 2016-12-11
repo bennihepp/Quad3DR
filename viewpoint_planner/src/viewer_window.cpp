@@ -43,20 +43,40 @@ ViewerWindow::ViewerWindow(ViewpointPlanner* planner, QWidget *parent)
 
     // Timer for getting camera pose updates
     camera_pose_timer_ = new QTimer(this);
-//    camera_pose_timer_->setSingleShot(false);
+    camera_pose_timer_->setSingleShot(true);
     connect(camera_pose_timer_, SIGNAL(timeout()), this, SLOT(onCameraPoseTimeout()));
-    camera_pose_timer_->start(1000);
+    connect(this, SIGNAL(cameraPoseTimeoutHandlerFinished()), this, SLOT(onCameraPoseTimeoutHandlerFinished()));
+    emit cameraPoseTimeoutHandlerFinished();
 }
 
-ViewerWindow::~ViewerWindow() {}
+ViewerWindow::~ViewerWindow() {
+  if (worker_thread_.joinable()) {
+    worker_thread_.join();
+  }
+}
+
+void ViewerWindow::onCameraPoseTimeoutHandlerFinished() {
+  camera_pose_timer_->start(500);
+}
 
 void ViewerWindow::onCameraPoseTimeout() {
-    std::thread([this]() {
-        Pose camera_pose = viewer_widget_->getCameraPose();
-        std::cout << "pose_matrix image to world: " << camera_pose.getTransformationImageToWorld() << std::endl;
-        std::cout << "translation: " << camera_pose.inverse().translation();
-        CameraId camera_id = planner_->getSparseReconstruction()->getCameras().cbegin()->first;
-        planner_->computeVisibleMapPoints(camera_id, Pose(camera_pose));
-        camera_pose_timer_->start();
-    });
+  if (worker_thread_.joinable()) {
+    worker_thread_.join();
+  }
+  worker_thread_ = std::thread([this]() {
+    Pose camera_pose = viewer_widget_->getCameraPose();
+    std::cout << "pose_matrix image to world: " << camera_pose.getTransformationImageToWorld() << std::endl;
+    std::cout << "translation: " << camera_pose.inverse().translation();
+    CameraId camera_id = planner_->getSparseReconstruction()->getCameras().cbegin()->first;
+    std::unordered_set<Point3DId> proj_points = planner_->computeProjectedMapPoints(camera_id, Pose(camera_pose));
+    std::unordered_set<Point3DId> filtered_points = planner_->computeFilteredMapPoints(camera_id, Pose(camera_pose));
+    std::unordered_set<Point3DId> visible_points = planner_->computeVisibleMapPoints(camera_id, Pose(camera_pose));
+
+    std::cout << "  projected points: " << proj_points.size() << std::endl;
+    std::cout << "  filtered points: " << filtered_points.size() << std::endl;
+    std::cout << "  non-occluded points: " << visible_points.size() << std::endl;
+    std::cout << "  filtered and non-occluded: " << planner_->setIntersectionSize(filtered_points, visible_points) << std::endl;
+
+    emit this->cameraPoseTimeoutHandlerFinished();
+  });
 }

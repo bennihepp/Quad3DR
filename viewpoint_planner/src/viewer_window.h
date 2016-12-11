@@ -28,6 +28,10 @@ class ViewerWindow : public QMainWindow {
 
 protected slots:
   void onCameraPoseTimeout();
+  void onCameraPoseTimeoutHandlerFinished();
+
+signals:
+  void cameraPoseTimeoutHandlerFinished();
 
 protected:
    ViewpointPlanner* planner_;
@@ -35,4 +39,5 @@ protected:
    ViewerSettingsPanel* settings_panel_;
    ViewerWidget* viewer_widget_;
    QTimer* camera_pose_timer_;
+   std::thread worker_thread_;
 };

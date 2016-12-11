@@ -20,8 +20,8 @@ class Viewpoint
 {
 public:
     static constexpr double DEFAULT_PROJECTION_MARGIN = 10;
-    static constexpr double MAX_DISTANCE_DEVIATION_BY_STDDEV = 1.5;
-    static constexpr double MAX_NORMAL_DEVIATION_BY_STDDEV = 1.5;
+    static constexpr double MAX_DISTANCE_DEVIATION_BY_STDDEV = 3;
+    static constexpr double MAX_NORMAL_DEVIATION_BY_STDDEV = 3;
 
     Viewpoint(const PinholeCamera* camera, const Pose& pose, double projection_margin=DEFAULT_PROJECTION_MARGIN)
     : camera_(camera), pose_(pose), projection_margin_(projection_margin),
