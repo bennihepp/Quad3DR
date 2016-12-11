@@ -6,7 +6,7 @@
 class RenderObject {
 public:
 	RenderObject(GraphicsDevice& g, const TriMeshf& triMesh, const Materialf& material, const mat4f& modelToWorld) {
-		m_triMesh.load(g, triMesh);
+		m_triMesh.init(g, triMesh);
 
 		m_material = material;
 		if (m_material.m_TextureFilename_Kd != "") {
@@ -52,7 +52,7 @@ public:
 		return m_triMesh;
 	}
 
-	const D3D11Texture2D &getD3D11Texture2D() const {
+	const D3D11Texture2D<vec4uc> &getD3D11Texture2D() const {
 		return m_texture;
 	}
 
@@ -66,14 +66,14 @@ public:
 
 
 	const bool isTextured() const {
-		return m_texture.isLoaded();
+		return m_texture.isInit();
 	}
 
 private:
-	mat4f				m_modelToWorld;
-	D3D11TriMesh		m_triMesh;
-	D3D11Texture2D		m_texture;
-	BoundingBox3f		m_boundingBoxWorld;
+	mat4f					m_modelToWorld;
+	D3D11TriMesh			m_triMesh;
+	D3D11Texture2D<vec4uc>	m_texture;
+	BoundingBox3f			m_boundingBoxWorld;
 	
 	Materialf			m_material;
 };
