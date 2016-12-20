@@ -35,35 +35,68 @@
 #include "viewer_widget.h"
 #include <cmath>
 #include <manipulatedCameraFrame.h>
+#include <ait/utilities.h>
 #include "pose.h"
 
 using namespace std;
 
-ViewerWidget::ViewerWidget(const QGLFormat& format, ViewerSettingsPanel* settings_panel, QWidget *parent)
-    : QGLViewer(format, parent), initialized_(false), settings_panel_(settings_panel),
-      octree_(nullptr), sparse_recon_(nullptr), display_axes_(true), draw_octree_(true), aspect_ratio_(-1) {
+ViewerWidget::ViewerWidget(const QGLFormat& format, ViewpointPlanner* planner, ViewerSettingsPanel* settings_panel, QWidget *parent)
+    : QGLViewer(format, parent), planner_(planner),
+      initialized_(false), settings_panel_(settings_panel),
+      octree_(nullptr), sparse_recon_(nullptr),
+      display_axes_(true), aspect_ratio_(-1) {
     QSizePolicy policy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     policy.setHeightForWidth(true);
     setSizePolicy(policy);
 
     // Connect signals for settings panel
     connect(settings_panel_, SIGNAL(drawOctreeChanged(bool)), this, SLOT(setDrawOctree(bool)));
-    connect(settings_panel_, SIGNAL(occupancyThresholdChanged(double)), this, SLOT(setOccupancyThreshold(double)));
+    connect(settings_panel_, SIGNAL(occupancyBinThresholdChanged(double)), this, SLOT(setOccupancyBinThreshold(double)));
+    connect(settings_panel_, SIGNAL(colorFlagsChanged(uint32_t)), this, SLOT(setColorFlags(uint32_t)));
     connect(settings_panel_, SIGNAL(voxelAlphaChanged(double)), this, SLOT(setVoxelAlpha(double)));
     connect(settings_panel_, SIGNAL(drawFreeVoxelsChanged(bool)), this, SLOT(setDrawFreeVoxels(bool)));
     connect(settings_panel_, SIGNAL(displayAxesChanged(bool)), this, SLOT(setDisplayAxes(bool)));
-    connect(settings_panel_, SIGNAL(renderTreeDepthChanged(int)), this, SLOT(setRenderTreeDepth(int)));
     connect(settings_panel_, SIGNAL(drawSingleBinChanged(bool)), this, SLOT(setDrawSingleBin(bool)));
     connect(settings_panel_, SIGNAL(drawCamerasChanged(bool)), this, SLOT(setDrawCameras(bool)));
     connect(settings_panel_, SIGNAL(drawSparsePointsChanged(bool)), this, SLOT(setDrawSparsePoints(bool)));
     connect(settings_panel_, SIGNAL(refreshTree(void)), this, SLOT(refreshTree(void)));
+    connect(settings_panel_, SIGNAL(drawRaycastChanged(bool)), this, SLOT(setDrawRaycast(bool)));
+    connect(settings_panel_, SIGNAL(captureRaycast(void)), this, SLOT(captureRaycast(void)));
     connect(settings_panel_, SIGNAL(useDroneCameraChanged(bool)), this, SLOT(setUseDroneCamera(bool)));
     connect(settings_panel_, SIGNAL(imagePoseChanged(ImageId)), this, SLOT(setImagePoseIndex(ImageId)));
+    connect(settings_panel_, SIGNAL(minOccupancyChanged(double)), this, SLOT(setMinOccupancy(double)));
+    connect(settings_panel_, SIGNAL(maxOccupancyChanged(double)), this, SLOT(setMaxOccupancy(double)));
+    connect(settings_panel_, SIGNAL(minObservationsChanged(uint32_t)), this, SLOT(setMinObservations(uint32_t)));
+    connect(settings_panel_, SIGNAL(maxObservationsChanged(uint32_t)), this, SLOT(setMaxObservations(uint32_t)));
+    connect(settings_panel_, SIGNAL(minVoxelSizeChanged(double)), this, SLOT(setMinVoxelSize(double)));
+    connect(settings_panel_, SIGNAL(maxVoxelSizeChanged(double)), this, SLOT(setMaxVoxelSize(double)));
+    connect(settings_panel_, SIGNAL(minWeightChanged(double)), this, SLOT(setMinWeight(double)));
+    connect(settings_panel_, SIGNAL(maxWeightChanged(double)), this, SLOT(setMaxWeight(double)));
+    connect(settings_panel_, SIGNAL(renderTreeDepthChanged(size_t)), this, SLOT(setRenderTreeDepth(size_t)));
+    connect(settings_panel_, SIGNAL(renderObservationThresholdChanged(size_t)), this, SLOT(setRenderObservationThreshold(size_t)));
 
     // Fill occupancy dropbox in settings panel
-    double selected_occupancy_threshold = octree_drawer_.getOccupancyThreshold();
-    settings_panel_->initializeOccupancyThresholds(octree_drawer_.getOccupancyBins());
-    settings_panel_->selectOccupancyThreshold(selected_occupancy_threshold);
+    float selected_occupancy_bin_threshold = octree_drawer_.getOccupancyBinThreshold();
+    settings_panel_->initializeOccupancyBinThresholds(octree_drawer_.getOccupancyBins());
+    settings_panel_->selectOccupancyBinThreshold(selected_occupancy_bin_threshold);
+
+    std::vector<std::pair<std::string, uint32_t>> color_flags_uint;
+    for (const auto& entry : VoxelDrawer::getAvailableColorFlags()) {
+      color_flags_uint.push_back(std::make_pair(entry.first, static_cast<uint32_t>(entry.second)));
+    }
+    settings_panel_->initializeColorFlags(color_flags_uint);
+    settings_panel_->selectColorFlags(color_flags_uint[0].second);
+
+    octree_drawer_.setMinOccupancy(settings_panel_->getMinOccupancy());
+    octree_drawer_.setMaxOccupancy(settings_panel_->getMaxOccupancy());
+    octree_drawer_.setMinObservations(settings_panel_->getMinObservations());
+    octree_drawer_.setMaxObservations(settings_panel_->getMaxObservations());
+    octree_drawer_.setMinVoxelSize(settings_panel_->getMinVoxelSize());
+    octree_drawer_.setMaxVoxelSize(settings_panel_->getMaxVoxelSize());
+    octree_drawer_.setRenderTreeDepth(settings_panel_->getRenderTreeDepth());
+    octree_drawer_.setRenderObservationThreshold(settings_panel_->getRenderObservationThreshold());
+    octree_drawer_.setMinWeight(settings_panel_->getMinWeight());
+    octree_drawer_.setMaxWeight(settings_panel_->getMaxWeight());
 }
 
 void ViewerWidget::init() {
@@ -87,9 +120,11 @@ void ViewerWidget::init() {
     camera()->setSceneCenter(qglviewer::Vec(0, 0, 0));
     camera()->setSceneRadius(50);
 
+    setUseDroneCamera(settings_panel_->getUseDroneCamera());
+
     // background color defaults to white
-    this->setBackgroundColor( QColor(255,255,255) );
-    this->qglClearColor( this->backgroundColor() );
+    this->setBackgroundColor(QColor(255,255,255));
+    this->qglClearColor(this->backgroundColor());
 
     initAxesDrawer();
 
@@ -124,25 +159,6 @@ void ViewerWidget::initAxesDrawer() {
   axes_drawer_.upload(line_data);
 }
 
-void ViewerWidget::setUseDroneCamera(bool use_drone_camera) {
-    if (use_drone_camera) {
-        const PinholeCamera& pinhole_camera = sparse_recon_->getCameras().cbegin()->second;
-        double fy = pinhole_camera.getFocalLengthY();
-        double v_fov = 2 * std::atan(pinhole_camera.height() / (2 * fy));
-        camera()->setFieldOfView(v_fov);
-        aspect_ratio_ = pinhole_camera.width() / static_cast<double>(pinhole_camera.height());
-        updateGeometry();
-        std::cout << "Setting camera FOV to " << (v_fov * 180 / M_PI) << " degrees" << std::endl;
-        std::cout << "Resized window to " << width() << " x " << height() << std::endl;
-    }
-    else {
-        double v_fov = M_PI / 4;
-        camera()->setFieldOfView(v_fov);
-        std::cout << "Setting camera FOV to " << (v_fov * 180 / M_PI) << std::endl;
-    }
-    update();
-}
-
 int ViewerWidget::heightForWidth(int w) const {
     if (aspect_ratio_ <= 0) {
         return -1;
@@ -157,13 +173,7 @@ QSize ViewerWidget::sizeHint() const {
     return QSize(width(), width() / aspect_ratio_);
 }
 
-void ViewerWidget::setImagePoseIndex(ImageId image_id) {
-    const Image& image = sparse_recon_->getImages().at(image_id);
-    setCameraPose(image.pose);
-    update();
-}
-
-void ViewerWidget::showOctree(const octomap::OcTree* octree) {
+void ViewerWidget::showOctree(const ViewpointPlanner::OccupancyMapType* octree) {
     octree_ = octree;
     if (!initialized_) {
         return;
@@ -205,7 +215,6 @@ void ViewerWidget::showOctree(const octomap::OcTree* octree) {
     num_nodes += octree_->size();
     timer.printTiming("Computing octree metrics");
 
-    octree_drawer_.enableHeightColorMode();
     refreshTree();
 
     setSceneBoundingBox(qglviewer::Vec(minX, minY, minZ), qglviewer::Vec(maxX, maxY, maxZ));
@@ -236,6 +245,20 @@ void ViewerWidget::refreshTree()
         octree_drawer_.setOctree(octree_);
     }
     update();
+}
+
+void ViewerWidget::setDrawRaycast(bool draw_raycast) {
+  octree_drawer_.setDrawRaycast(draw_raycast);
+  update();
+}
+
+void ViewerWidget::captureRaycast()
+{
+  Pose camera_pose = getCameraPose();
+//  std::vector<std::pair<ViewpointPlanner::ConstTreeNavigatorType, float>> raycast_voxels = planner_->getRaycastHitVoxels(camera_pose);
+  std::vector<std::pair<ViewpointPlannerMaps::OccupiedTreeType::NodeType*, float>> raycast_voxels = planner_->getRaycastHitVoxelsBVH(camera_pose);
+  octree_drawer_.updateRaycastVoxels(raycast_voxels);
+  update();
 }
 
 void ViewerWidget::resetView()
@@ -303,13 +326,19 @@ void ViewerWidget::setCameraPose(const Pose& pose) {
     update();
 }
 
-void ViewerWidget::setOccupancyThreshold(double occupancy_threshold)
+void ViewerWidget::setOccupancyBinThreshold(double occupancy_threshold)
 {
 //    std::cout << "Setting occupancy threshold to " << occupancy_threshold << std::endl;
-    octree_drawer_.setOccupancyThreshold(occupancy_threshold);
+    octree_drawer_.setOccupancyBinThreshold(occupancy_threshold);
     update();
 }
 
+void ViewerWidget::setColorFlags(uint32_t color_flags)
+{
+//    std::cout << "Setting color flags to " << color_flags << std::endl;
+    octree_drawer_.setColorFlags(color_flags);
+    update();
+}
 
 void ViewerWidget::setDrawFreeVoxels(bool draw_free_voxels)
 {
@@ -330,13 +359,6 @@ void ViewerWidget::setVoxelAlpha(double voxel_alpha)
     update();
 }
 
-void ViewerWidget::setRenderTreeDepth(int render_tree_depth)
-{
-//    std::cout << "Setting render tree depth to " << render_tree_depth << std::endl;
-    octree_drawer_.setRenderTreeDepth(render_tree_depth);
-    update();
-}
-
 void ViewerWidget::setDrawSingleBin(bool draw_single_bin)
 {
     octree_drawer_.setDrawSingleBin(draw_single_bin);
@@ -345,8 +367,8 @@ void ViewerWidget::setDrawSingleBin(bool draw_single_bin)
 
 void ViewerWidget::setDrawOctree(bool draw_octree)
 {
-    draw_octree_ = draw_octree;
-    update();
+  octree_drawer_.setDrawOctree(draw_octree);
+  update();
 }
 
 void ViewerWidget::setDrawCameras(bool draw_cameras)
@@ -358,6 +380,85 @@ void ViewerWidget::setDrawCameras(bool draw_cameras)
 void ViewerWidget::setDrawSparsePoints(bool draw_sparse_points)
 {
     sparce_recon_drawer_.setDrawSparsePoints(draw_sparse_points);
+    update();
+}
+
+void ViewerWidget::setUseDroneCamera(bool use_drone_camera) {
+    if (use_drone_camera) {
+        const PinholeCameraColmap& pinhole_camera = sparse_recon_->getCameras().cbegin()->second;
+        double fy = pinhole_camera.getFocalLengthY();
+        double v_fov = 2 * std::atan(pinhole_camera.height() / (2 * fy));
+        camera()->setFieldOfView(v_fov);
+        aspect_ratio_ = pinhole_camera.width() / static_cast<double>(pinhole_camera.height());
+        updateGeometry();
+        std::cout << "Setting camera FOV to " << (v_fov * 180 / M_PI) << " degrees" << std::endl;
+        std::cout << "Resized window to " << width() << " x " << height() << std::endl;
+    }
+    else {
+        double v_fov = M_PI / 4;
+        camera()->setFieldOfView(v_fov);
+        std::cout << "Setting camera FOV to " << (v_fov * 180 / M_PI) << std::endl;
+    }
+    update();
+}
+
+void ViewerWidget::setImagePoseIndex(ImageId image_id) {
+    const Image& image = sparse_recon_->getImages().at(image_id);
+    setCameraPose(image.pose);
+    update();
+}
+
+void ViewerWidget::setMinOccupancy(double min_occupancy) {
+  octree_drawer_.setMinOccupancy(min_occupancy);
+  update();
+}
+
+void ViewerWidget::setMaxOccupancy(double max_occupancy) {
+  octree_drawer_.setMaxOccupancy(max_occupancy);
+  update();
+}
+
+void ViewerWidget::setMinObservations(uint32_t min_observations) {
+  octree_drawer_.setMinObservations(min_observations);
+  update();
+}
+
+void ViewerWidget::setMaxObservations(uint32_t max_observations) {
+  octree_drawer_.setMaxObservations(max_observations);
+  update();
+}
+
+void ViewerWidget::setMinVoxelSize(double min_voxel_size) {
+  octree_drawer_.setMinVoxelSize(min_voxel_size);
+  update();
+}
+
+void ViewerWidget::setMaxVoxelSize(double max_voxel_size) {
+  octree_drawer_.setMaxVoxelSize(max_voxel_size);
+  update();
+}
+
+void ViewerWidget::setMinWeight(double min_weight) {
+  octree_drawer_.setMinWeight(min_weight);
+  update();
+}
+
+void ViewerWidget::setMaxWeight(double max_weight) {
+  octree_drawer_.setMaxWeight(max_weight);
+  update();
+}
+
+void ViewerWidget::setRenderTreeDepth(size_t render_tree_depth)
+{
+//    std::cout << "Setting render tree depth to " << render_tree_depth << std::endl;
+    octree_drawer_.setRenderTreeDepth(render_tree_depth);
+    update();
+}
+
+void ViewerWidget::setRenderObservationThreshold(size_t render_observation_threshold)
+{
+//    std::cout << "Setting render observation threshold to " << observation_threshold << std::endl;
+    octree_drawer_.setRenderObservationThreshold(render_observation_threshold);
     update();
 }
 
@@ -390,9 +491,7 @@ void ViewerWidget::draw()
     model_matrix.setToIdentity();
 
     // draw drawable objects:
-    if (draw_octree_) {
-        octree_drawer_.draw(pvm_matrix, view_matrix, model_matrix);
-    }
+    octree_drawer_.draw(pvm_matrix, view_matrix, model_matrix);
     sparce_recon_drawer_.draw(pvm_matrix, width(), height());
 
     if (display_axes_) {

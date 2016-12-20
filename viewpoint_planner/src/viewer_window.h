@@ -15,9 +15,6 @@
 #include "viewer_settings_panel.h"
 #include "viewpoint_planner.h"
 
-using octomap::SceneObject;
-using octomap::SelectionBox;
-
 class ViewerWindow : public QMainWindow {
   Q_OBJECT
 

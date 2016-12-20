@@ -35,34 +35,30 @@
 
 #include <octomap/octomap.h>
 #include <qglviewer.h>
-#include <octovis/SceneObject.h>
-#include <octovis/SelectionBox.h>
+#include "viewpoint_planner.h"
 #include "viewer_settings_panel.h"
 #include "octree_drawer.h"
 #include "sparse_reconstruction_drawer.h"
-
-using octomap::SceneObject;
-using octomap::SelectionBox;
 
 class ViewerWidget : public QGLViewer
 {
   Q_OBJECT
 
 public:
-  static ViewerWidget* create(ViewerSettingsPanel* settings_panel, QWidget *parent = nullptr) {
+  static ViewerWidget* create(ViewpointPlanner* planner, ViewerSettingsPanel* settings_panel, QWidget *parent = nullptr) {
     QGLFormat format;
     format.setVersion(3, 3);
 //    format.setProfile(QGLFormat::CoreProfile);
     format.setProfile(QGLFormat::CompatibilityProfile);
     format.setSampleBuffers(true);
-    return new ViewerWidget(format, settings_panel, parent);
+    return new ViewerWidget(format, planner, settings_panel, parent);
   }
 
-    ViewerWidget(const QGLFormat& format, ViewerSettingsPanel* settings_panel, QWidget *parent = nullptr);
+    ViewerWidget(const QGLFormat& format, ViewpointPlanner* planner, ViewerSettingsPanel* settings_panel, QWidget *parent = nullptr);
 
     virtual void setSceneBoundingBox(const qglviewer::Vec& min, const qglviewer::Vec& max);
 
-    void showOctree(const octomap::OcTree* octree);
+    void showOctree(const ViewpointPlanner::OccupancyMapType* octree);
     void showSparseReconstruction(const SparseReconstruction* sparse_recon);
     void resetView();
 
@@ -74,17 +70,29 @@ public:
 
 public slots:
     void refreshTree();
-    void setOccupancyThreshold(double occupancy_threshold);
+    void setDrawRaycast(bool draw_raycast);
+    void captureRaycast();
+    void setOccupancyBinThreshold(double occupancy_bin_threshold);
+    void setColorFlags(uint32_t color_flags);
     void setDrawFreeVoxels(bool draw_free_voxels);
     void setDisplayAxes(bool display_axes);
     void setVoxelAlpha(double voxel_alpha);
-    void setRenderTreeDepth(int render_tree_depth);
     void setDrawSingleBin(bool draw_single_bin);
     void setDrawOctree(bool draw_octree);
     void setDrawCameras(bool draw_cameras);
     void setDrawSparsePoints(bool draw_sparse_points);
     void setUseDroneCamera(bool use_drone_camera);
     void setImagePoseIndex(ImageId image_id);
+    void setMinOccupancy(double min_occupancy);
+    void setMaxOccupancy(double max_occupancy);
+    void setMinObservations(uint32_t min_observations);
+    void setMaxObservations(uint32_t max_observations);
+    void setMinVoxelSize(double min_voxel_size);
+    void setMaxVoxelSize(double max_voxel_size);
+    void setMinWeight(double min_weight);
+    void setMaxWeight(double max_weight);
+    void setRenderTreeDepth(size_t render_tree_depth);
+    void setRenderObservationThreshold(size_t render_observation_threshold);
 
 protected:
     void draw() override;
@@ -103,12 +111,12 @@ protected:
     Eigen::Quaterniond qglviewerToEigen(const qglviewer::Quaternion& qgl_quat) const;
 
 private:
+    ViewpointPlanner* planner_;
     bool initialized_;
     ViewerSettingsPanel* settings_panel_;
-    const octomap::OcTree* octree_;
+    const ViewpointPlanner::OccupancyMapType* octree_;
     const SparseReconstruction* sparse_recon_;
     bool display_axes_;
-    bool draw_octree_;
 
     LineDrawer axes_drawer_;
     OcTreeDrawer octree_drawer_;

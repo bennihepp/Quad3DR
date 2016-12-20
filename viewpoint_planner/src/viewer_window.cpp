@@ -7,6 +7,7 @@
 //==================================================
 
 #include <QDockWidget>
+#include <ait/utilities.h>
 #include "viewer_window.h"
 
 using namespace std;
@@ -25,10 +26,10 @@ ViewerWindow::ViewerWindow(ViewpointPlanner* planner, QWidget *parent)
     settings_dock->setWidget(settings_panel_);
     this->addDockWidget(Qt::RightDockWidgetArea, settings_dock);
 
-    viewer_widget_ = ViewerWidget::create(settings_panel_, this);
+    viewer_widget_ = ViewerWidget::create(planner_, settings_panel_, this);
     this->setCentralWidget(viewer_widget_);
     viewer_widget_->showOctree(planner_->getOctree());
-    viewer_widget_->showSparseReconstruction(planner_->getSparseReconstruction());
+    viewer_widget_->showSparseReconstruction(planner_->getReconstruction());
 
     // Update labels in info panel
     info_panel_->setVoxelSize(planner_->getOctree()->getResolution());
@@ -38,8 +39,8 @@ ViewerWindow::ViewerWindow(ViewpointPlanner* planner, QWidget *parent)
     double extent_x, extent_y, extent_z;
     planner_->getOctree()->getMetricSize(extent_x, extent_y, extent_z);
     info_panel_->setExtent(QVector3D(extent_x, extent_y, extent_z));
-    info_panel_->setNumOfImages(planner_->getSparseReconstruction()->getImages().size());
-    info_panel_->setNumOfSparsePoints(planner_->getSparseReconstruction()->getPoints3D().size());
+    info_panel_->setNumOfImages(planner_->getReconstruction()->getImages().size());
+    info_panel_->setNumOfSparsePoints(planner_->getReconstruction()->getPoints3D().size());
 
     // Timer for getting camera pose updates
     camera_pose_timer_ = new QTimer(this);
@@ -56,7 +57,7 @@ ViewerWindow::~ViewerWindow() {
 }
 
 void ViewerWindow::onCameraPoseTimeoutHandlerFinished() {
-  camera_pose_timer_->start(500);
+  camera_pose_timer_->start(100);
 }
 
 void ViewerWindow::onCameraPoseTimeout() {
@@ -65,17 +66,20 @@ void ViewerWindow::onCameraPoseTimeout() {
   }
   worker_thread_ = std::thread([this]() {
     Pose camera_pose = viewer_widget_->getCameraPose();
-    std::cout << "pose_matrix image to world: " << camera_pose.getTransformationImageToWorld() << std::endl;
-    std::cout << "translation: " << camera_pose.inverse().translation();
-    CameraId camera_id = planner_->getSparseReconstruction()->getCameras().cbegin()->first;
-    std::unordered_set<Point3DId> proj_points = planner_->computeProjectedMapPoints(camera_id, Pose(camera_pose));
-    std::unordered_set<Point3DId> filtered_points = planner_->computeFilteredMapPoints(camera_id, Pose(camera_pose));
-    std::unordered_set<Point3DId> visible_points = planner_->computeVisibleMapPoints(camera_id, Pose(camera_pose));
+//    CameraId camera_id = planner_->getReconstruction()->getCameras().cbegin()->first;
+//    std::cout << "pose_matrix image to world: " << camera_pose.getTransformationImageToWorld() << std::endl;
+//    std::cout << "translation: " << camera_pose.inverse().translation();
+//    std::unordered_set<Point3DId> proj_points = planner_->computeProjectedMapPoints(camera_id, camera_pose);
+//    std::unordered_set<Point3DId> filtered_points = planner_->computeFilteredMapPoints(camera_id, camera_pose);
+//    std::unordered_set<Point3DId> visible_points = planner_->computeVisibleMapPoints(camera_id, camera_pose);
+//
+//    std::cout << "  projected points: " << proj_points.size() << std::endl;
+//    std::cout << "  filtered points: " << filtered_points.size() << std::endl;
+//    std::cout << "  non-occluded points: " << visible_points.size() << std::endl;
+//    std::cout << "  filtered and non-occluded: " << ait::computeSetIntersectionSize(filtered_points, visible_points) << std::endl;
 
-    std::cout << "  projected points: " << proj_points.size() << std::endl;
-    std::cout << "  filtered points: " << filtered_points.size() << std::endl;
-    std::cout << "  non-occluded points: " << visible_points.size() << std::endl;
-    std::cout << "  filtered and non-occluded: " << planner_->setIntersectionSize(filtered_points, visible_points) << std::endl;
+    double information_score = planner_->computeInformationScore(camera_pose);
+    std::cout << "  information score: " << information_score << std::endl;
 
     emit this->cameraPoseTimeoutHandlerFinished();
   });

@@ -1,4 +1,4 @@
-#version 150
+#version 330
 
 // INPUTS
 in vec3 v_light_position_cameraspace;
@@ -9,6 +9,7 @@ in vec3 v_vertex_normal_cameraspace;
 //in vec3 v_vertex_normal;
 //in vec3 v_light_direction;
 //in vec3 v_light_position;
+flat in int v_keep_flag;
 
 // OUTPUTS
 out vec4 f_color;
@@ -17,15 +18,18 @@ const vec3 light_color = vec3(1, 1, 1);
 
 void main() {
   // Light emission properties
-  // You probably want to put them as uniforms
-  float u_light_power = 100.0f;
+//  float u_light_power = 5000.0f;
+
+  if (v_keep_flag == 0) {
+    discard;
+  }
 
   // Material properties
   vec3 material_color = v_color.xyz;
-  vec3 u_ambient_color = 0.5 * material_color;
-  vec3 u_diffuse_color = 0.5 * material_color;
-  vec3 u_specular_color = 0.4 * material_color;
-  float u_specular_alpha = 5;
+  vec3 u_ambient_color = 0.4 * material_color;
+  vec3 u_diffuse_color = 0.7 * material_color;
+  vec3 u_specular_color = 0.5 * material_color;
+  float u_specular_alpha = 3;
 
   // Distance to the light
   vec3 light_direction_cameraspace = v_light_position_cameraspace - v_vertex_position_cameraspace;
@@ -58,8 +62,8 @@ void main() {
     specular = pow(cos_alpha, u_specular_alpha);
   }
 
-//    float attenuated_light_power = u_light_power / (distance * distance);
-    float attenuated_light_power = 1;
+//  float attenuated_light_power = u_light_power / (distance * distance);
+  float attenuated_light_power = 1;
   f_color.rgb =
     u_ambient_color +
     lambertian * u_diffuse_color * light_color * attenuated_light_power +

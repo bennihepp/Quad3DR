@@ -70,6 +70,8 @@ struct Pose
         return transformation;
     }
 
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
 private:
     Eigen::Vector3d translation_;
     Eigen::Quaterniond quaternion_;

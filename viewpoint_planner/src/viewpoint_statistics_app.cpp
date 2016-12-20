@@ -1,89 +1,55 @@
 //==================================================
-// viewpoint_planner_app.cpp
+// viewpoint_statistics_app.cpp
 //
 //  Copyright (c) 2016 Benjamin Hepp.
 //  Author: Benjamin Hepp
-//  Created on: Dec 4, 2016
+//  Created on: Dec 14, 2016
 //==================================================
 
 #include <iostream>
 #include <memory>
 
 #include <boost/program_options.hpp>
-#include <boost/filesystem.hpp>
 
 #define AIT_MLIB_COMPATIBILITY 1
 #include <ait/common.h>
-#include <ait/utilities.h>
 //#include <ait/mLib.h>
-
-#include <QApplication>
 
 #include "dense_reconstruction.h"
 #include "occupancy_map.h"
 #include "viewpoint_planner.h"
-#include "viewer_window.h"
 
 using std::cout;
 using std::endl;
 using std::string;
 
-class ViewpointPlannerApp {
+class ViewpointStatisticsApp
+{
 public:
-    ViewpointPlannerApp(std::string dense_recon_path, std::string octree_filename, bool binary=false) {
-        std::unique_ptr<DenseReconstruction> dense_recon = readDenseReconstruction(dense_recon_path);
-        std::unique_ptr<ViewpointPlanner::OccupancyMapType> augmented_octree;
-        std::cout << "Reading non-augmented input tree" << std::endl;
-        std::unique_ptr<ViewpointPlanner::InputOccupancyMapType> octree = readOctree(octree_filename, binary);
-        // Read cached augmented tree (if up-to-date) or generate it
-        const std::string augmented_octree_filename = octree_filename + ".aug";
-        if (boost::filesystem::exists(augmented_octree_filename)) {
-          if (boost::filesystem::last_write_time(augmented_octree_filename) > boost::filesystem::last_write_time(octree_filename)) {
-            std::cout << "Loading up-to-date cached augmented tree." << std::endl;
-            augmented_octree.reset(reinterpret_cast<ViewpointPlanner::OccupancyMapType*>(ViewpointPlanner::OccupancyMapType::read(augmented_octree_filename)));
-          }
-          else {
-            std::cout << "Found cached augmented tree to be old. Ignoring it." << std::endl;
-          }
-        }
-        if (!augmented_octree) {
-          std::cout << "Generating augmented tree." << std::endl;
-          augmented_octree = ViewpointPlanner::getAugmentedOccupancyMap(std::move(octree));
-          augmented_octree->write(augmented_octree_filename);
-        }
-        std::unique_ptr<ViewpointPlannerMaps> planner_maps;
-        planner_maps.reset(new ViewpointPlannerMaps(octree.get()));
-        planner_ptr_ = new ViewpointPlanner(std::move(dense_recon), std::move(augmented_octree), std::move(planner_maps));
-        window_ptr_ = new ViewerWindow(planner_ptr_);
-    }
+  ViewpointStatisticsApp(std::string dense_recon_path, std::string octree_filename) {
+      std::unique_ptr<DenseReconstruction> dense_recon = readDenseReconstruction(dense_recon_path);
+      std::unique_ptr<ViewpointPlanner::OccupancyMapType> octree = readOctree(octree_filename);
+      planner_ptr_ = new ViewpointPlanner(std::move(dense_recon), std::move(octree));
+  }
 
-    ~ViewpointPlannerApp() {
-        SAFE_DELETE(window_ptr_);
-        SAFE_DELETE(planner_ptr_);
-    }
+  ~ViewpointStatisticsApp() {
+      SAFE_DELETE(planner_ptr_);
+  }
 
-    const ViewpointPlanner& getPlanner() const {
-        return *planner_ptr_;
-    }
+  const ViewpointPlanner& getPlanner() const {
+      return *planner_ptr_;
+  }
 
-    ViewpointPlanner& getPlanner() {
-        return *planner_ptr_;
-    }
+  ViewpointPlanner& getPlanner() {
+      return *planner_ptr_;
+  }
 
-    ViewerWindow& getWindow() {
-        return *window_ptr_;
-    }
-
-    const ViewerWindow& getWindow() const {
-        return *window_ptr_;
-    }
-
-    void run() {
-        planner_ptr_->run();
+  void run() {
+      planner_ptr_->run();
 //        window_ptr_->start();
 //        std::shared_ptr<ob::ProblemDefinition> pdef = quad_planner_ptr_->run();
-        //        window_ptr_->join();
-    }
+      //        window_ptr_->join();
+  }
 
 private:
   static std::unique_ptr<DenseReconstruction>readDenseReconstruction(std::string path) {
@@ -94,15 +60,15 @@ private:
     return dense_recon;
   }
 
-  static std::unique_ptr<ViewpointPlanner::InputOccupancyMapType> readOctree(std::string filename, bool binary=false) {
+  static std::unique_ptr<ViewpointPlanner::OccupancyMapType> readOctree(std::string filename, bool binary=false) {
     ait::Timer timer;
-    std::unique_ptr<ViewpointPlanner::InputOccupancyMapType> octree;
+    std::unique_ptr<ViewpointPlanner::OccupancyMapType> octree;
     if (binary) {
 //      octree.reset(new ViewpointPlanner::OccupancyMapType(filename));
       throw AIT_EXCEPTION("Binary occupancy maps not supported");
     }
     else {
-      octree.reset(reinterpret_cast<ViewpointPlanner::InputOccupancyMapType*>(ViewpointPlanner::InputOccupancyMapType::read(filename)));
+      octree.reset(reinterpret_cast<ViewpointPlanner::OccupancyMapType*>(ViewpointPlanner::OccupancyMapType::read(filename)));
     }
     if (!octree) {
       throw std::runtime_error("Unable to read octomap file");
@@ -128,6 +94,7 @@ private:
 
     size_t count_unknown = 0;
     size_t count_unknown_leaf = 0;
+    size_t count_irregular = 0;
     for (auto it = octree->begin_tree(); it != octree->end_tree(); ++it) {
       if (it->getObservationCount() == 0) {
         ++count_unknown;
@@ -135,9 +102,13 @@ private:
           ++count_unknown_leaf;
         }
       }
+      if (!it.isLeaf() && it->getObservationCount() == 0) {
+        ++count_irregular;
+      }
     }
-    std::cout << "Unknown voxels: " << count_unknown << std::endl;
-    std::cout << "Unknown leaf voxels: " << count_unknown_leaf << std::endl;
+    std::cout << "count_unknown: " << count_unknown << std::endl;
+    std::cout << "count_unknown_leaf: " << count_unknown_leaf << std::endl;
+    std::cout << "count_irregular: " << count_irregular << std::endl;
 
     return octree;
   }
@@ -157,14 +128,11 @@ std::pair<bool, boost::program_options::variables_map> process_commandline(int a
         generic_options.add_options()
             ("help", "Produce help message")
             ("dense-recon-path", po::value<std::string>()->required(), "Path to Colmap MVS workspace.")
-            ("disable-gui", po::bool_switch()->default_value(false), "Disable graphics.")
             ;
 
         po::options_description octomap_options("Octomap options");
         octomap_options.add_options()
             ("map-file", po::value<std::string>()->required(), "Filename of octomap.")
-//            ("resolution", po::value<double>()->default_value(0.1), "Resolution of octomap.")
-            ("binary", po::bool_switch()->default_value(false), "Read a binary octree.")
             ;
 
         po::options_description options;
@@ -193,11 +161,7 @@ std::pair<bool, boost::program_options::variables_map> process_commandline(int a
     }
 }
 
-int main(int argc, char** argv)
-{
-    QApplication qapp(argc, argv);
-    qapp.setApplicationName("Quad3DR viewpoint planner");
-
+int main(int argc, char** argv) {
     // Handle command line
     std::pair<bool, boost::program_options::variables_map> cmdline_result = process_commandline(argc, argv);
     if (!cmdline_result.first) {
@@ -205,13 +169,8 @@ int main(int argc, char** argv)
     }
     boost::program_options::variables_map vm = std::move(cmdline_result.second);
 
-    ViewpointPlannerApp planner_app(vm["dense-recon-path"].as<string>(), vm["map-file"].as<string>(), vm["binary"].as<bool>());
-    planner_app.getWindow().show();
-    planner_app.run();
-    if (planner_app.getWindow().isVisible()) {
-        return qapp.exec();
-    }
-    else {
-        return -1;
-    }
+    ViewpointStatisticsApp statistics_app(vm["dense-recon-path"].as<string>(), vm["map-file"].as<string>());
+    statistics_app.run();
+
+    return 0;
 }

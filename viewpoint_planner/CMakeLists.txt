@@ -35,16 +35,23 @@ endif()
 include_directories(
 	../external/QGLViewer
   include/
-  ${EIGEN3_INCLUDE_DIR}
   ${OCTOMAP_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
+  ${EIGEN3_INCLUDE_DIR}
 )
 
-add_executable(depth_octomap
-  src/depth_octomap.cpp
+add_executable(occupancy_map_from_sens
+  src/occupancy_map_from_sens.cpp
+  ../src/common.cpp
   ../src/mLib.cpp
+  src/occupancy_map.h
+  src/occupancy_map.hxx
+  src/occupancy_map_tree_navigator.hxx
+  src/occupancy_map.cpp
+  src/occupancy_node.h
+  src/occupancy_node.cpp
 )
-target_link_libraries(depth_octomap
+target_link_libraries(occupancy_map_from_sens
   ${OCTOMAP_LIBRARIES}
   ${Boost_LIBRARIES}
   ${OpenCV_LIBRARIES}
@@ -53,25 +60,35 @@ target_link_libraries(depth_octomap
 QT5_WRAP_UI(viewpoint_planner_UIS_H src/viewer_settings_panel.ui src/viewer_info_panel.ui)
 add_executable(viewpoint_planner WIN32
   src/viewpoint_planner_app.cpp
+  ../src/common.cpp
   ../src/mLib.cpp
   ../src/utilities.cpp
+  src/bvh/bvh.h
   src/viewer_window.h
   src/viewer_window.cpp
   src/viewer_widget.h
   src/viewer_widget.cpp
   src/viewer_info_panel.h
   src/viewer_settings_panel.h
+  src/viewpoint_planner.h
+  src/viewpoint_planner.cpp
   src/octree_drawer.h
   src/octree_drawer.cpp
-  src/scene_object.h
-  src/scene_object.cpp
+  src/voxel_drawer.h
+  src/voxel_drawer.cpp
   src/occupancy_map.h
+  src/occupancy_map.hxx
+  src/occupancy_map_tree_navigator.hxx
   src/occupancy_map.cpp
   src/occupancy_node.h
   src/occupancy_node.cpp
+  src/sparse_reconstruction.h
+  src/sparse_reconstruction.cpp
+  src/sparse_reconstruction_drawer.h
+  src/sparse_reconstruction_drawer.cpp
+  src/dense_reconstruction.h
+  src/dense_reconstruction.cpp
   ${viewpoint_planner_UIS_H}
-#  src/octomap_renderer.h
-#  src/octomap_renderer.cpp
   src/shaders.qrc
 )
 target_link_libraries(viewpoint_planner
