@@ -119,7 +119,7 @@ double Timer::printTiming(const std::string &name) const
 
 uint64_t Timer::printTimingMs(const std::string &name) const
 {
-  uint64_t  elapsed_ms = getElapsedTime();
+  uint64_t  elapsed_ms = getElapsedTimeMs();
   std::cout << "Timing for " << name << ": " << elapsed_ms << " ms" << std::endl;
   return elapsed_ms;
 }

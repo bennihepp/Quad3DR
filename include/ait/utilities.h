@@ -8,15 +8,28 @@
 
 #pragma once
 
+#include <iostream>
 #include <string>
 #include <vector>
 #include <utility>
 #include <cstdint>
 #include <chrono>
 #include <thread>
+#include <ait/common.h>
 
 namespace ait
 {
+
+/// Clamp a value between min and max
+template <typename T>
+T clamp(const T& value, const T& min, const T& max)
+{
+    return std::max(std::min(value, max), min);
+}
+
+// -------------------------
+// Timing utilities
+// -------------------------
 
 using Clock = std::chrono::high_resolution_clock;
 
@@ -101,4 +114,81 @@ private:
   };
 #endif
 
+
+// -------------------------
+// STL container utilities
+// -------------------------
+
+template <typename Set1, typename Set2>
+size_t computeSetIntersectionSize(const Set1& set1, const Set2& set2);
+
+template <typename Set1, typename Set2>
+Set1 computeSetIntersection(const Set1& set1, const Set2& set2);
+
 } /* namespace ait */
+
+
+// -------------------------
+// STL container utilities implementations
+// -------------------------
+
+template <typename Set1, typename Set2>
+size_t ait::computeSetIntersectionSize(const Set1& set1, const Set2& set2) {
+    static_assert(std::is_same<typename Set1::key_type, typename Set2::key_type>::value, "Key must be same type");
+    if (set1.size() > set2.size()) {
+        return computeSetIntersectionSize(set2, set1);
+    }
+    size_t size = 0;
+    for (const auto& key : set1) {
+        if (set2.find(key) != set2.cend()) {
+            ++size;
+        }
+    }
+    return size;
+}
+
+template <typename Set1, typename Set2>
+Set1 ait::computeSetIntersection(const Set1& set1, const Set2& set2) {
+    static_assert(std::is_same<typename Set1::key_type, typename Set2::key_type>::value, "Key must be same type");
+    if (set1.size() > set2.size()) {
+        return computeSetIntersection(set2, set1);
+    }
+    Set1 intersection;
+    for (const auto& key : set1) {
+        if (set2.find(key) != set2.cend()) {
+            intersection.insert(key);
+        }
+    }
+    return intersection;
+}
+
+
+// -------------------------
+// File input output utilities
+// -------------------------
+
+template <typename T>
+void writeToStream(std::ostream& out, const T& value) {
+  out.write(reinterpret_cast<char*>(&value), sizeof(value));
+  if (!static_cast<bool>(out)) {
+    throw AIT_EXCEPTION("Unable to write to stream");
+  }
+}
+
+template <typename T>
+void readFromStream(std::istream& in, T* value) {
+  in.read(reinterpret_cast<char*>(value), sizeof(T));
+  if (!static_cast<bool>(in)) {
+    throw AIT_EXCEPTION("Unable to read from stream");
+  }
+}
+
+template <typename T>
+T readFromStream(std::istream& in) {
+  T value;
+  in.read(reinterpret_cast<char*>(&value), sizeof(T));
+  if (!static_cast<bool>(in)) {
+    throw AIT_EXCEPTION("Unable to read from stream");
+  }
+  return std::move(value);
+}

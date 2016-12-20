@@ -22,6 +22,7 @@ if (Threads_FOUND)
   link_libraries (${CMAKE_THREAD_LIBS_INIT})
 endif (Threads_FOUND)
 
+set(WITH_OPENMP True CACHE BOOL "Use OpenMP")
 set(WITH_ZED True CACHE BOOL "Use ZED SDK")
 set(USE_OPENCV_VERSION "3.1" CACHE STRING "OpenCV version")
 set(WITH_PROFILING True CACHE BOOL "Enable profiling output")
@@ -65,6 +66,12 @@ if(!WIN32)
 endif()
 
 find_package(TCLAP REQUIRED)
+
+if(WITH_OPENMP)
+	find_package(OpenMP REQUIRED)
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_C_FLAGS}")
+endif()
 
 if("${WITH_ZED}")
   # ZED SDK

@@ -7,8 +7,8 @@
 //==================================================
 #pragma once
 
-#include "eigen_alignment.h"
 #include <Eigen/Dense>
+#include "eigen_alignment.h"
 
 namespace ait
 {

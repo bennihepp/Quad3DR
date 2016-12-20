@@ -19,15 +19,17 @@
 #define NOEXCEPT
 #endif
 
-
+// Marco for function name and line number as a string
 #define FUNCTION_LINE_STRING (std::string(__FILE__) + " [" + std::string(__FUNCTION__) + ":" + std::to_string(__LINE__) + "]")
 
+// Exceptions
 #define ANNOTATE_EXC(type, s) type (std::string(FUNCTION_LINE_STRING).append(": ").append(s))
 
 #ifndef AIT_EXCEPTION
     #define AIT_EXCEPTION(s) ait::Exception(std::string(FUNCTION_LINE_STRING).append(": ").append(s).c_str())
 #endif
 
+// Warning and error output
 #if !defined(MLIB_WARNING) && !AIT_MLIB_COMPATIBILITY
 #define MLIB_WARNING(s) ait::warningFunction(std::string(FUNCTION_LINE_STRING) + ": " + std::string(s))
 #endif
@@ -36,16 +38,18 @@
 #define MLIB_ERROR(s) ait::errorFunction(std::string(FUNCTION_LINE_STRING) + ": " + std::string(s))
 #endif
 
-
+// Assertion macros
+#define AIT_ASSERT_STR(b, s) { if (!(b)) { ait::assertMessage(std::string(FUNCTION_LINE_STRING) + ": " + std::string(s)); } }
+#define AIT_ASSERT(b) { if (!(b)) { ait::assertMessage(FUNCTION_LINE_STRING); } }
 #if defined(DEBUG) || defined(_DEBUG)
-#define AIT_ASSERT_STR(b,s) { if(!(b)) ait::assertFunction(b, std::string(FUNCTION_LINE_STRING) + ": " + std::string(s)); }
-#define AIT_ASSERT(b) { if(!(b)) ait::assertFunction(b, FUNCTION_LINE_STRING); }
+#define AIT_ASSERT_DBG_STR(b, s) { if (!(b)) { ait::assertMessage(std::string(FUNCTION_LINE_STRING) + ": " + std::string(s)); } }
+#define AIT_ASSERT_DBG(b) { if (!(b)) { ait::assertMessage(FUNCTION_LINE_STRING); } }
 #else
-#define AIT_ASSERT_STR(b,s)
-#define AIT_ASSERT(b)
+#define AIT_ASSERT_DBG_STR(b, s)
+#define AIT_ASSERT_DBG(b)
 #endif
 
-
+// Safe delete and free macros
 #ifndef SAFE_DELETE
     #define SAFE_DELETE(p)       { if (p != nullptr) { delete (p); (p) = nullptr; } }
 #endif
@@ -96,11 +100,6 @@ public:
 void warningFunction(const std::string& description);
 void errorFunction(const std::string& description);
 void assertFunction(bool predicate, const std::string& description);
-
-template <typename T>
-T clamp(const T& value, const T& min, const T& max)
-{
-    return std::max(std::min(value, max), min);
-}
+void assertMessage(const std::string& description);
 
 }

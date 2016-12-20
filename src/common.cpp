@@ -22,28 +22,35 @@ void warningFunction(const std::string& description)
 
 void errorFunction(const std::string &description)
 {
-    std::cout << description << std::endl;
-#ifdef _DEBUG
-    #if defined(WIN32) || defined(_WIN32) || defined(__WIN32) && !defined(__CYGWIN__)
-        __debugbreak();
-    #else
-        std::raise(SIGINT);
-    #endif
+  std::cerr << "ERROR: " << description << std::endl;
+#if _DEBUG || AIT_DEBUG
+  #if defined(WIN32) || defined(_WIN32) || defined(__WIN32) && !defined(__CYGWIN__)
+    __debugbreak();
+  #else
+    std::raise(SIGINT);
+  #endif
 #endif
 }
 
 void assertFunction(bool predicate, const std::string& description)
 {
-    if(!predicate) {
-        std::cerr << "Assertion failed. " << description << std::endl;
-#ifdef _DEBUG
-    #if defined(WIN32) || defined(_WIN32) || defined(__WIN32) && !defined(__CYGWIN__)
-        __debugbreak();
-    #else
-        std::raise(SIGINT);
-    #endif
+  if(!predicate) {
+    assertMessage(description);
+  }
+}
+
+void assertMessage(const std::string& description)
+{
+  std::cerr << "Assertion failed. " << description << std::endl;
+#if _DEBUG || AIT_DEBUG
+  #if defined(WIN32) || defined(_WIN32) || defined(__WIN32) && !defined(__CYGWIN__)
+  __debugbreak();
+  #else
+  std::raise(SIGINT);
+  #endif
+#else
+  throw AIT_EXCEPTION(std::string("Assertion failed: ") + description);
 #endif
-    }
 }
 
 }
