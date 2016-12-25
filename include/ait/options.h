@@ -55,6 +55,22 @@ public:
         (getFullOptionName(name).c_str(), po::value<T>()->default_value(init_value), name.c_str());
   }
 
+  template <typename T>
+  void addOption(const std::string& name, T* value_ptr, bool required = false) {
+    po::typed_value<T>* po_value = po::value<T>(value_ptr);
+    if (required) {
+      po_value = po_value->required();
+    }
+    options_.add_options()
+          (getFullOptionName(name).c_str(), po_value, name.c_str());
+  }
+
+  template <typename T>
+  void addOption(const std::string& name, T* value_ptr, T init_value) {
+    options_.add_options()
+        (getFullOptionName(name).c_str(), po::value<T>(value_ptr)->default_value(init_value), name.c_str());
+  }
+
   bool isSet(const std::string& name) {
     std::string full_name = prefix_ + "." + name;
     return vm_.count(full_name) > 0;
