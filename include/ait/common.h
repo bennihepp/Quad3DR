@@ -26,16 +26,16 @@
 #define ANNOTATE_EXC(type, s) type (std::string(FUNCTION_LINE_STRING).append(": ").append(s))
 
 #ifndef AIT_EXCEPTION
-    #define AIT_EXCEPTION(s) ait::Exception(std::string(FUNCTION_LINE_STRING).append(": ").append(s).c_str())
+  #define AIT_EXCEPTION(s) ait::Exception(std::string(FUNCTION_LINE_STRING).append(": ").append(s).c_str())
 #endif
 
 // Warning and error output
-#if !defined(MLIB_WARNING) && !AIT_MLIB_COMPATIBILITY
-#define MLIB_WARNING(s) ait::warningFunction(std::string(FUNCTION_LINE_STRING) + ": " + std::string(s))
+#if !defined(MLIB_WARNING) && AIT_MLIB_COMPATIBILITY
+  #define MLIB_WARNING(s) ait::warningFunction(std::string(FUNCTION_LINE_STRING) + ": " + std::string(s))
 #endif
 
-#if !defined(MLIB_ERROR) && !AIT_MLIB_COMPATIBILITY
-#define MLIB_ERROR(s) ait::errorFunction(std::string(FUNCTION_LINE_STRING) + ": " + std::string(s))
+#if !defined(MLIB_ERROR) && AIT_MLIB_COMPATIBILITY
+  #define MLIB_ERROR(s) ait::errorFunction(std::string(FUNCTION_LINE_STRING) + ": " + std::string(s))
 #endif
 
 // Assertion macros

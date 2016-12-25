@@ -10,6 +10,7 @@
 
 #include <iostream>
 #include <string>
+#include <memory>
 #include <vector>
 #include <utility>
 #include <cstdint>
@@ -17,13 +18,11 @@
 #include <thread>
 #include <ait/common.h>
 
-namespace ait
-{
+namespace ait {
 
 /// Clamp a value between min and max
 template <typename T>
-T clamp(const T& value, const T& min, const T& max)
-{
+T clamp(const T& value, const T& min, const T& max) {
     return std::max(std::min(value, max), min);
 }
 
@@ -33,8 +32,7 @@ T clamp(const T& value, const T& min, const T& max)
 
 using Clock = std::chrono::high_resolution_clock;
 
-class RateCounter
-{
+class RateCounter {
   std::uint64_t counter_;
   Clock::time_point start_time_;
 
@@ -56,8 +54,7 @@ public:
   double printRateAndReset(const std::string& name);
 };
 
-class Timer
-{
+class Timer {
   Clock::time_point time_;
 
 public:
@@ -72,8 +69,7 @@ public:
 
 };
 
-class PaceMaker
-{
+class PaceMaker {
 public:
     using clock = std::chrono::high_resolution_clock;
     PaceMaker(double desired_rate)
@@ -116,29 +112,75 @@ private:
 
 
 // -------------------------
+// Pointer utilities
+// -------------------------
+
+template<typename T, typename U>
+std::unique_ptr<T> static_cast_ptr(std::unique_ptr<U>&& ptr);
+
+template<typename T, typename U>
+std::unique_ptr<T> dynamic_cast_ptr(std::unique_ptr<U>&& ptr);
+
+template<typename T, typename U>
+std::unique_ptr<T> reinterpret_cast_ptr(std::unique_ptr<U>&& ptr);
+
+// -------------------------
 // STL container utilities
 // -------------------------
 
 template <typename Set1, typename Set2>
-size_t computeSetIntersectionSize(const Set1& set1, const Set2& set2);
+std::size_t computeSetIntersectionSize(const Set1& set1, const Set2& set2);
 
 template <typename Set1, typename Set2>
 Set1 computeSetIntersection(const Set1& set1, const Set2& set2);
 
+template <typename Set1, typename Set2>
+std::size_t computeSetDifferenceSize(const Set1& set_a, const Set2& set_b);
+
+template <typename Set1, typename Set2>
+Set1 computeSetDifference(const Set1& set_a, const Set2& set_b);
+
+template <typename T>
+std::vector<std::size_t> computeHistogram(const std::vector<T>& values, const std::vector<T>& bins);
+
+template <typename T>
+std::pair<std::vector<std::size_t>, std::vector<T>> computeHistogram(const std::vector<T>& values, const std::size_t num_bins);
+
 } /* namespace ait */
 
+// -------------------------
+// Pointer utilities
+// -------------------------
+
+template<typename T, typename U>
+std::unique_ptr<T> ait::static_cast_ptr(std::unique_ptr<U>&& ptr) {
+  T* raw_ptr = static_cast<T*>(ptr.release());
+  return std::move(std::unique_ptr<T>(raw_ptr));
+}
+
+template<typename T, typename U>
+std::unique_ptr<T> ait::dynamic_cast_ptr(std::unique_ptr<U>&& ptr) {
+  T* raw_ptr = dynamic_cast<T*>(ptr.release());
+  return std::move(std::unique_ptr<T>(raw_ptr));
+}
+
+template<typename T, typename U>
+std::unique_ptr<T> ait::reinterpret_cast_ptr(std::unique_ptr<U>&& ptr) {
+  T* raw_ptr = reinterpret_cast<T*>(ptr.release());
+  return std::move(std::unique_ptr<T>(raw_ptr));
+}
 
 // -------------------------
 // STL container utilities implementations
 // -------------------------
 
 template <typename Set1, typename Set2>
-size_t ait::computeSetIntersectionSize(const Set1& set1, const Set2& set2) {
+std::size_t ait::computeSetIntersectionSize(const Set1& set1, const Set2& set2) {
     static_assert(std::is_same<typename Set1::key_type, typename Set2::key_type>::value, "Key must be same type");
     if (set1.size() > set2.size()) {
         return computeSetIntersectionSize(set2, set1);
     }
-    size_t size = 0;
+    std::size_t size = 0;
     for (const auto& key : set1) {
         if (set2.find(key) != set2.cend()) {
             ++size;
@@ -162,33 +204,71 @@ Set1 ait::computeSetIntersection(const Set1& set1, const Set2& set2) {
     return intersection;
 }
 
-
-// -------------------------
-// File input output utilities
-// -------------------------
-
-template <typename T>
-void writeToStream(std::ostream& out, const T& value) {
-  out.write(reinterpret_cast<char*>(&value), sizeof(value));
-  if (!static_cast<bool>(out)) {
-    throw AIT_EXCEPTION("Unable to write to stream");
+template <typename Set1, typename Set2>
+std::size_t ait::computeSetDifferenceSize(const Set1& set_a, const Set2& set_b) {
+  static_assert(std::is_same<typename Set1::key_type, typename Set2::key_type>::value, "Key must be same type");
+  std::size_t size = 0;
+  for (const auto& key : set_a) {
+      if (set_b.find(key) != set_b.cend()) {
+        ++size;
+      }
   }
+  return size;
+}
+
+template <typename Set1, typename Set2>
+Set1 ait::computeSetDifference(const Set1& set_a, const Set2& set_b) {
+  static_assert(std::is_same<typename Set1::key_type, typename Set2::key_type>::value, "Key must be same type");
+  Set1 difference;
+  for (const auto& key : set_a) {
+      if (set_b.find(key) != set_b.cend()) {
+        difference.insert(key);
+      }
+  }
+  return difference;
 }
 
 template <typename T>
-void readFromStream(std::istream& in, T* value) {
-  in.read(reinterpret_cast<char*>(value), sizeof(T));
-  if (!static_cast<bool>(in)) {
-    throw AIT_EXCEPTION("Unable to read from stream");
+std::vector<std::size_t> ait::computeHistogram(const std::vector<T>& values, const std::vector<T>& bin_edges) {
+  if (values.empty()) {
+    throw AIT_EXCEPTION("Cannot compute histogram empty container");
   }
+  std::vector<T> sorted_values(values);
+  std::sort(sorted_values.begin(), sorted_values.end());
+  std::vector<std::size_t> counts;
+  counts.resize(bin_edges.size(), 0);
+  auto it = sorted_values.cbegin();
+  auto edge_it = bin_edges.cbegin();
+  auto count_it = counts.begin();
+  while (edge_it != bin_edges.cend() && it != sorted_values.cend()) {
+    if (*it <= *edge_it) {
+      ++(*count_it);
+      ++it;
+    }
+    else {
+      ++count_it;
+      ++edge_it;
+    }
+  }
+  return counts;
 }
 
 template <typename T>
-T readFromStream(std::istream& in) {
-  T value;
-  in.read(reinterpret_cast<char*>(&value), sizeof(T));
-  if (!static_cast<bool>(in)) {
-    throw AIT_EXCEPTION("Unable to read from stream");
+std::pair<std::vector<std::size_t>, std::vector<T>> ait::computeHistogram(const std::vector<T>& values, const std::size_t num_bins) {
+  if (values.empty()) {
+    throw AIT_EXCEPTION("Cannot compute histogram empty container");
   }
-  return std::move(value);
+  auto minmax = std::minmax_element(values.cbegin(), values.cend());
+  T min = *minmax.first;
+  T max = *minmax.second;
+  std::vector<T> bin_edges;
+  T range = max - min;
+  for (std::size_t i = 1; i < num_bins; ++i) {
+    T edge = min + i * range / num_bins;
+    bin_edges.push_back(edge);
+  }
+  bin_edges.push_back(max);
+  std::cout << "num_bins: " << num_bins << std::endl;
+  std::cout << "bin_edges: " << bin_edges.size() << std::endl;
+  return std::make_pair(computeHistogram(values, bin_edges), bin_edges);
 }

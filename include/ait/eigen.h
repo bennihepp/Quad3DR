@@ -8,7 +8,7 @@
 #pragma once
 
 #include <Eigen/Dense>
-#include<Eigen/StdVector>
+#include <Eigen/StdVector>
 #include <unordered_map>
 
 namespace Eigen

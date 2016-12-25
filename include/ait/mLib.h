@@ -33,10 +33,7 @@
 //#include "mLibLodePNG.h"
 //#include "mLibD3D11.h"
 
-#include "mLibEigen.h"
+//#include "mLibEigen.h"
 
 //move this to mlib (it's currently local)
 //#include "mLibCuda.h"
-
-using namespace ml;
-
