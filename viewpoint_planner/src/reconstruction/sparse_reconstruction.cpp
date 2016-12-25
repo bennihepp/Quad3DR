@@ -39,6 +39,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+using ait::Pose;
+
 using CameraMapType = SparseReconstruction::CameraMapType;
 using ImageMapType = SparseReconstruction::ImageMapType;
 using Point3DMapType = SparseReconstruction::Point3DMapType;
@@ -48,6 +50,13 @@ PinholeCamera::PinholeCamera()
 
 PinholeCamera::PinholeCamera(size_t width, size_t height, const CameraMatrix& intrinsics)
 : width_(width), height_(height), intrinsics_(intrinsics) {}
+
+bool PinholeCamera::isValid() const {
+  return width_ > 0 && height_ > 0
+      && intrinsics_(0, 0) > 0
+      && intrinsics_(1, 1) > 0
+      && intrinsics_(2, 2) > 0;
+}
 
 size_t PinholeCamera::width() const {
   return width_;
@@ -142,6 +151,33 @@ CameraMatrix PinholeCameraColmap::makeIntrinsicsFromParameters(const std::vector
   return intrinsics;
 }
 
+
+ImageColmap::ImageColmap(
+    ImageId id, const ait::Pose& pose, const std::string& name,
+    const std::vector<Feature>& features, CameraId camera_id)
+: id_(id), pose_(pose), name_(name), features_(features), camera_id_(camera_id) {}
+
+ImageId ImageColmap::id() const {
+  return id_;
+}
+
+const ait::Pose& ImageColmap::pose() const {
+  return pose_;
+}
+
+const std::string& ImageColmap::name() const {
+  return name_;
+}
+
+const std::vector<Feature>& ImageColmap::features() const {
+  return features_;
+}
+
+const CameraId& ImageColmap::camera_id() const {
+  return camera_id_;
+}
+
+
 Point3DStatistics::Point3DStatistics()
 : average_distance_(std::numeric_limits<double>::quiet_NaN()),
   stddev_distance_(std::numeric_limits<double>::quiet_NaN()),
@@ -222,8 +258,8 @@ void SparseReconstruction::computePoint3DNormalAndStatistics(Point3D& point) con
   std::vector<double> distances;
   std::vector<Eigen::Vector3d> normals;
   for (const auto& feature_entry : point.feature_track) {
-    const Image& image = images_.at(feature_entry.image_id);
-    std::tuple<double, Eigen::Vector3d> result = ait::computeDistanceAndDirection(point.getPosition(), image.pose.getWorldPosition());
+    const ImageColmap& image = images_.at(feature_entry.image_id);
+    std::tuple<double, Eigen::Vector3d> result = ait::computeDistanceAndDirection(point.getPosition(), image.pose().getWorldPosition());
     distances.push_back(std::get<0>(result));
     normals.push_back(std::get<1>(result));
   }
@@ -332,11 +368,9 @@ void SparseReconstruction::readImages(std::istream& in) {
 
     std::stringstream line_stream1(line);
 
-    Image image;
-
     // ID
     std::getline(line_stream1, item, ' ');
-    image.id = boost::lexical_cast<ImageId>(item);
+    ImageId image_id = boost::lexical_cast<ImageId>(item);
 
     // QVEC (qw, qx, qy, qz)
     std::getline(line_stream1, item, ' ');
@@ -351,26 +385,27 @@ void SparseReconstruction::readImages(std::istream& in) {
     std::getline(line_stream1, item, ' ');
     double qz = boost::lexical_cast<double>(item);
 
-    image.pose.quaternion() = Eigen::Quaterniond(qw, qx, qy, qz);
-    image.pose.quaternion().normalize();
+    ait::Pose image_pose;
+    image_pose.quaternion() = Eigen::Quaterniond(qw, qx, qy, qz);
+    image_pose.quaternion().normalize();
 
     // TVEC
     std::getline(line_stream1, item, ' ');
-    image.pose.translation()(0) = boost::lexical_cast<double>(item);
+    image_pose.translation()(0) = boost::lexical_cast<double>(item);
 
     std::getline(line_stream1, item, ' ');
-    image.pose.translation()(1) = boost::lexical_cast<double>(item);
+    image_pose.translation()(1) = boost::lexical_cast<double>(item);
 
     std::getline(line_stream1, item, ' ');
-    image.pose.translation()(2) = boost::lexical_cast<double>(item);
+    image_pose.translation()(2) = boost::lexical_cast<double>(item);
 
     // CAMERA_ID
     std::getline(line_stream1, item, ' ');
-    image.camera_id = boost::lexical_cast<CameraId>(item);
+    CameraId camera_id = boost::lexical_cast<CameraId>(item);
 
     // NAME
     std::getline(line_stream1, item, ' ');
-    image.name = item;
+    std::string image_name = item;
 
     // POINTS2D
     std::getline(in, line);
@@ -380,6 +415,7 @@ void SparseReconstruction::readImages(std::istream& in) {
     std::vector<Eigen::Vector2d> points;
     std::vector<Point3DId> point3D_ids;
 
+    std::vector<Feature> image_features;
     while (!line_stream2.eof()) {
       Feature feature;
 
@@ -397,11 +433,13 @@ void SparseReconstruction::readImages(std::istream& in) {
         feature.point3d_id = boost::lexical_cast<Point3DId>(item);
       }
 
-      image.features.push_back(feature);
+      image_features.push_back(feature);
     }
-    image.features.shrink_to_fit();
+    image_features.shrink_to_fit();
 
-    images_[image.id] = image;
+    ImageColmap image(image_id, image_pose, image_name, image_features, camera_id);
+
+    images_.emplace(image.id(), image);
   }
 }
 

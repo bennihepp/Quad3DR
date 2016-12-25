@@ -64,14 +64,22 @@ add_executable(viewpoint_planner WIN32
   ../src/mLib.cpp
   ../src/utilities.cpp
   src/bvh/bvh.h
+  src/planner/viewpoint_planner.h
+  src/planner/viewpoint_planner.cpp
+  src/planner/viewpoint_planner_data.h
+  src/planner/viewpoint_planner_data.cpp
+  src/reconstruction/sparse_reconstruction.h
+  src/reconstruction/sparse_reconstruction.cpp
+  src/reconstruction/dense_reconstruction.h
+  src/reconstruction/dense_reconstruction.cpp
+  src/ui/viewpoint_drawer.h
+  src/ui/viewpoint_drawer.cpp
   src/viewer_window.h
   src/viewer_window.cpp
   src/viewer_widget.h
   src/viewer_widget.cpp
   src/viewer_info_panel.h
   src/viewer_settings_panel.h
-  src/viewpoint_planner.h
-  src/viewpoint_planner.cpp
   src/octree_drawer.h
   src/octree_drawer.cpp
   src/voxel_drawer.h
@@ -82,12 +90,8 @@ add_executable(viewpoint_planner WIN32
   src/occupancy_map.cpp
   src/occupancy_node.h
   src/occupancy_node.cpp
-  src/sparse_reconstruction.h
-  src/sparse_reconstruction.cpp
   src/sparse_reconstruction_drawer.h
   src/sparse_reconstruction_drawer.cpp
-  src/dense_reconstruction.h
-  src/dense_reconstruction.cpp
   ${viewpoint_planner_UIS_H}
   src/shaders.qrc
 )

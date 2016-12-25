@@ -209,7 +209,7 @@ std::size_t ait::computeSetDifferenceSize(const Set1& set_a, const Set2& set_b) 
   static_assert(std::is_same<typename Set1::key_type, typename Set2::key_type>::value, "Key must be same type");
   std::size_t size = 0;
   for (const auto& key : set_a) {
-      if (set_b.find(key) != set_b.cend()) {
+      if (set_b.find(key) == set_b.cend()) {
         ++size;
       }
   }
@@ -221,7 +221,7 @@ Set1 ait::computeSetDifference(const Set1& set_a, const Set2& set_b) {
   static_assert(std::is_same<typename Set1::key_type, typename Set2::key_type>::value, "Key must be same type");
   Set1 difference;
   for (const auto& key : set_a) {
-      if (set_b.find(key) != set_b.cend()) {
+      if (set_b.find(key) == set_b.cend()) {
         difference.insert(key);
       }
   }

@@ -13,7 +13,7 @@
 #include "viewer_widget.h"
 #include "viewer_info_panel.h"
 #include "viewer_settings_panel.h"
-#include "viewpoint_planner.h"
+#include "planner/viewpoint_planner.h"
 
 class ViewerWindow : public QMainWindow {
   Q_OBJECT
@@ -23,18 +23,9 @@ class ViewerWindow : public QMainWindow {
   ViewerWindow(ViewpointPlanner* planner, QWidget *parent = nullptr);
   ~ViewerWindow();
 
-protected slots:
-  void onCameraPoseTimeout();
-  void onCameraPoseTimeoutHandlerFinished();
-
-signals:
-  void cameraPoseTimeoutHandlerFinished();
-
 protected:
    ViewpointPlanner* planner_;
    ViewerInfoPanel* info_panel_;
    ViewerSettingsPanel* settings_panel_;
    ViewerWidget* viewer_widget_;
-   QTimer* camera_pose_timer_;
-   std::thread worker_thread_;
 };

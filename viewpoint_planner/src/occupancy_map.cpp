@@ -25,14 +25,14 @@ std::string OccupancyMap<AugmentedOccupancyNode>::getTreeType() const {
 }
 
 template <>
-OccupancyMap<AugmentedOccupancyNode>* OccupancyMap<AugmentedOccupancyNode>::read(const std::string& filename) {
-  OccupancyMap<AugmentedOccupancyNode>* tree = reinterpret_cast<OccupancyMap<AugmentedOccupancyNode>*>(octomap::AbstractOcTree::read(filename));
+std::unique_ptr<OccupancyMap<AugmentedOccupancyNode>> OccupancyMap<AugmentedOccupancyNode>::read(const std::string& filename) {
+  std::unique_ptr<OccupancyMap<AugmentedOccupancyNode>> tree(reinterpret_cast<OccupancyMap<AugmentedOccupancyNode>*>(octomap::AbstractOcTree::read(filename)));
 
   using TreeNavigatorType = OccupancyMap<AugmentedOccupancyNode>::TreeNavigatorType;
 
   // Update parent pointers
   std::stack<TreeNavigatorType> node_stack;
-  node_stack.push(TreeNavigatorType(tree, tree->getRootKey(), tree->getRoot(), 0));
+  node_stack.push(TreeNavigatorType(tree.get(), tree->getRootKey(), tree->getRoot(), 0));
   while (!node_stack.empty()) {
     TreeNavigatorType nav = node_stack.top();
     node_stack.pop();
@@ -47,7 +47,7 @@ OccupancyMap<AugmentedOccupancyNode>* OccupancyMap<AugmentedOccupancyNode>::read
     }
   }
 
-  return tree;
+  return std::move(tree);
 }
 
 OccupancyMap<AugmentedOccupancyNode>* convertToAugmentedMap(const OccupancyMap<OccupancyNode>* input_tree) {

@@ -7,7 +7,7 @@
 //==================================================
 #pragma once
 
-#include "sparse_reconstruction.h"
+#include "reconstruction/sparse_reconstruction.h"
 #include "triangle_drawer.h"
 #include "line_drawer.h"
 
@@ -57,7 +57,7 @@ private:
 
   void uploadPointData();
 
-  void generateImageModel(const PinholeCameraColmap& camera, const Image& image,
+  void generateImageModel(const PinholeCameraColmap& camera, const ImageColmap& image,
       const float camera_size, const float r, const float g, const float b, const float a,
       std::array<OGLLineData, 8>& lines, std::array<OGLTriangleData, 2>& triangles);
 

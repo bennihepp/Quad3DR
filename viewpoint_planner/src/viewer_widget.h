@@ -35,10 +35,11 @@
 
 #include <octomap/octomap.h>
 #include <qglviewer.h>
-#include "viewpoint_planner.h"
+#include "planner/viewpoint_planner.h"
 #include "viewer_settings_panel.h"
 #include "octree_drawer.h"
 #include "sparse_reconstruction_drawer.h"
+#include "ui/viewpoint_drawer.h"
 
 class ViewerWidget : public QGLViewer
 {
@@ -56,14 +57,16 @@ public:
 
     ViewerWidget(const QGLFormat& format, ViewpointPlanner* planner, ViewerSettingsPanel* settings_panel, QWidget *parent = nullptr);
 
+    ~ViewerWidget();
+
     virtual void setSceneBoundingBox(const qglviewer::Vec& min, const qglviewer::Vec& max);
 
     void showOctree(const ViewpointPlanner::OccupancyMapType* octree);
     void showSparseReconstruction(const SparseReconstruction* sparse_recon);
     void resetView();
 
-    Pose getCameraPose() const;
-    void setCameraPose(const Pose& camera_pose);
+    ait::Pose getCameraPose() const;
+    void setCameraPose(const ait::Pose& camera_pose);
 
     QSize sizeHint() const override;
     int heightForWidth(int w) const override;
@@ -83,6 +86,7 @@ public slots:
     void setDrawSparsePoints(bool draw_sparse_points);
     void setUseDroneCamera(bool use_drone_camera);
     void setImagePoseIndex(ImageId image_id);
+    void setPlannedViewpointIndex(size_t index);
     void setMinOccupancy(double min_occupancy);
     void setMaxOccupancy(double max_occupancy);
     void setMinObservations(uint32_t min_observations);
@@ -93,6 +97,13 @@ public slots:
     void setMaxWeight(double max_weight);
     void setRenderTreeDepth(size_t render_tree_depth);
     void setRenderObservationThreshold(size_t render_observation_threshold);
+
+protected slots:
+  void onCameraPoseTimeout();
+  void onCameraPoseTimeoutHandlerFinished();
+
+signals:
+  void cameraPoseTimeoutHandlerFinished();
 
 protected:
     void draw() override;
@@ -121,5 +132,10 @@ private:
     LineDrawer axes_drawer_;
     OcTreeDrawer octree_drawer_;
     SparseReconstructionDrawer sparce_recon_drawer_;
+    ViewpointDrawer viewpoint_drawer_;
     double aspect_ratio_;
+
+    QTimer* camera_pose_timer_;
+    std::thread worker_thread_;
+    ViewpointPlanner::ViewpointPath viewpoint_path_;
 };

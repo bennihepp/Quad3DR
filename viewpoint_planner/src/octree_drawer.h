@@ -9,7 +9,8 @@
 
 #include <unordered_map>
 #include <vector>
-#include "viewpoint_planner.h"
+#include "planner/viewpoint_planner_data.h"
+#include "planner/viewpoint_planner.h"
 #include "triangle_drawer.h"
 #include "voxel_drawer.h"
 
@@ -40,7 +41,7 @@ public:
     void updateVoxelData();
     void updateVoxelColorHeightmap();
     void updateRaycastVoxels(const std::vector<std::pair<ViewpointPlanner::ConstTreeNavigatorType, float>>& raycast_voxels);
-    void updateRaycastVoxels(std::vector<std::pair<ViewpointPlannerMaps::OccupiedTreeType::NodeType*, float>>& raycats_voxels);
+    void updateRaycastVoxels(std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, float>>& raycats_voxels);
     void configVoxelDrawer(VoxelDrawer& voxel_drawer) const;
 
     float getOccupancyBinThreshold() const;

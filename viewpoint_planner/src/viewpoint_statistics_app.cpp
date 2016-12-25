@@ -15,9 +15,9 @@
 #include <ait/common.h>
 //#include <ait/mLib.h>
 
-#include "dense_reconstruction.h"
+#include "reconstruction/dense_reconstruction.h"
 #include "occupancy_map.h"
-#include "viewpoint_planner.h"
+#include "planner/viewpoint_planner.h"
 
 using std::cout;
 using std::endl;

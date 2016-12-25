@@ -1,12 +1,11 @@
-//==================================================
-// sparse_reconstruction_drawer.cpp
-//
-//  Copyright (c) 2016 Benjamin Hepp.
-//  Author: Benjamin Hepp
-//  Created on: Dec 16, 2016
-//==================================================
+/*
+ * viewpoint_drawer.cpp
+ *
+ *  Created on: Dec 24, 2016
+ *      Author: bhepp
+ */
 
-#include "sparse_reconstruction_drawer.h"
+#include "viewpoint_drawer.h"
 #include <array>
 #include <iostream>
 #include <QtOpenGL>
@@ -16,19 +15,23 @@
 #include <ait/common.h>
 #include <ait/utilities.h>
 
-SparseReconstructionDrawer::SparseReconstructionDrawer()
-: sparse_recon_(nullptr), camera_size_(0.5f), point_size_(1.0f), draw_cameras_(true), draw_sparse_points_(true) {}
+ViewpointDrawer::ViewpointDrawer()
+: camera_size_(0.5f), draw_cameras_(true) {}
 
-SparseReconstructionDrawer::~SparseReconstructionDrawer() {
+ViewpointDrawer::~ViewpointDrawer() {
   clear();
 }
 
-void SparseReconstructionDrawer::setSparseReconstruction(const SparseReconstruction* sparse_recon) {
-  sparse_recon_ = sparse_recon;
+void ViewpointDrawer::setCamera(const PinholeCamera& camera) {
+  camera_ = camera;
+}
+
+void ViewpointDrawer::setViewpoints(const std::vector<ait::Pose>& poses) {
+  poses_ = poses;
   upload();
 }
 
-void SparseReconstructionDrawer::changeCameraSize(const float delta) {
+void ViewpointDrawer::changeCameraSize(const float delta) {
   if (delta == 0.0f) {
     return;
   }
@@ -37,71 +40,51 @@ void SparseReconstructionDrawer::changeCameraSize(const float delta) {
   uploadCameraData();
 }
 
-void SparseReconstructionDrawer::changePointSize(const float delta) {
-  if (delta == 0.0f) {
-    return;
-  }
-  point_size_ *= (1.0f + delta / 100.0f * POINT_SIZE_SPEED);
-  point_size_ = ait::clamp(point_size_, MIN_POINT_SIZE, MAX_POINT_SIZE);
-  uploadPointData();
-}
-
-void SparseReconstructionDrawer::setCameraSize(float camera_size) {
+void ViewpointDrawer::setCameraSize(float camera_size) {
   camera_size_ = camera_size;
   uploadCameraData();
 }
 
-void SparseReconstructionDrawer::setDrawCameras(bool draw_cameras) {
+void ViewpointDrawer::setDrawCameras(bool draw_cameras) {
   draw_cameras_ =  draw_cameras;
 }
 
-void SparseReconstructionDrawer::setDrawSparsePoints(bool draw_sparse_points) {
-  draw_sparse_points_ = draw_sparse_points;
-}
-
-void SparseReconstructionDrawer::clear() {
+void ViewpointDrawer::clear() {
   camera_triangle_drawer_.clear();
   camera_line_drawer_.clear();
-  sparse_point_drawer_.clear();
 }
 
-void SparseReconstructionDrawer::init() {
+void ViewpointDrawer::init() {
   camera_triangle_drawer_.init();
   camera_line_drawer_.init();
-  sparse_point_drawer_.init();
   upload();
 }
 
-void SparseReconstructionDrawer::upload() {
+void ViewpointDrawer::upload() {
   uploadCameraData();
-  uploadPointData();
 }
 
-void SparseReconstructionDrawer::draw(const QMatrix4x4& pvm_matrix, const int width, const int height) {
+void ViewpointDrawer::draw(const QMatrix4x4& pvm_matrix, const int width, const int height) {
   if (draw_cameras_) {
     camera_triangle_drawer_.draw(pvm_matrix);
     camera_line_drawer_.draw(pvm_matrix, width, height, CAMERA_LINE_WIDTH);
   }
-  if (draw_sparse_points_) {
-    sparse_point_drawer_.draw(pvm_matrix, point_size_);
-  }
 }
 
-void SparseReconstructionDrawer::uploadCameraData() {
-  if (sparse_recon_ == nullptr) {
+void ViewpointDrawer::uploadCameraData() {
+  if (poses_.empty()) {
     return;
   }
-  const SparseReconstruction::CameraMapType& cameras = sparse_recon_->getCameras();
-  const SparseReconstruction::ImageMapType& images = sparse_recon_->getImages();
+  if (!camera_.isValid()) {
+    return;
+  }
+  std::cout << "intrinsics: " << camera_.intrinsics() << std::endl;
   std::vector<OGLTriangleData> triangle_data;
-  triangle_data.reserve(2 * images.size());
+  triangle_data.reserve(2 * poses_.size());
   std::vector<OGLLineData> line_data;
-  line_data.reserve(8 * images.size());
+  line_data.reserve(8 * poses_.size());
 
-  for (const auto& entry : images) {
-    const ImageColmap& image = entry.second;
-    const PinholeCameraColmap& camera = cameras.at(image.camera_id());
-
+  for (const ait::Pose& pose : poses_) {
     float r, g, b, a;
     r = IMAGE_R;
     g = IMAGE_G;
@@ -110,7 +93,7 @@ void SparseReconstructionDrawer::uploadCameraData() {
 
     std::array<OGLLineData, 8> lines;
     std::array<OGLTriangleData, 2> triangles;
-    generateImageModel(camera, image, camera_size_, r, g, b, a, lines, triangles);
+    generateImageModel(camera_, pose, camera_size_, r, g, b, a, lines, triangles);
 
     for (const OGLLineData& line : lines) {
       line_data.push_back(line);
@@ -124,34 +107,7 @@ void SparseReconstructionDrawer::uploadCameraData() {
   camera_line_drawer_.upload(line_data);
 }
 
-void SparseReconstructionDrawer::uploadPointData() {
-  if (sparse_recon_ == nullptr) {
-    return;
-  }
-  const SparseReconstruction::Point3DMapType& points3D = sparse_recon_->getPoints3D();
-  std::vector<OGLVertexDataRGBA> point_data;
-  point_data.reserve(points3D.size());
-
-  for (const auto& entry : points3D) {
-    const Point3D& point3D = entry.second;
-    if (point3D.error <= RENDER_MAX_POINT_ERROR
-        && point3D.feature_track.size() >= RENDER_MIN_TRACK_LENGTH) {
-      OGLVertexDataRGBA point;
-      point.x = static_cast<float>(point3D.pos(0));
-      point.y = static_cast<float>(point3D.pos(1));
-      point.z = static_cast<float>(point3D.pos(2));
-      point.r = point3D.color.r() / 255.f;
-      point.g = point3D.color.g() / 255.f;
-      point.b = point3D.color.b() / 255.f;
-      point.a = 1;
-      point_data.push_back(point);
-    }
-  }
-
-  sparse_point_drawer_.upload(point_data);
-}
-
-void SparseReconstructionDrawer::generateImageModel(const PinholeCameraColmap& camera, const ImageColmap& image,
+void ViewpointDrawer::generateImageModel(const PinholeCamera& camera, const ait::Pose& pose,
         const float camera_size, const float r, const float g, const float b, const float a,
         std::array<OGLLineData, 8>& lines, std::array<OGLTriangleData, 2>& triangles) {
   // Generate camera frustum in OpenGL coordinates
@@ -165,7 +121,7 @@ void SparseReconstructionDrawer::generateImageModel(const PinholeCameraColmap& c
   const float focal_length = 2.0f * image_extent / camera_extent_normalized;
 
   const Eigen::Matrix<float, 3, 4> inv_proj_matrix =
-      image.pose().getTransformationImageToWorld().cast<float>();
+      pose.getTransformationImageToWorld().cast<float>();
 //        std::cout << "inv_proj_matrix=" << inv_proj_matrix << std::endl;
 
   // Projection center, top-left, top-right, bottom-right, bottom-left corners

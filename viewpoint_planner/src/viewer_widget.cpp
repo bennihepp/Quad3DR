@@ -36,7 +36,7 @@
 #include <cmath>
 #include <manipulatedCameraFrame.h>
 #include <ait/utilities.h>
-#include "pose.h"
+#include <ait/pose.h>
 
 using namespace std;
 
@@ -64,6 +64,7 @@ ViewerWidget::ViewerWidget(const QGLFormat& format, ViewpointPlanner* planner, V
     connect(settings_panel_, SIGNAL(captureRaycast(void)), this, SLOT(captureRaycast(void)));
     connect(settings_panel_, SIGNAL(useDroneCameraChanged(bool)), this, SLOT(setUseDroneCamera(bool)));
     connect(settings_panel_, SIGNAL(imagePoseChanged(ImageId)), this, SLOT(setImagePoseIndex(ImageId)));
+    connect(settings_panel_, SIGNAL(plannedViewpointChanged(size_t)), this, SLOT(setPlannedViewpointIndex(size_t)));
     connect(settings_panel_, SIGNAL(minOccupancyChanged(double)), this, SLOT(setMinOccupancy(double)));
     connect(settings_panel_, SIGNAL(maxOccupancyChanged(double)), this, SLOT(setMaxOccupancy(double)));
     connect(settings_panel_, SIGNAL(minObservationsChanged(uint32_t)), this, SLOT(setMinObservations(uint32_t)));
@@ -97,6 +98,19 @@ ViewerWidget::ViewerWidget(const QGLFormat& format, ViewpointPlanner* planner, V
     octree_drawer_.setRenderObservationThreshold(settings_panel_->getRenderObservationThreshold());
     octree_drawer_.setMinWeight(settings_panel_->getMinWeight());
     octree_drawer_.setMaxWeight(settings_panel_->getMaxWeight());
+
+    // Timer for getting camera pose updates
+//    camera_pose_timer_ = new QTimer(this);
+//    camera_pose_timer_->setSingleShot(true);
+//    connect(camera_pose_timer_, SIGNAL(timeout()), this, SLOT(onCameraPoseTimeout()));
+//    connect(this, SIGNAL(cameraPoseTimeoutHandlerFinished()), this, SLOT(onCameraPoseTimeoutHandlerFinished()));
+//    emit cameraPoseTimeoutHandlerFinished();
+}
+
+ViewerWidget::~ViewerWidget() {
+  if (worker_thread_.joinable()) {
+    worker_thread_.join();
+  }
 }
 
 void ViewerWidget::init() {
@@ -129,6 +143,7 @@ void ViewerWidget::init() {
     initAxesDrawer();
 
     sparce_recon_drawer_.init();
+    viewpoint_drawer_.init();
     if (octree_ != nullptr) {
         showOctree(octree_);
     }
@@ -232,9 +247,27 @@ void ViewerWidget::showSparseReconstruction(const SparseReconstruction* sparse_r
     // Fill camera poses dropbox in settings panel
     std::vector<std::pair<std::string, ImageId>> pose_entries;
     for (const auto& image_entry : sparse_recon_->getImages()) {
-        pose_entries.push_back(std::make_pair(image_entry.second.name, image_entry.first));
+        pose_entries.push_back(std::make_pair(image_entry.second.name(), image_entry.first));
     }
     settings_panel_->initializeImagePoses(pose_entries);
+
+    // Make a copy of the viewpoint path so that we can later on access
+    // viewpoints select by the user
+    viewpoint_path_ = planner_->getViewpointPath();
+    std::vector<ait::Pose> poses;
+    for (const auto& path_entry : planner_->getViewpointPath()) {
+      poses.push_back(path_entry.node->viewpoint.pose());
+    }
+    viewpoint_drawer_.setCamera(sparse_recon_->getCameras().cbegin()->second);
+    viewpoint_drawer_.setViewpoints(poses);
+    // Fill planned viewpoint dropbox in settings panel
+    std::vector<std::pair<std::string, size_t>> planned_viewpoint_gui_entries;
+    for (size_t i = 0; i < planner_->getViewpointPath().size(); ++i) {
+      ViewpointPlanner::FloatType information = planner_->getViewpointPath()[i].information;
+      std::string name = std::to_string(i) + " - " + std::to_string(information);
+      planned_viewpoint_gui_entries.push_back(std::make_pair(name, i));
+    }
+    settings_panel_->initializePlannedViewpoints(planned_viewpoint_gui_entries);
 
     update();
 }
@@ -254,10 +287,16 @@ void ViewerWidget::setDrawRaycast(bool draw_raycast) {
 
 void ViewerWidget::captureRaycast()
 {
-  Pose camera_pose = getCameraPose();
-//  std::vector<std::pair<ViewpointPlanner::ConstTreeNavigatorType, float>> raycast_voxels = planner_->getRaycastHitVoxels(camera_pose);
-  std::vector<std::pair<ViewpointPlannerMaps::OccupiedTreeType::NodeType*, float>> raycast_voxels = planner_->getRaycastHitVoxelsBVH(camera_pose);
-  octree_drawer_.updateRaycastVoxels(raycast_voxels);
+  ait::Pose camera_pose = getCameraPose();
+//  std::vector<std::pair<ViewpointPlanner::ConstTreeNavigatorType, float>> raycast_results = planner_->getRaycastHitVoxels(camera_pose);
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results = planner_->getRaycastHitVoxelsBVH(camera_pose);
+  std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, float>> tmp;
+  tmp.reserve(raycast_results.size());
+  for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
+    float information = planner_->computeInformationScore(*it);
+    tmp.push_back(std::make_pair(*it, information));
+  }
+  octree_drawer_.updateRaycastVoxels(tmp);
   update();
 }
 
@@ -293,8 +332,8 @@ Eigen::Quaterniond ViewerWidget::qglviewerToEigen(const qglviewer::Quaternion& q
 }
 
 // Return camera pose (transformation from world to camera coordinate system)
-Pose ViewerWidget::getCameraPose() const {
-    Pose inv_pose;
+ait::Pose ViewerWidget::getCameraPose() const {
+    ait::Pose inv_pose;
     inv_pose.translation() = qglviewerToEigen(camera()->position());
     // Convert to OpenGL camera coordinate system (x is right, y is up, z is back)
     Eigen::AngleAxisd rotate_x_pi = Eigen::AngleAxisd(M_PI, Eigen::Vector3d::UnitX());
@@ -317,8 +356,8 @@ Pose ViewerWidget::getCameraPose() const {
 }
 
 // Set camera pose (transformation from world to camera coordinate system)
-void ViewerWidget::setCameraPose(const Pose& pose) {
-    Pose inv_pose = pose.inverse();
+void ViewerWidget::setCameraPose(const ait::Pose& pose) {
+    ait::Pose inv_pose = pose.inverse();
     camera()->setPosition(eigenToQglviewer(inv_pose.translation()));
     // Convert to OpenGL camera coordinate system (x is right, y is up, z is back)
     Eigen::AngleAxisd rotate_x_pi = Eigen::AngleAxisd(M_PI, Eigen::Vector3d::UnitX());
@@ -403,9 +442,14 @@ void ViewerWidget::setUseDroneCamera(bool use_drone_camera) {
 }
 
 void ViewerWidget::setImagePoseIndex(ImageId image_id) {
-    const Image& image = sparse_recon_->getImages().at(image_id);
-    setCameraPose(image.pose);
+    const ImageColmap& image = sparse_recon_->getImages().at(image_id);
+    setCameraPose(image.pose());
     update();
+}
+
+void ViewerWidget::setPlannedViewpointIndex(size_t index) {
+  setCameraPose(viewpoint_path_[index].node->viewpoint.pose());
+  update();
 }
 
 void ViewerWidget::setMinOccupancy(double min_occupancy) {
@@ -493,6 +537,7 @@ void ViewerWidget::draw()
     // draw drawable objects:
     octree_drawer_.draw(pvm_matrix, view_matrix, model_matrix);
     sparce_recon_drawer_.draw(pvm_matrix, width(), height());
+    viewpoint_drawer_.draw(pvm_matrix, width(), height());
 
     if (display_axes_) {
       axes_drawer_.draw(pvm_matrix, width(), height(), 5.0f);
@@ -528,4 +573,35 @@ void ViewerWidget::wheelEvent(QWheelEvent* event)
 //      ChangeFocusDistance(event->delta());
         QGLViewer::wheelEvent(event);
     }
+}
+
+void ViewerWidget::onCameraPoseTimeoutHandlerFinished() {
+  camera_pose_timer_->start(100);
+}
+
+void ViewerWidget::onCameraPoseTimeout() {
+  if (worker_thread_.joinable()) {
+    worker_thread_.join();
+  }
+  worker_thread_ = std::thread([this]() {
+    ait::Pose camera_pose = getCameraPose();
+//    CameraId camera_id = planner_->getReconstruction()->getCameras().cbegin()->first;
+//    std::cout << "pose_matrix image to world: " << camera_pose.getTransformationImageToWorld() << std::endl;
+//    std::cout << "translation: " << camera_pose.inverse().translation();
+//    std::unordered_set<Point3DId> proj_points = planner_->computeProjectedMapPoints(camera_id, camera_pose);
+//    std::unordered_set<Point3DId> filtered_points = planner_->computeFilteredMapPoints(camera_id, camera_pose);
+//    std::unordered_set<Point3DId> visible_points = planner_->computeVisibleMapPoints(camera_id, camera_pose);
+//
+//    std::cout << "  projected points: " << proj_points.size() << std::endl;
+//    std::cout << "  filtered points: " << filtered_points.size() << std::endl;
+//    std::cout << "  non-occluded points: " << visible_points.size() << std::endl;
+//    std::cout << "  filtered and non-occluded: " << ait::computeSetIntersectionSize(filtered_points, visible_points) << std::endl;
+
+//    double information_score = planner_->computeInformationScore(camera_pose);
+//    std::cout << "  information score: " << information_score << std::endl;
+    double information_score_bvh = planner_->computeInformationScoreBVH(camera_pose);
+    std::cout << "  information score BVH: " << information_score_bvh << std::endl;
+
+    emit this->cameraPoseTimeoutHandlerFinished();
+  });
 }

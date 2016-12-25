@@ -36,6 +36,7 @@
 #include <cmath>
 #include <octomap/MCTables.h>
 #include <ait/common.h>
+#include <ait/utilities.h>
 
 template <typename NodeT>
 AbstractOccupancyMap<NodeT>::AbstractOccupancyMap() {
@@ -1109,7 +1110,7 @@ bool OccupancyMap<NodeT>::intersectRayBoundingBox(const RayData& ray_data,
 #pragma GCC pop_options
 
 template <typename NodeT>
-OccupancyMap<NodeT>* OccupancyMap<NodeT>::read(const std::string& filename) {
-  OccupancyMap<NodeT>* tree = reinterpret_cast<OccupancyMap<NodeT>*>(octomap::AbstractOcTree::read(filename));
-  return tree;
+std::unique_ptr<OccupancyMap<NodeT>> OccupancyMap<NodeT>::read(const std::string& filename) {
+  std::unique_ptr<OccupancyMap<NodeT>> tree(reinterpret_cast<OccupancyMap<NodeT>*>(octomap::AbstractOcTree::read(filename)));
+  return std::move(tree);
 }

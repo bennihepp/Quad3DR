@@ -13,6 +13,7 @@
 #include <ait/common.h>
 #include <ait/eigen.h>
 #include <ait/utilities.h>
+#include <ait/serialization.h>
 
 namespace bvh {
 
@@ -35,13 +36,19 @@ struct RayData : public Ray {
 };
 
 template <typename FloatType = float>
-class BoundingBox3D {
+class BoundingBox3D : public ait::Serializable {
 public:
   using Vector3 = Eigen::Matrix<FloatType, 3, 1>;
 
+  static BoundingBox3D createFromCenterAndExtent(const Vector3& center, const Vector3& extent) {
+    const Vector3 min = center - extent / 2;
+    const Vector3 max = center + extent / 2;
+    return BoundingBox3D(min, max);
+  }
+
   BoundingBox3D() {
-    min_ << 0, 0, 0;
-    max_ << 0, 0, 0;
+    min_ << 1, 1, 1;
+    max_ << -1, -1, -1;
   }
 
   BoundingBox3D(const Vector3& center, FloatType size)
@@ -50,9 +57,20 @@ public:
   BoundingBox3D(const Vector3& min, const Vector3& max)
   : min_(min), max_(max) {}
 
+  ~BoundingBox3D() override {}
+
   bool operator==(const BoundingBox3D& other) const {
     return min_ == other.min_ && max_ == other.max_;
   }
+
+  bool isValid() const {
+    return (min_.array() <= max_.array()).all();
+  }
+
+  bool isEmpty() const {
+    return (min_.array() >= max_.array()).all();
+  }
+
   const Vector3& getMinimum() const {
     return min_;
   }
@@ -62,7 +80,7 @@ public:
   }
 
   const Vector3& getMaximum() const {
-    return min_;
+    return max_;
   }
 
   const FloatType getMaximum(size_t index) const {
@@ -90,11 +108,37 @@ public:
   }
 
   bool isOutside(const Vector3& point) const {
-    return (point.array() < min_.array()).any() || (point.array() > max_.array()).any();
+    return (point.array() < min_.array()).any()
+        || (point.array() > max_.array()).any();
   }
 
   bool isInside(const Vector3& point) const {
-    return (point.array() >= min_.array()).all() && (point.array() <= max_.array()).all();
+    return (point.array() >= min_.array()).all()
+        && (point.array() <= max_.array()).all();
+  }
+
+  bool isOutsideOf(const BoundingBox3D& bbox) const {
+    return (max_.array() < bbox.min_.array()).any()
+        || (min_.array() > bbox.max_.array()).any();
+  }
+
+  bool isInsideOf(const BoundingBox3D& bbox) const {
+    return (max_.array() >= bbox.min_.array()).all()
+        && (min_.array() <= bbox.max_.array()).all();
+  }
+
+  bool contains(const BoundingBox3D& other) const {
+    return other.isInsideOf(*this);
+  }
+
+  bool intersects(const BoundingBox3D& other) const {
+    if ((max_.array() < other.min_.array()).any()) {
+      return false;
+    }
+    if ((other.max_.array() < min_.array()).any()) {
+      return false;
+    }
+    return true;
   }
 
   bool intersects(const Ray& ray, Vector3* intersection = nullptr) const {
@@ -144,9 +188,29 @@ public:
     return BoundingBox3D(min, max);
   }
 
-  void mergeWith(const BoundingBox3D& other) {
+  void include(const BoundingBox3D& other) {
     min_ = min_.array().min(other.min_.array());
     max_ = max_.array().max(other.max_.array());
+  }
+
+  void include(const Vector3& point) {
+    min_ = min_.array().min(point);
+    max_ = max_.array().min(point);
+  }
+
+  void constrainTo(const BoundingBox3D& bbox) {
+    min_ = min_.array().max(bbox.min_.array());
+    max_ = max_.array().min(bbox.max_.array());
+  }
+
+  void write(std::ostream& out) const override {
+    ait::writeToStream(out, min_);
+    ait::writeToStream(out, max_);
+  }
+
+  void read(std::istream& in) override {
+    ait::readFromStream(in, &min_);
+    ait::readFromStream(in, &max_);
   }
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -155,6 +219,9 @@ private:
   Vector3 min_;
   Vector3 max_;
 };
+
+using BoundingBox3Df = BoundingBox3D<float>;
+using BoundingBox3Dd = BoundingBox3D<double>;
 
 template <typename FloatType, typename CharType>
 std::basic_ostream<CharType>& operator<<(std::basic_ostream<CharType>& out, const BoundingBox3D<FloatType>& bbox) {
@@ -175,7 +242,8 @@ template <typename ObjectType, typename FloatType = float>
 class Tree;
 
 template <typename ObjectType, typename FloatType = float>
-struct Node {
+class Node {
+public:
   using BoundingBoxType = BoundingBox3D<FloatType>;
 
   Node()
@@ -185,6 +253,30 @@ struct Node {
 
   const BoundingBoxType& getBoundingBox() const {
     return bounding_box_;
+  }
+
+  bool hasLeftChild() const {
+    return left_child_ != nullptr;
+  }
+
+  const Node* getLeftChild() const {
+    return left_child_;
+  }
+
+  Node* getLeftChild() {
+    return left_child_;
+  }
+
+  bool hasRightChild() const {
+    return right_child_ != nullptr;
+  }
+
+  const Node* getRightChild() const {
+    return right_child_;
+  }
+
+  Node* getRightChild() {
+    return right_child_;
   }
 
   const ObjectType* getObject() const {
@@ -239,11 +331,20 @@ public:
   };
 
   struct IntersectionResult {
+    IntersectionResult()
+    : intersection(Vector3::Zero()), node(nullptr), depth(0), dist_sq(0) {}
+
     Vector3 intersection;
     NodeType* node;
+    size_t depth;
     float dist_sq;
 
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  };
+
+  struct BBoxIntersectionResult {
+    NodeType* node;
+    size_t depth;
   };
 
   struct IntersectionData {
@@ -254,7 +355,7 @@ public:
   };
 
   Tree()
-  : root_(nullptr), depth_(0), num_nodes_(0), num_leaf_nodes_(0) {}
+  : root_(nullptr), stored_as_vector_(false), owns_objects_(false), depth_(0), num_nodes_(0), num_leaf_nodes_(0) {}
 
 //  Tree(const Node*, bool copy = true) {
 //    root_ = nullptr;
@@ -266,13 +367,18 @@ public:
   }
 
   void clear() {
-    //    nodes_.clear();
-    if (root_ != nullptr) {
-      clearRecursive(root_);
-      root_ = nullptr;
-      depth_ = 0;
-      num_leaf_nodes_ = 0;
+    if (owns_objects_) {
+      clearObjectsRecursive(root_);
     }
+    if (root_ != nullptr && !stored_as_vector_) {
+      clearRecursive(root_);
+    }
+    root_ = nullptr;
+    nodes_.clear();
+    depth_ = 0;
+    num_leaf_nodes_ = 0;
+    stored_as_vector_ = false;
+    owns_objects_ = false;
   }
 
   NodeType* getRoot() {
@@ -304,11 +410,12 @@ public:
     std::cout << "Info: NumLeaves " << getNumOfLeafNodes() << std::endl;
   }
 
-  void build(std::vector<ObjectWithBoundingBox>& objects) {
+  void build(std::vector<ObjectWithBoundingBox> objects, bool take_ownership=true) {
     clear();
 //    nodes_.emplace_back();
     root_ = allocateNode();
     buildRecursive(root_, objects);
+    owns_objects_ = take_ownership;
 //    nodes_.shrink_to_fit();
     computeInfo();
     printInfo();
@@ -327,8 +434,30 @@ public:
     else {
       result.dist_sq = std::numeric_limits<FloatType>::max();
     }
-    bool does_intersect = intersectsRecursive(data, getRoot(), &result);
+    bool does_intersect = intersectsRecursive(data, getRoot(), 0, &result);
     return std::make_pair(does_intersect, result);
+  }
+
+  std::vector<BBoxIntersectionResult> intersects(const BoundingBoxType& bbox) {
+    std::vector<BBoxIntersectionResult> results;
+    intersectsRecursive(bbox, getRoot(), 0, &results);
+    return results;
+  }
+
+  void read(const std::string& filename) {
+    std::ifstream in(filename, std::ios::binary);
+    if (in) {
+      read(in);
+    }
+    else {
+      throw AIT_EXCEPTION(std::string("Unable to open file for reading: ") + filename);
+    }
+  }
+
+  void read(std::istream& in) {
+    clear();
+    Reader reader;
+    reader.read(in, this);
   }
 
   void write(const std::string& filename) const {
@@ -342,19 +471,131 @@ public:
   }
 
   void write(std::ostream& out) const {
-    out << kFileTag;
-    writeToStream<size_t>(out, getDepth());
-    writeToStream<size_t>(out, getNumOfNodes());
-    writeToStream<size_t>(out, getNumOfLeafNodes());
-    writeRecursive(out, getRoot());
+    Writer writer;
+    writer.write(out, this);
   }
 
 private:
-  const std::string kFileTag = "BVHTree";
+  const static std::string kFileTag;
 
-  void writeRecursive(std::ostream& out, const NodeType* node) {
-    // TODO
-  }
+  struct Writer {
+    Writer()
+    : node_counter_(0) {}
+
+    void write(std::ostream& out, const Tree* tree) {
+      // Write some metadata
+      out << kFileTag << std::endl;
+      out << ObjectType::kFileTag << std::endl;
+      ait::writeToStream<size_t>(out, tree->getDepth());
+      ait::writeToStream<size_t>(out, tree->getNumOfNodes());
+      ait::writeToStream<size_t>(out, tree->getNumOfLeafNodes());
+      // Write out all nodes
+      std::deque<const NodeType*> node_queue;
+      node_queue.push_front(tree->getRoot());
+      while (!node_queue.empty()) {
+        const NodeType* node = node_queue.back();
+        node_queue.pop_back();
+        // Write child indices to disk and push childs into writing list
+        if (node->hasLeftChild()) {
+          node_queue.push_front(node->getLeftChild());
+          ait::writeToStream<size_t>(out, node_counter_ + node_queue.size());
+        }
+        else {
+          ait::writeToStream<size_t>(out, 0);
+        }
+        if (node->getRightChild()) {
+          node_queue.push_front(node->getRightChild());
+          ait::writeToStream<size_t>(out, node_counter_ + node_queue.size());
+        }
+        else {
+          ait::writeToStream<size_t>(out, 0);
+        }
+        node->getBoundingBox().write(out);
+        if (node->getObject() != nullptr) {
+          ait::writeToStream<bool>(out, true);
+          node->getObject()->write(out);
+        }
+        else {
+          ait::writeToStream<bool>(out, false);
+        }
+        ++node_counter_;
+      }
+    }
+
+    size_t node_counter_;
+  };
+
+  struct Reader {
+    Reader() {}
+
+    void read(std::istream& in, Tree* tree) {
+      // Read some metadata
+      std::string tree_tag;
+      std::getline(in, tree_tag);
+      if (tree_tag != kFileTag) {
+        throw AIT_EXCEPTION(std::string("Found unexpected tree tag: ") + tree_tag);
+      }
+      std::string object_tag;
+      std::getline(in, object_tag);
+      if (object_tag != ObjectType::kFileTag) {
+        throw AIT_EXCEPTION(std::string("Found unexpected object tag: ") + object_tag);
+      }
+      size_t depth = ait::readFromStream<size_t>(in);
+      size_t num_of_nodes = ait::readFromStream<size_t>(in);
+      size_t num_of_leaf_nodes = ait::readFromStream<size_t>(in);
+      std::cout << "Tree has depth " << depth << ", " << num_of_nodes << " nodes " << " and " << num_of_leaf_nodes << " leaf nodes" << std::endl;
+      // Read nodes from disk
+      std::vector<NodeType> nodes;
+      size_t leaf_counter = 0;
+      nodes.resize(num_of_nodes);
+      for (auto it = nodes.begin(); it != nodes.end(); ++it) {
+//        std::cout << "Reading node " << (it - nodes.begin()) << " of " << nodes.size() << std::endl;
+        size_t left_child_index = ait::readFromStream<size_t>(in);
+        size_t right_child_index = ait::readFromStream<size_t>(in);
+        NodeType& node = *it;
+        if (left_child_index == 0) {
+          node.left_child_ = nullptr;
+        }
+        else {
+          node.left_child_ = &nodes[left_child_index];
+        }
+        if (right_child_index == 0) {
+          node.right_child_ = nullptr;
+        }
+        else {
+          node.right_child_ = &nodes[right_child_index];
+        }
+        node.bounding_box_.read(in);
+        bool has_object = ait::readFromStream<bool>(in);
+        if (has_object) {
+          node.object_ = new ObjectType();
+          node.object_->read(in);
+        }
+        else {
+          node.object_ = nullptr;
+        }
+        if (node.isLeaf()) {
+          ++leaf_counter;
+        }
+      }
+      std::cout << "leaf nodes: " << leaf_counter << std::endl;
+
+      // Update tree
+//      tree->depth_ = depth;
+//      tree->num_nodes_ = num_of_nodes;
+//      tree->num_leaf_nodes_ = num_of_leaf_nodes;
+      tree->nodes_ = std::move(nodes);
+      tree->root_ = &tree->nodes_.front();
+      tree->stored_as_vector_ = true;
+      tree->owns_objects_ = true;
+      tree->computeInfo();
+      tree->printInfo();
+      AIT_ASSERT_STR(tree->getDepth() == depth
+          && tree->getNumOfNodes() == num_of_nodes
+          && tree->getNumOfLeafNodes() == num_of_leaf_nodes,
+          "The tree properties are not as expected");
+    }
+  };
 
   void computeInfo() {
     num_nodes_ = 0;
@@ -377,6 +618,18 @@ private:
         computeInfoRecursive(node->right_child_, cur_depth + 1);
       }
     }
+  }
+
+  void clearObjectsRecursive(NodeType* node) {
+    if (node->left_child_ != nullptr) {
+      clearObjectsRecursive(node->left_child_);
+      node->left_child_ = nullptr;
+    }
+    if (node->right_child_ != nullptr) {
+      clearObjectsRecursive(node->right_child_);
+      node->right_child_ = nullptr;
+    }
+    SAFE_DELETE(node->object_);
   }
 
   void clearRecursive(NodeType* node) {
@@ -425,7 +678,7 @@ private:
   BoundingBoxType computeBoundingBox(typename std::vector<ObjectWithBoundingBox>::iterator begin, typename std::vector<ObjectWithBoundingBox>::iterator end) {
     BoundingBoxType bbox = begin->bounding_box;
     for (auto it = begin; it != end; ++it) {
-      bbox.mergeWith(it->bounding_box);
+      bbox.include(it->bounding_box);
     }
     return bbox;
   }
@@ -474,7 +727,7 @@ private:
     }
   }
 
-  bool intersectsRecursive(const IntersectionData& data, NodeType* cur_node, IntersectionResult* result) const {
+  bool intersectsRecursive(const IntersectionData& data, NodeType* cur_node, size_t cur_depth, IntersectionResult* result) const {
     // Early break because of node semantics (i.e. free nodes)
 //    if (CollisionPredicate::earlyBreak(this, cur_node)) {
 //      return false;
@@ -524,6 +777,7 @@ private:
       }
       result->intersection = intersection;
       result->node = cur_node;
+      result->depth = cur_depth;
       result->dist_sq = intersection_dist_sq;
       return true;
     }
@@ -531,14 +785,41 @@ private:
     bool intersects_left = false;
     bool intersects_right = false;
     if (cur_node->left_child_ != nullptr) {
-      intersects_left = intersectsRecursive(data, cur_node->left_child_, result);
+      intersects_left = intersectsRecursive(data, cur_node->left_child_, cur_depth + 1, result);
     }
     if (cur_node->right_child_ != nullptr) {
-      intersects_right = intersectsRecursive(data, cur_node->right_child_, result);
+      intersects_right = intersectsRecursive(data, cur_node->right_child_, cur_depth + 1, result);
     }
 //    std::cout << "intersects_left: " << intersects_left << std::endl;
 //    std::cout << "intersects_right: " << intersects_right << std::endl;
     return intersects_left || intersects_right;
+  }
+
+  void intersectsRecursive(const BoundingBoxType& bbox, NodeType* cur_node, size_t cur_depth,
+      std::vector<BBoxIntersectionResult>* results) const {
+    const bool intersects = cur_node->getBoundingBox().intersects(bbox);
+//    std::cout << "cur_depth: " << cur_depth << std::endl;
+//    std::cout << "intersects: " << intersects << std::endl;
+//    std::cout << "cur_node->getBoundingBox(): " << cur_node->getBoundingBox() << std::endl;
+//    std::cout << "bbox: " << bbox << std::endl;
+    if (!intersects) {
+      return;
+    }
+
+    if (cur_node->isLeaf()) {
+      BBoxIntersectionResult result;
+      result.node = cur_node;
+      result.depth = cur_depth;
+      results->push_back(result);
+      return;
+    }
+
+    if (cur_node->left_child_ != nullptr) {
+      intersectsRecursive(bbox, cur_node->left_child_, cur_depth + 1, results);
+    }
+    if (cur_node->right_child_ != nullptr) {
+      intersectsRecursive(bbox, cur_node->right_child_, cur_depth + 1, results);
+    }
   }
 
   NodeType* allocateNode() {
@@ -551,10 +832,16 @@ private:
 
 //  std::vector<NodeType> nodes_;
   NodeType* root_;
+  std::vector<NodeType> nodes_;
+  bool stored_as_vector_;
+  bool owns_objects_;
   size_t depth_;
   size_t num_nodes_;
   size_t num_leaf_nodes_;
 };
+
+template <typename ObjectType, typename FloatType>
+const std::string Tree<ObjectType, FloatType>::kFileTag = "BVHTree";
 
 #pragma GCC pop_options
 

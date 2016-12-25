@@ -36,6 +36,7 @@
 #include <list>
 #include <stdlib.h>
 #include <vector>
+#include <memory>
 
 #include <boost/iterator/iterator_facade.hpp>
 
@@ -75,16 +76,33 @@ public:
     return getNodeOccupancy(occupancy_node) >= this->occ_prob_thres_;
   }
 
+  /// queries whether a node is occupied according to the tree's parameter for "occupancy"
+  inline bool isNodeOccupied(const OccupancyType occupancy) const {
+    return occupancy >= this->occ_prob_thres_;
+  }
+
   inline bool isNodeFree(const NodeT* occupancy_node) const {
     return !isNodeOccupied(occupancy_node);
+  }
+
+  inline bool isNodeFree(const OccupancyType occupancy) const {
+    return !isNodeOccupied(occupancy);
   }
 
   inline bool isNodeKnown(const NodeT* occupancy_node) const {
     return getNodeObservationCount(occupancy_node) >= this->observation_thres_;
   }
 
+  inline bool isNodeKnown(const CounterType observation_count) const {
+    return observation_count >= this->observation_thres_;
+  }
+
   inline bool isNodeUnknown(const NodeT* occupancy_node) const {
     return !isNodeKnown(occupancy_node);
+  }
+
+  inline bool isNodeUnknown(const CounterType observation_count) const {
+    return !isNodeKnown(observation_count);
   }
 
   OccupancyType getNodeOccupancy(const NodeT* occupancy_node) const {
@@ -553,7 +571,7 @@ public:
    **/
   void updateInnerOccupancy();
 
-  static OccupancyMap* read(const std::string& filename);
+  static std::unique_ptr<OccupancyMap> read(const std::string& filename);
 
 protected:
   /**

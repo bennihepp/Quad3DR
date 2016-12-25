@@ -122,8 +122,8 @@ public:
 
 private:
   std::string denseTypeToString(DenseMapType dense_map_type) const;
-  void readDepthMap(const Image& image, DenseMapType dense_map_type);
-  void readNormalMap(const Image& image, DenseMapType dense_map_type);
+  void readDepthMap(const ImageColmap& image, DenseMapType dense_map_type);
+  void readNormalMap(const ImageColmap& image, DenseMapType dense_map_type);
 
   std::string path_;
   DepthMapMapType depth_maps_;

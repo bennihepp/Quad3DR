@@ -9,7 +9,7 @@
 
 #include <unordered_map>
 #include <ait/eigen.h>
-#include "pose.h"
+#include <ait/pose.h>
 
 // Representations for a sparse reconstruction from Colmap.
 // File input adapted from Colmap.
@@ -43,6 +43,8 @@ public:
   PinholeCamera();
 
   PinholeCamera(size_t width, size_t height, const CameraMatrix& intrinsics);
+
+  bool isValid() const;
 
   size_t width() const;
 
@@ -99,14 +101,25 @@ struct Feature {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 };
 
-struct Image {
-  ImageId id;
-  Pose pose;
-  std::string name;
-  std::vector<Feature> features;
-  CameraId camera_id;
+struct ImageColmap {
+public:
+  ImageColmap(ImageId id, const ait::Pose& pose, const std::string& name,
+      const std::vector<Feature>& features, CameraId camera_id);
+
+  ImageId id() const;
+  const ait::Pose& pose() const;
+  const std::string& name() const;
+  const std::vector<Feature>& features() const;
+  const CameraId& camera_id() const;
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+private:
+  ImageId id_;
+  ait::Pose pose_;
+  std::string name_;
+  std::vector<Feature> features_;
+  CameraId camera_id_;
 };
 
 struct Color : public Eigen::Matrix<uint8_t, 3, 1> {
@@ -172,7 +185,7 @@ const Point3DId invalid_point3d_id = std::numeric_limits<Point3DId>::max();
 class SparseReconstruction {
 public:
   using CameraMapType = EIGEN_ALIGNED_UNORDERED_MAP(CameraId, PinholeCameraColmap);
-  using ImageMapType = EIGEN_ALIGNED_UNORDERED_MAP(ImageId, Image);
+  using ImageMapType = EIGEN_ALIGNED_UNORDERED_MAP(ImageId, ImageColmap);
   using Point3DMapType = EIGEN_ALIGNED_UNORDERED_MAP(Point3DId, Point3D);
 
   SparseReconstruction();

@@ -194,14 +194,16 @@ float OcTreeDrawer::findOccupancyBin(float occupancy) const {
 }
 
 void OcTreeDrawer::updateRaycastVoxels(
-    std::vector<std::pair<ViewpointPlannerMaps::OccupiedTreeType::NodeType*, float>>& raycats_voxels) {
+    std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, float>>& raycats_voxels) {
   std::vector<OGLVoxelData> voxel_data;
   std::vector<OGLColorData> color_data;
   std::vector<OGLVoxelInfoData> info_data;
-//  float low_information = std::numeric_limits<float>::max();
-//  float high_information = std::numeric_limits<float>::lowest();
+  float low_weight = std::numeric_limits<float>::max();
+  float high_weight = std::numeric_limits<float>::lowest();
+  float low_information = std::numeric_limits<float>::max();
+  float high_information = std::numeric_limits<float>::lowest();
   for (const auto& entry : raycats_voxels) {
-    const auto& node = entry.first;
+    const auto& node = entry.first.node;
     // TODO
 //    std::cout << "raycast voxels: " << raycast_voxels.size() << std::endl;
 //    std::cout << "position: " << nav.getPosition().transpose() << std::endl;
@@ -217,7 +219,12 @@ void OcTreeDrawer::updateRaycastVoxels(
 
     OGLVertexData vertex(voxel_position(0), voxel_position(1), voxel_position(2));
     voxel_data.emplace_back(vertex, voxel_size);
-    color_data.emplace_back(1, 1, 0, 1);
+    if (octree_->isNodeKnown(node->getObject()->observation_count)) {
+      color_data.emplace_back(1, 1, 0, 1);
+    }
+    else {
+      color_data.emplace_back(0, 1, 1, 1);
+    }
 //    if (octree_->isNodeKnown(*nav)) {
 //      color_data.emplace_back(1, 1, 0, 1);
 //    }
@@ -227,12 +234,15 @@ void OcTreeDrawer::updateRaycastVoxels(
 
 //    float occupancy = nav->getOccupancy();
 //    float weight = nav->getWeight();
+    float weight = node->getObject()->weight;
 //    const float information = entry.second;
-//    info_data.emplace_back(occupancy, nav->getObservationCount(), weight,information);
-    info_data.emplace_back(1, 1, 1, 1);
+    const float information = entry.second;
+    info_data.emplace_back(node->getObject()->occupancy, node->getObject()->observation_count, weight, information);
 
-//    low_information = std::min(information, low_information);
-//    high_information = std::max(information, high_information);
+    low_information = std::min(information, low_information);
+    high_information = std::max(information, high_information);
+    low_weight = std::min(weight, low_weight);
+    high_weight = std::max(weight, high_weight);
   }
 
   if (!raycast_drawer_) {
@@ -240,10 +250,10 @@ void OcTreeDrawer::updateRaycastVoxels(
   }
   raycast_drawer_->init();
   configVoxelDrawer(*raycast_drawer_);
-  raycast_drawer_->setInformationRange(0, 1);
-//  raycast_drawer_->setInformationRange(low_information, high_information);
+  raycast_drawer_->setInformationRange(low_information, high_information);
   raycast_drawer_->upload(voxel_data, color_data, info_data);
-//  std::cout << "Information range: [" << low_information << ", " << high_information << "]" << std::endl;
+  std::cout << "Information range: [" << low_information << ", " << high_information << "]" << std::endl;
+  std::cout << "Weight range: [" << low_weight << ", " << high_weight << "]" << std::endl;
 }
 
 void OcTreeDrawer::updateRaycastVoxels(
