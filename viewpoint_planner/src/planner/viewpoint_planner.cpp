@@ -408,7 +408,8 @@ ViewpointPlanner::getRaycastHitVoxelsWithInformationScoreBVH(
 }
 
 float ViewpointPlanner::computeInformationScore(const ViewpointPlannerData::OccupiedTreeType::IntersectionResult& result) const {
-  // TODO: Make sure tree is not pruned for occupied voxels
+  // TODO: Make sure tree is not pruned for occupied voxels.
+  // Or consider how to handle larger unknown/known voxels
   CounterType voxel_observation_count = result.node->getObject()->observation_count;
 //  if (result.depth < data_->octree_->getTreeDepth()) {
 //    voxel_observation_count /= 1 << (data_->octree_->getTreeDepth() - result.depth);

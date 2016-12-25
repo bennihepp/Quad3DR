@@ -44,3 +44,12 @@ ViewerWindow::ViewerWindow(ViewpointPlanner* planner, QWidget *parent)
 }
 
 ViewerWindow::~ViewerWindow() {}
+
+const ViewerWidget* ViewerWindow::getViewerWidget() const {
+  return viewer_widget_;
+}
+
+ViewerWidget* ViewerWindow::getViewerWidget() {
+  return viewer_widget_;
+}
+

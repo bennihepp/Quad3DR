@@ -246,93 +246,94 @@ ViewpointPlannerData::generateAugmentedOctree(std::unique_ptr<RawOccupancyMapTyp
   if (!isTreeConsistent(*output_tree.get())) {
     throw AIT_EXCEPTION("Augmented tree is inconsistent");
   }
-  timer.printTimingMs("Copying input tree");
+  timer.printTimingMs("Converting raw input tree");
 
-  timer = ait::Timer();
-  // Augment tree with weights
-  std::vector<TreeNavigatorType> query_nodes;
-  AIT_ASSERT(OCCUPANCY_WEIGHT_DEPTH - OCCUPANCY_WEIGHT_REACH > 0);
-  AIT_ASSERT(OCCUPANCY_WEIGHT_DEPTH_CUTOFF > OCCUPANCY_WEIGHT_DEPTH);
-  for (auto it = output_tree->begin_tree(OCCUPANCY_WEIGHT_DEPTH); it != output_tree->end_tree(); ++it) {
-    if (it.getDepth() == OCCUPANCY_WEIGHT_DEPTH) {
-      query_nodes.push_back(TreeNavigatorType(output_tree.get(), it.getKey(), &(*it), it.getDepth()));
-    }
-  }
-
-  float max_total_weight = 0;
-  for (const TreeNavigatorType& query_nav : query_nodes) {
-    const float dist_cutoff = 0.5f * query_nav.getSize();
-    const float dist_cutoff_sq = dist_cutoff * dist_cutoff;
-    const Eigen::Vector3f query_pos = query_nav.getPosition();
-
-    ConstTreeNavigatorType parent_nav = query_nav;
-    for (size_t i = 0; i < OCCUPANCY_WEIGHT_REACH; ++i) {
-      parent_nav.gotoParent();
-    }
-    std::stack<ConstTreeNavigatorType> node_stack;
-    node_stack.push(parent_nav);
-
-    WeightType total_weight = 0;
-    size_t total_count = 0;
-    while (!node_stack.empty()) {
-      ConstTreeNavigatorType nav = node_stack.top();
-      node_stack.pop();
-      if (nav.hasChildren() && nav.getDepth() < OCCUPANCY_WEIGHT_DEPTH_CUTOFF) {
-        for (size_t i = 0; i < 8; ++i) {
-          if (nav.hasChild(i)) {
-            node_stack.push(nav.child(i));
-          }
-        }
-      }
-      else {
-        if (nav->getObservationCount() > 0 && output_tree->isNodeOccupied(nav.getNode())) {
-//        if (nav->getObservationCount() > 0) {
-          // TODO
-//          WeightType weight = computeWeightContribution(query_pos, dist_cutoff_sq, nav);
-          WeightType weight = 0;
-//          size_t count;
-//          WeightType weight;
-//          if (nav->hasChildren()) {
-//            size_t count = 1 << (output_tree->getTreeDepth() - nav.getDepth());
-//            weight = nav->getMeanChildOccupancy() * count;
-//          } else {
-//            count = 1;
-//            weight = nav->getOccupancy();
+  // TODO: Augmented tree with weights necessary?
+//  timer = ait::Timer();
+//  // Augment tree with weights
+//  std::vector<TreeNavigatorType> query_nodes;
+//  AIT_ASSERT(OCCUPANCY_WEIGHT_DEPTH - OCCUPANCY_WEIGHT_REACH > 0);
+//  AIT_ASSERT(OCCUPANCY_WEIGHT_DEPTH_CUTOFF > OCCUPANCY_WEIGHT_DEPTH);
+//  for (auto it = output_tree->begin_tree(OCCUPANCY_WEIGHT_DEPTH); it != output_tree->end_tree(); ++it) {
+//    if (it.getDepth() == OCCUPANCY_WEIGHT_DEPTH) {
+//      query_nodes.push_back(TreeNavigatorType(output_tree.get(), it.getKey(), &(*it), it.getDepth()));
+//    }
+//  }
+//
+//  float max_total_weight = 0;
+//  for (const TreeNavigatorType& query_nav : query_nodes) {
+//    const float dist_cutoff = 0.5f * query_nav.getSize();
+//    const float dist_cutoff_sq = dist_cutoff * dist_cutoff;
+//    const Eigen::Vector3f query_pos = query_nav.getPosition();
+//
+//    ConstTreeNavigatorType parent_nav = query_nav;
+//    for (size_t i = 0; i < OCCUPANCY_WEIGHT_REACH; ++i) {
+//      parent_nav.gotoParent();
+//    }
+//    std::stack<ConstTreeNavigatorType> node_stack;
+//    node_stack.push(parent_nav);
+//
+//    WeightType total_weight = 0;
+//    size_t total_count = 0;
+//    while (!node_stack.empty()) {
+//      ConstTreeNavigatorType nav = node_stack.top();
+//      node_stack.pop();
+//      if (nav.hasChildren() && nav.getDepth() < OCCUPANCY_WEIGHT_DEPTH_CUTOFF) {
+//        for (size_t i = 0; i < 8; ++i) {
+//          if (nav.hasChild(i)) {
+//            node_stack.push(nav.child(i));
 //          }
-//          total_count += count;
-          total_weight += weight;
-        }
-      }
-    }
+//        }
+//      }
+//      else {
+//        if (nav->getObservationCount() > 0 && output_tree->isNodeOccupied(nav.getNode())) {
+////        if (nav->getObservationCount() > 0) {
+//          // TODO: How to initialize weights of augmented octree
+////          WeightType weight = computeWeightContribution(query_pos, dist_cutoff_sq, nav);
+//          WeightType weight = 0;
+////          size_t count;
+////          WeightType weight;
+////          if (nav->hasChildren()) {
+////            size_t count = 1 << (output_tree->getTreeDepth() - nav.getDepth());
+////            weight = nav->getMeanChildOccupancy() * count;
+////          } else {
+////            count = 1;
+////            weight = nav->getOccupancy();
+////          }
+////          total_count += count;
+//          total_weight += weight;
+//        }
+//      }
+//    }
+//
+////    total_weight = total_count > 0 ? total_weight / total_count : 0;
+////    std::cout << "total_weight=" << total_weight << ", total_count=" << total_count << std::endl;
+//
+////    std::cout << "total_weight: " << total_weight << std::endl;
+//    if (total_weight > max_total_weight) {
+//      max_total_weight = total_weight;
+//    }
+//
+//    // Pass weight down the tree to the leaf nodes
+//    std::stack<TreeNavigatorType> node_stack2;
+//    node_stack2.push(query_nav);
+//    while (!node_stack2.empty()) {
+//      TreeNavigatorType nav = node_stack2.top();
+//      node_stack2.pop();
+//      AIT_ASSERT(nav->getWeight() == 0);
+//      nav->setWeight(total_weight);
+//      if (nav.hasChildren()) {
+//        for (size_t i = 0; i < 8; ++i) {
+//          if (nav.hasChild(i)) {
+//            node_stack2.push(nav.child(i));
+//          }
+//        }
+//      }
+//    }
+//  }
+//  std::cout << "Maximum weight: " << max_total_weight << std::endl;
+//  timer.printTimingMs("Augmenting tree");
 
-//    total_weight = total_count > 0 ? total_weight / total_count : 0;
-//    std::cout << "total_weight=" << total_weight << ", total_count=" << total_count << std::endl;
-
-//    std::cout << "total_weight: " << total_weight << std::endl;
-    if (total_weight > max_total_weight) {
-      max_total_weight = total_weight;
-    }
-
-    // Pass weight down the tree to the leaf nodes
-    std::stack<TreeNavigatorType> node_stack2;
-    node_stack2.push(query_nav);
-    while (!node_stack2.empty()) {
-      TreeNavigatorType nav = node_stack2.top();
-      node_stack2.pop();
-      AIT_ASSERT(nav->getWeight() == 0);
-      nav->setWeight(total_weight);
-      if (nav.hasChildren()) {
-        for (size_t i = 0; i < 8; ++i) {
-          if (nav.hasChild(i)) {
-            node_stack2.push(nav.child(i));
-          }
-        }
-      }
-    }
-  }
-  timer.printTimingMs("Augmenting tree");
-
-  std::cout << "Maximum weight: " << max_total_weight << std::endl;
   return std::move(output_tree);
 }
 
@@ -429,9 +430,7 @@ void ViewpointPlannerData::generateDistanceField() {
       const float cur_dist = seed_grid(indices(0), indices(1), indices(2));
       const float new_dist = (xyz - tri_xyz).norm() / grid_increment_;
       if (new_dist < cur_dist) {
-        // TODO: Use zero or proper distance
         seed_grid(indices(0), indices(1), indices(2)) = new_dist;
-//        seed_grid(indices(0), indices(1), indices(2)) = 0;
       }
     }
   }
@@ -471,14 +470,15 @@ ViewpointPlannerData::Vector3 ViewpointPlannerData::getGridPosition(int ix, int 
   return getGridPosition(Vector3i(ix, iy, iz));
 }
 
-ViewpointPlannerData::WeightType ViewpointPlannerData::computeWeightContribution(
-    const Eigen::Vector3f& query_pos, float dist_cutoff_sq, const ConstTreeNavigatorType& nav) {
-//  const WeightType observation_factor = computeObservationWeightFactor(nav->getObservationCountSum());
-//  WeightType weight = nav->getOccupancy() * observation_factor;
-  WeightType weight = nav->getOccupancy() * nav->getObservationCountSum();
-  const Eigen::Vector3f node_pos = nav.getPosition();
-  float dist_sq = (node_pos - query_pos).squaredNorm();
-  dist_sq = std::max(dist_cutoff_sq, dist_sq);
-  weight /= std::sqrt(dist_cutoff_sq / dist_sq);
-  return weight;
-}
+// TODO: Can be removed?
+//ViewpointPlannerData::WeightType ViewpointPlannerData::computeWeightContribution(
+//    const Eigen::Vector3f& query_pos, float dist_cutoff_sq, const ConstTreeNavigatorType& nav) {
+////  const WeightType observation_factor = computeObservationWeightFactor(nav->getObservationCountSum());
+////  WeightType weight = nav->getOccupancy() * observation_factor;
+//  WeightType weight = nav->getOccupancy() * nav->getObservationCountSum();
+//  const Eigen::Vector3f node_pos = nav.getPosition();
+//  float dist_sq = (node_pos - query_pos).squaredNorm();
+//  dist_sq = std::max(dist_cutoff_sq, dist_sq);
+//  weight /= std::sqrt(dist_cutoff_sq / dist_sq);
+//  return weight;
+//}

@@ -126,8 +126,9 @@ private:
   template <typename TreeT>
   static bool isTreeConsistent(const TreeT& tree);
 
-  static WeightType computeWeightContribution(
-      const Eigen::Vector3f& query_pos, FloatType dist_cutoff_sq, const ConstTreeNavigatorType& nav);
+  // TODO: Can be removed?
+//  static WeightType computeWeightContribution(
+//      const Eigen::Vector3f& query_pos, FloatType dist_cutoff_sq, const ConstTreeNavigatorType& nav);
 
   BoundingBoxType roi_bbox_;
   Vector3 drone_extent_;

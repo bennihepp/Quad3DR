@@ -290,7 +290,7 @@ bool OccupancyMap<NodeT>::pruneNode(NodeT* node) {
 template <typename NodeT>
 bool OccupancyMap<NodeT>::isNodeCollapsible(const NodeT* node) const {
   // all children must exist, must not have children of
-  // their own and have the same occupancy state
+  // their own and have the same occupancy and observation count values.
   if (!node->hasChild(0)) {
     return false;
   }
@@ -305,10 +305,16 @@ bool OccupancyMap<NodeT>::isNodeCollapsible(const NodeT* node) const {
       return false;
     }
     const NodeT* child = this->getNodeChild(node, i);
-    if (this->isNodeOccupied(child) != this->isNodeOccupied(first_child)) {
+//    if (this->isNodeOccupied(child) != this->isNodeOccupied(first_child)) {
+//      return false;
+//    }
+//    if (this->isNodeKnown(child) != this->isNodeKnown(first_child)) {
+//      return false;
+//    }
+    if (child->getOccupancy() != first_child->getOccupancy()) {
       return false;
     }
-    if (this->isNodeKnown(child) != this->isNodeKnown(first_child)) {
+    if (child->getObservationCount() != first_child->getObservationCount()) {
       return false;
     }
   }
