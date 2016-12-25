@@ -58,6 +58,7 @@ ViewerWidget::ViewerWidget(const QGLFormat& format, ViewpointPlanner* planner, V
     connect(settings_panel_, SIGNAL(displayAxesChanged(bool)), this, SLOT(setDisplayAxes(bool)));
     connect(settings_panel_, SIGNAL(drawSingleBinChanged(bool)), this, SLOT(setDrawSingleBin(bool)));
     connect(settings_panel_, SIGNAL(drawCamerasChanged(bool)), this, SLOT(setDrawCameras(bool)));
+    connect(settings_panel_, SIGNAL(drawPlannedViewpointsChanged(bool)), this, SLOT(setDrawPlannedViewpoints(bool)));
     connect(settings_panel_, SIGNAL(drawSparsePointsChanged(bool)), this, SLOT(setDrawSparsePoints(bool)));
     connect(settings_panel_, SIGNAL(refreshTree(void)), this, SLOT(refreshTree(void)));
     connect(settings_panel_, SIGNAL(drawRaycastChanged(bool)), this, SLOT(setDrawRaycast(bool)));
@@ -143,7 +144,7 @@ void ViewerWidget::init() {
     initAxesDrawer();
 
     sparce_recon_drawer_.init();
-    viewpoint_drawer_.init();
+    planned_viewpoint_drawer_.init();
     if (octree_ != nullptr) {
         showOctree(octree_);
     }
@@ -235,14 +236,39 @@ void ViewerWidget::showOctree(const ViewpointPlanner::OccupancyMapType* octree) 
     setSceneBoundingBox(qglviewer::Vec(minX, minY, minZ), qglviewer::Vec(maxX, maxY, maxZ));
 }
 
-void ViewerWidget::showSparseReconstruction(const SparseReconstruction* sparse_recon)
-{
+void ViewerWidget::showViewpointPath(const ViewpointPlanner::ViewpointPath& viewpoint_path) {
+  if (!initialized_) {
+      return;
+  }
+
+  // Make a copy of the viewpoint path so that we can later on access
+  // viewpoints select by the user
+  viewpoint_path_ = planner_->getViewpointPath();
+
+  // Fill planned viewpoint dropbox in settings panel
+  std::vector<std::pair<std::string, size_t>> planned_viewpoint_gui_entries;
+  for (size_t i = 0; i < planner_->getViewpointPath().size(); ++i) {
+    ViewpointPlanner::FloatType information = planner_->getViewpointPath()[i].information;
+    std::string name = std::to_string(i) + " - " + std::to_string(information);
+    planned_viewpoint_gui_entries.push_back(std::make_pair(name, i));
+  }
+  settings_panel_->initializePlannedViewpoints(planned_viewpoint_gui_entries);
+
+  std::vector<ait::Pose> poses;
+  for (const auto& path_entry : viewpoint_path_) {
+    poses.push_back(path_entry.node->viewpoint.pose());
+  }
+  planned_viewpoint_drawer_.setCamera(sparse_recon_->getCameras().cbegin()->second);
+  planned_viewpoint_drawer_.setViewpoints(poses);
+
+  update();
+}
+
+void ViewerWidget::showSparseReconstruction(const SparseReconstruction* sparse_recon) {
     sparse_recon_ = sparse_recon;
     if (!initialized_) {
         return;
     }
-
-    sparce_recon_drawer_.setSparseReconstruction(sparse_recon_);
 
     // Fill camera poses dropbox in settings panel
     std::vector<std::pair<std::string, ImageId>> pose_entries;
@@ -251,23 +277,7 @@ void ViewerWidget::showSparseReconstruction(const SparseReconstruction* sparse_r
     }
     settings_panel_->initializeImagePoses(pose_entries);
 
-    // Make a copy of the viewpoint path so that we can later on access
-    // viewpoints select by the user
-    viewpoint_path_ = planner_->getViewpointPath();
-    std::vector<ait::Pose> poses;
-    for (const auto& path_entry : planner_->getViewpointPath()) {
-      poses.push_back(path_entry.node->viewpoint.pose());
-    }
-    viewpoint_drawer_.setCamera(sparse_recon_->getCameras().cbegin()->second);
-    viewpoint_drawer_.setViewpoints(poses);
-    // Fill planned viewpoint dropbox in settings panel
-    std::vector<std::pair<std::string, size_t>> planned_viewpoint_gui_entries;
-    for (size_t i = 0; i < planner_->getViewpointPath().size(); ++i) {
-      ViewpointPlanner::FloatType information = planner_->getViewpointPath()[i].information;
-      std::string name = std::to_string(i) + " - " + std::to_string(information);
-      planned_viewpoint_gui_entries.push_back(std::make_pair(name, i));
-    }
-    settings_panel_->initializePlannedViewpoints(planned_viewpoint_gui_entries);
+    sparce_recon_drawer_.setSparseReconstruction(sparse_recon_);
 
     update();
 }
@@ -391,33 +401,33 @@ void ViewerWidget::setDisplayAxes(bool display_axes)
   update();
 }
 
-void ViewerWidget::setVoxelAlpha(double voxel_alpha)
-{
+void ViewerWidget::setVoxelAlpha(double voxel_alpha) {
 //    std::cout << "Setting voxel alpha to " << voxel_alpha << std::endl;
     octree_drawer_.setAlphaOccupied(voxel_alpha);
     update();
 }
 
-void ViewerWidget::setDrawSingleBin(bool draw_single_bin)
-{
+void ViewerWidget::setDrawSingleBin(bool draw_single_bin) {
     octree_drawer_.setDrawSingleBin(draw_single_bin);
     update();
 }
 
-void ViewerWidget::setDrawOctree(bool draw_octree)
-{
+void ViewerWidget::setDrawOctree(bool draw_octree) {
   octree_drawer_.setDrawOctree(draw_octree);
   update();
 }
 
-void ViewerWidget::setDrawCameras(bool draw_cameras)
-{
+void ViewerWidget::setDrawCameras(bool draw_cameras) {
     sparce_recon_drawer_.setDrawCameras(draw_cameras);
     update();
 }
 
-void ViewerWidget::setDrawSparsePoints(bool draw_sparse_points)
-{
+void ViewerWidget::setDrawPlannedViewpoints(bool draw_planned_viewpoints) {
+  planned_viewpoint_drawer_.setDrawCameras(draw_planned_viewpoints);
+  update();
+}
+
+void ViewerWidget::setDrawSparsePoints(bool draw_sparse_points) {
     sparce_recon_drawer_.setDrawSparsePoints(draw_sparse_points);
     update();
 }
@@ -537,7 +547,7 @@ void ViewerWidget::draw()
     // draw drawable objects:
     octree_drawer_.draw(pvm_matrix, view_matrix, model_matrix);
     sparce_recon_drawer_.draw(pvm_matrix, width(), height());
-    viewpoint_drawer_.draw(pvm_matrix, width(), height());
+    planned_viewpoint_drawer_.draw(pvm_matrix, width(), height());
 
     if (display_axes_) {
       axes_drawer_.draw(pvm_matrix, width(), height(), 5.0f);

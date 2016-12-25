@@ -103,7 +103,7 @@
           </property>
          </widget>
         </item>
-        <item row="6" column="0">
+        <item row="7" column="0">
          <widget class="QCheckBox" name="drawSparsePoints">
           <property name="text">
            <string>DrawSparsePoints</string>
@@ -113,28 +113,28 @@
           </property>
          </widget>
         </item>
-        <item row="7" column="0">
+        <item row="8" column="0">
          <widget class="QCheckBox" name="drawFreeVoxels">
           <property name="text">
            <string>DrawFreeVoxels</string>
           </property>
          </widget>
         </item>
-        <item row="8" column="0">
+        <item row="9" column="0">
          <widget class="QCheckBox" name="drawSingleBin">
           <property name="text">
            <string>DrawSingleBin</string>
           </property>
          </widget>
         </item>
-        <item row="9" column="0">
+        <item row="10" column="0">
          <widget class="QCheckBox" name="drawRaycast">
           <property name="text">
            <string>DrawRaycast</string>
           </property>
          </widget>
         </item>
-        <item row="10" column="0" colspan="2">
+        <item row="11" column="0" colspan="2">
          <widget class="QCheckBox" name="displayAxes">
           <property name="text">
            <string>DisplayAxes</string>
@@ -144,7 +144,7 @@
           </property>
          </widget>
         </item>
-        <item row="12" column="0">
+        <item row="13" column="0">
          <widget class="QCheckBox" name="useDroneCamera">
           <property name="text">
            <string>UseDroneCamera</string>
@@ -154,27 +154,27 @@
           </property>
          </widget>
         </item>
-        <item row="13" column="0">
+        <item row="14" column="0">
          <widget class="QLabel" name="label_4">
           <property name="text">
            <string>CameraPose</string>
           </property>
          </widget>
         </item>
-        <item row="13" column="1">
+        <item row="14" column="1">
          <widget class="QComboBox" name="imagePose"/>
         </item>
-        <item row="15" column="0">
+        <item row="16" column="0">
          <widget class="QLabel" name="label_14">
           <property name="text">
            <string>ColorMode</string>
           </property>
          </widget>
         </item>
-        <item row="15" column="1">
+        <item row="16" column="1">
          <widget class="QComboBox" name="colorFlags"/>
         </item>
-        <item row="17" column="0">
+        <item row="18" column="0">
          <widget class="QLabel" name="label_11">
           <property name="font">
            <font>
@@ -187,14 +187,14 @@
           </property>
          </widget>
         </item>
-        <item row="18" column="0">
+        <item row="19" column="0">
          <widget class="QLabel" name="label_5">
           <property name="text">
            <string>MinObservations</string>
           </property>
          </widget>
         </item>
-        <item row="18" column="1">
+        <item row="19" column="1">
          <widget class="QSpinBox" name="minObservations">
           <property name="maximum">
            <number>9999999</number>
@@ -204,14 +204,14 @@
           </property>
          </widget>
         </item>
-        <item row="19" column="0">
+        <item row="20" column="0">
          <widget class="QLabel" name="label_6">
           <property name="text">
            <string>MaxObservations</string>
           </property>
          </widget>
         </item>
-        <item row="19" column="1">
+        <item row="20" column="1">
          <widget class="QSpinBox" name="maxObservations">
           <property name="maximum">
            <number>9999999</number>
@@ -221,14 +221,14 @@
           </property>
          </widget>
         </item>
-        <item row="20" column="0">
+        <item row="21" column="0">
          <widget class="QLabel" name="label_7">
           <property name="text">
            <string>MinOccupancy</string>
           </property>
          </widget>
         </item>
-        <item row="20" column="1">
+        <item row="21" column="1">
          <widget class="QDoubleSpinBox" name="minOccupancy">
           <property name="decimals">
            <number>3</number>
@@ -241,14 +241,14 @@
           </property>
          </widget>
         </item>
-        <item row="21" column="0">
+        <item row="22" column="0">
          <widget class="QLabel" name="label_8">
           <property name="text">
            <string>MaxOccupancy</string>
           </property>
          </widget>
         </item>
-        <item row="21" column="1">
+        <item row="22" column="1">
          <widget class="QDoubleSpinBox" name="maxOccupancy">
           <property name="decimals">
            <number>3</number>
@@ -264,14 +264,14 @@
           </property>
          </widget>
         </item>
-        <item row="22" column="0">
+        <item row="23" column="0">
          <widget class="QLabel" name="label_9">
           <property name="text">
            <string>MinVoxelSize</string>
           </property>
          </widget>
         </item>
-        <item row="22" column="1">
+        <item row="23" column="1">
          <widget class="QDoubleSpinBox" name="minVoxelSize">
           <property name="maximum">
            <double>4294967.000000000000000</double>
@@ -281,14 +281,14 @@
           </property>
          </widget>
         </item>
-        <item row="23" column="0">
+        <item row="24" column="0">
          <widget class="QLabel" name="label_10">
           <property name="text">
            <string>MaxVoxelSize</string>
           </property>
          </widget>
         </item>
-        <item row="23" column="1">
+        <item row="24" column="1">
          <widget class="QDoubleSpinBox" name="maxVoxelSize">
           <property name="maximum">
            <double>4294967.000000000000000</double>
@@ -301,14 +301,14 @@
           </property>
          </widget>
         </item>
-        <item row="24" column="0">
+        <item row="25" column="0">
          <widget class="QLabel" name="label_15">
           <property name="text">
            <string>MinWeight</string>
           </property>
          </widget>
         </item>
-        <item row="24" column="1">
+        <item row="25" column="1">
          <widget class="QDoubleSpinBox" name="minWeight">
           <property name="decimals">
            <number>3</number>
@@ -321,14 +321,14 @@
           </property>
          </widget>
         </item>
-        <item row="25" column="0">
+        <item row="26" column="0">
          <widget class="QLabel" name="label_16">
           <property name="text">
            <string>MaxWeight</string>
           </property>
          </widget>
         </item>
-        <item row="25" column="1">
+        <item row="26" column="1">
          <widget class="QDoubleSpinBox" name="maxWeight">
           <property name="decimals">
            <number>3</number>
@@ -344,7 +344,7 @@
           </property>
          </widget>
         </item>
-        <item row="27" column="0" colspan="2">
+        <item row="28" column="0" colspan="2">
          <spacer name="horizontalSpacer">
           <property name="orientation">
            <enum>Qt::Horizontal</enum>
@@ -357,7 +357,7 @@
           </property>
          </spacer>
         </item>
-        <item row="28" column="0">
+        <item row="29" column="0">
          <widget class="QLabel" name="label_13">
           <property name="font">
            <font>
@@ -370,14 +370,14 @@
           </property>
          </widget>
         </item>
-        <item row="29" column="0">
+        <item row="30" column="0">
          <widget class="QLabel" name="label_2">
           <property name="text">
            <string>RenderTreeDepth</string>
           </property>
          </widget>
         </item>
-        <item row="29" column="1">
+        <item row="30" column="1">
          <widget class="QSpinBox" name="renderTreeDepth">
           <property name="maximum">
            <number>32</number>
@@ -387,14 +387,14 @@
           </property>
          </widget>
         </item>
-        <item row="30" column="0">
+        <item row="31" column="0">
          <widget class="QLabel" name="label_12">
           <property name="text">
            <string>RenderMinObservations</string>
           </property>
          </widget>
         </item>
-        <item row="30" column="1">
+        <item row="31" column="1">
          <widget class="QSpinBox" name="renderObservationThreshold">
           <property name="maximum">
            <number>99999999</number>
@@ -404,29 +404,39 @@
           </property>
          </widget>
         </item>
-        <item row="31" column="0">
+        <item row="32" column="0">
          <widget class="QPushButton" name="refreshTree">
           <property name="text">
            <string>RefreshTree</string>
           </property>
          </widget>
         </item>
-        <item row="9" column="1">
+        <item row="10" column="1">
          <widget class="QPushButton" name="captureRaycast">
           <property name="text">
            <string>CaptureRaycast</string>
           </property>
          </widget>
         </item>
-        <item row="14" column="0">
+        <item row="15" column="0">
          <widget class="QLabel" name="label_17">
           <property name="text">
-           <string>PlannedCameraPose</string>
+           <string>PlannedViewpoints</string>
           </property>
          </widget>
         </item>
-        <item row="14" column="1">
+        <item row="15" column="1">
          <widget class="QComboBox" name="plannedViewpoints"/>
+        </item>
+        <item row="6" column="0">
+         <widget class="QCheckBox" name="drawPlannedViewpoints">
+          <property name="text">
+           <string>DrawPlannedViewpoints</string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+         </widget>
         </item>
        </layout>
       </item>

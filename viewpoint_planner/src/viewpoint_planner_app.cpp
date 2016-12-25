@@ -75,6 +75,7 @@ public:
 
     void run() {
         planner_ptr_->run();
+        window_ptr_->getViewerWidget()->showViewpointPath(planner_ptr_->getViewpointPath());
 //        window_ptr_->start();
 //        std::shared_ptr<ob::ProblemDefinition> pdef = quad_planner_ptr_->run();
         //        window_ptr_->join();

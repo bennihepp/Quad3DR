@@ -62,6 +62,7 @@ public:
     virtual void setSceneBoundingBox(const qglviewer::Vec& min, const qglviewer::Vec& max);
 
     void showOctree(const ViewpointPlanner::OccupancyMapType* octree);
+    void showViewpointPath(const ViewpointPlanner::ViewpointPath& viewpoint_path);
     void showSparseReconstruction(const SparseReconstruction* sparse_recon);
     void resetView();
 
@@ -83,6 +84,7 @@ public slots:
     void setDrawSingleBin(bool draw_single_bin);
     void setDrawOctree(bool draw_octree);
     void setDrawCameras(bool draw_cameras);
+    void setDrawPlannedViewpoints(bool draw_planned_viewpoints);
     void setDrawSparsePoints(bool draw_sparse_points);
     void setUseDroneCamera(bool use_drone_camera);
     void setImagePoseIndex(ImageId image_id);
@@ -132,7 +134,7 @@ private:
     LineDrawer axes_drawer_;
     OcTreeDrawer octree_drawer_;
     SparseReconstructionDrawer sparce_recon_drawer_;
-    ViewpointDrawer viewpoint_drawer_;
+    ViewpointDrawer planned_viewpoint_drawer_;
     double aspect_ratio_;
 
     QTimer* camera_pose_timer_;

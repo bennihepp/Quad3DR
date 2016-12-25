@@ -21,7 +21,12 @@ class ViewerWindow : public QMainWindow {
  public:
 
   ViewerWindow(ViewpointPlanner* planner, QWidget *parent = nullptr);
+
   ~ViewerWindow();
+
+  const ViewerWidget* getViewerWidget() const;
+
+  ViewerWidget* getViewerWidget();
 
 protected:
    ViewpointPlanner* planner_;

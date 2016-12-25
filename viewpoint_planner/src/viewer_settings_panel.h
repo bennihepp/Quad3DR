@@ -31,6 +31,7 @@ public:
         connect(ui.drawSingleBin, SIGNAL(stateChanged(int)), this, SLOT(setDrawSingleBinStateInternal(int)));
         connect(ui.drawOctree, SIGNAL(stateChanged(int)), this, SLOT(setDrawOctreeInternal(int)));
         connect(ui.drawCameras, SIGNAL(stateChanged(int)), this, SLOT(setDrawCamerasInternal(int)));
+        connect(ui.drawPlannedViewpoints, SIGNAL(stateChanged(int)), this, SLOT(setDrawPlannedViewpointsInternal(int)));
         connect(ui.drawSparsePoints, SIGNAL(stateChanged(int)), this, SLOT(setDrawSparsePointsInternal(int)));
         connect(ui.refreshTree, SIGNAL(clicked(void)), this, SLOT(signalRefreshTreeInternal()));
         connect(ui.drawRaycast, SIGNAL(stateChanged(int)), this, SLOT(setDrawRaycastInternal(int)));
@@ -244,6 +245,10 @@ protected slots:
         emit drawCamerasChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
     }
 
+    void setDrawPlannedViewpointsInternal(int state) {
+      emit drawPlannedViewpointsChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
+    }
+
     void setDrawSparsePointsInternal(int state) {
         emit drawSparsePointsChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
     }
@@ -337,6 +342,7 @@ signals:
   void drawSingleBinChanged(bool draw_single_bin);
   void drawOctreeChanged(bool draw_octree);
   void drawCamerasChanged(bool draw_cameras);
+  void drawPlannedViewpointsChanged(bool draw_planned_viewpoints);
   void drawSparsePointsChanged(bool draw_sparse_points);
   void useDroneCameraChanged(bool use_drone_camera);
   void refreshTree();

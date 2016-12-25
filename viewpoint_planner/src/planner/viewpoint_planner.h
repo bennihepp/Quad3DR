@@ -103,6 +103,8 @@ public:
     : ait::ConfigOptions("viewpoint_planner", "ViewpointPlanner options") {
       addOption<size_t>("rng_seed", 0);
       addOption<FloatType>("virtual_camera_scale", 0.05f);
+      addOption<size_t>("num_sampled_poses", 100);
+      addOption<size_t>("num_planned_viewpoints", 10);
     }
 
     ~Options() override {}
@@ -286,6 +288,8 @@ private:
 
   static WeightType computeObservationWeightFactor(CounterType observation_count);
   static WeightType computeObservationInformationFactor(CounterType observation_count);
+
+  Options options_;
 
   std::unique_ptr<ViewpointPlannerData> data_;
   std::mt19937_64 rng_;

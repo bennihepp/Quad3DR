@@ -128,7 +128,7 @@ Eigen::Vector2d Viewpoint::projectWorldPointIntoImage(const Eigen::Vector3d& poi
 
 
 ViewpointPlanner::ViewpointPlanner(const Options* options, std::unique_ptr<ViewpointPlannerData> data)
-: data_(std::move(data)) {
+: options_(*options), data_(std::move(data)) {
   size_t random_seed = options->getValue<size_t>("rng_seed");
   if (random_seed == 0) {
     random_seed = std::chrono::system_clock::now().time_since_epoch().count();
@@ -554,11 +554,12 @@ void ViewpointPlanner::removeOccludedPoints(const Pose& pose_world_to_image, std
 
 void ViewpointPlanner::run() {
   // Compute viewpoint informations for sampled poses
+  std::cout << "Sampling viewpoints and computing information score ..." << std::endl;
   const PinholeCamera* camera = &data_->reconstruction_->getCameras().cbegin()->second;
   std::vector<ViewpointNode> viewpoint_nodes;
-  size_t num_poses = 20;
-  for (size_t i = 0; i < num_poses; ++i) {
-    std::cout << "Computing pose " << i << " out of " << num_poses << std::endl;
+  std::size_t num_sampled_poses = options_.getValue<std::size_t>("num_sampled_poses");
+  for (std::size_t i = 0; i < num_sampled_poses; ++i) {
+    std::cout << "Computing pose " << i << " out of " << num_sampled_poses << std::endl;
     std::pair<bool, ait::Pose> result = samplePose();
     if (result.first) {
       const ait::Pose& pose = result.second;
@@ -578,7 +579,9 @@ void ViewpointPlanner::run() {
   for (const ViewpointNode& node : viewpoint_nodes) {
     std::cout << "information: " << node.total_information << std::endl;
   }
-  viewpoint_nodes.resize(5);
+  std::cout << "Done." << std::endl;
+
+  std::cout << "Computing viewpoint distances ..." << std::endl;
   viewpoint_graph_ = ViewpointGraph(viewpoint_nodes.begin(), viewpoint_nodes.end());
   for (ViewpointGraph::Index i = 0; i < viewpoint_graph_.numOfNodes(); ++i) {
     const ViewpointGraph::NodeType& node1 = viewpoint_graph_.getNode(i);
@@ -589,24 +592,27 @@ void ViewpointPlanner::run() {
       viewpoint_graph_.setWeight(j, i, distance);
     }
   }
+  std::cout << "Done." << std::endl;
 
   // Try to find a good path of viewpoints.
+  std::cout << "Constructing viewpoint path ..." << std::endl;
   viewpoint_path_.clear();
   std::unordered_set<const ViewpointNode*> visited_nodes;
   VoxelWithInformationSet seen_voxel_set;
-  for (size_t i = 0; i < 5; ++i) {
+  std::size_t num_planned_viewpoints = options_.getValue<std::size_t>("num_planned_viewpoints");
+  for (std::size_t i = 0; i < num_planned_viewpoints; ++i) {
     std::cout << "i=" << i << ", seen_voxel_set.size()=" << seen_voxel_set.size() << std::endl;
     ViewpointPathEntry best_entry(nullptr, std::numeric_limits<FloatType>::lowest());
-    for (size_t j = 0; j < viewpoint_graph_.numOfNodes(); ++j) {
+    for (std::size_t j = 0; j < viewpoint_graph_.numOfNodes(); ++j) {
       const ViewpointNode& next_node = viewpoint_graph_.getNode(j);
       VoxelWithInformationSet difference_set = ait::computeSetDifference(next_node.voxel_set, seen_voxel_set);
-      std::cout << "  j=" << j << ", next_node.voxel_set.size()= " << next_node.voxel_set.size() << std::endl;
-      std::cout << "  j=" << j << ", seen_voxel_set.size()= " << difference_set.size() << std::endl;
+//      std::cout << "  j=" << j << ", next_node.voxel_set.size()= " << next_node.voxel_set.size() << std::endl;
+//      std::cout << "  j=" << j << ", difference_set.size()= " << difference_set.size() << std::endl;
       FloatType new_information = std::accumulate(difference_set.cbegin(), difference_set.cend(),
           FloatType { 0 }, [](const FloatType& value, const VoxelWithInformation& voxel) {
             return value + voxel.information;
       });
-      std::cout << "  j=" << j << ", new_information=" << new_information << std::endl;
+//      std::cout << "  j=" << j << ", new_information=" << new_information << std::endl;
       if (new_information > best_entry.information) {
         best_entry = ViewpointPathEntry(&next_node, new_information);
       }
@@ -617,6 +623,7 @@ void ViewpointPlanner::run() {
     std::cout << "  " << i << ": new information: " <<  best_entry.information <<
         ", information: " << best_entry.node->total_information << std::endl;
   }
+  std::cout << "Done." << std::endl;
 
   return;
 
