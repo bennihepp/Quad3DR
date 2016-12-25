@@ -19,10 +19,10 @@
 
 #include <QApplication>
 
-#include "reconstruction/dense_reconstruction.h"
-#include "occupancy_map.h"
-#include "planner/viewpoint_planner.h"
-#include "viewer_window.h"
+#include "../reconstruction/dense_reconstruction.h"
+#include "../occupancy_map.h"
+#include "../planner/viewpoint_planner.h"
+#include "../viewer_window.h"
 
 using std::cout;
 using std::endl;

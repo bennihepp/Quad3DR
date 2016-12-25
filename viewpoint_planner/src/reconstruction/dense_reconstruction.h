@@ -14,6 +14,8 @@
 template <typename T>
 class DataArray {
 public:
+  using ValueType = T;
+
   DataArray()
   : width_(0), height_(0), channels_(0) {}
 
@@ -35,7 +37,7 @@ public:
   }
 
   size_t getElementIndex(size_t row, size_t col, size_t channel = 0) const {
-    return col + width() * row + width() * height() * channels;
+    return col + width() * row + width() * height() * channel;
   }
 
   const T& operator()(size_t row, size_t col, size_t channel = 0) const {
@@ -98,14 +100,17 @@ private:
 
 class DenseReconstruction : public SparseReconstruction {
 public:
-  using DepthMap = DataArray<float>;
-  using NormalMap = DataArray<float>;
+  using FloatType = float;
+  using DepthMap = DataArray<FloatType>;
+  using NormalMap = DataArray<FloatType>;
   using DepthMapMapType = EIGEN_ALIGNED_UNORDERED_MAP(ImageId, DepthMap);
   using NormalMapMapType = EIGEN_ALIGNED_UNORDERED_MAP(ImageId, NormalMap);
 
   enum DenseMapType {
     PHOTOMETRIC,
+    PHOTOMETRIC_FUSED,
     GEOMETRIC,
+    GEOMETRIC_FUSED,
   };
 
   DenseReconstruction();
@@ -115,17 +120,23 @@ public:
   void read(const std::string& path) override;
 
   /// Returns the depth map corresponding to the image (lazy loading of depth maps)
-  const DepthMap& getDepthMap(ImageId image_id, DenseMapType dense_map_type = GEOMETRIC);
+  const DepthMap& getDepthMap(ImageId image_id, DenseMapType dense_map_type = GEOMETRIC) const;
 
   /// Returns the normal map corresponding to the image (lazy loading of normal maps)
-  const DepthMap& getNormalMap(ImageId image_id, DenseMapType dense_map_type = GEOMETRIC);
+  const NormalMap& getNormalMap(ImageId image_id, DenseMapType dense_map_type = GEOMETRIC) const;
+
+  /// Reads the depth map corresponding to the image (does not store it internally)
+  DepthMap readDepthMap(ImageId image_id, DenseMapType dense_map_type = GEOMETRIC) const;
+
+  /// Reads the normal map corresponding to the image (does not store it internally)
+  NormalMap readNormalMap(ImageId image_id, DenseMapType dense_map_type = GEOMETRIC) const;
 
 private:
   std::string denseTypeToString(DenseMapType dense_map_type) const;
-  void readDepthMap(const ImageColmap& image, DenseMapType dense_map_type);
-  void readNormalMap(const ImageColmap& image, DenseMapType dense_map_type);
+  void readAndCacheDepthMap(const ImageId image_id, DenseMapType dense_map_type) const;
+  void readAndCacheNormalMap(const ImageId image_id, DenseMapType dense_map_type) const;
 
   std::string path_;
-  DepthMapMapType depth_maps_;
-  NormalMapMapType normal_maps_;
+  mutable DepthMapMapType depth_maps_;
+  mutable NormalMapMapType normal_maps_;
 };

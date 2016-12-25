@@ -11,7 +11,7 @@
 #include <boost/program_options.hpp>
 
 #include <octomap/octomap.h>
-#include "occupancy_map.h"
+#include "../occupancy_map.h"
 
 #include <ait/mLib.h>
 

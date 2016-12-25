@@ -41,7 +41,7 @@ include_directories(
 )
 
 add_executable(occupancy_map_from_sens
-  src/occupancy_map_from_sens.cpp
+  src/exe/occupancy_map_from_sens.cpp
   ../src/common.cpp
   ../src/mLib.cpp
   src/occupancy_map.h
@@ -57,9 +57,29 @@ target_link_libraries(occupancy_map_from_sens
   ${OpenCV_LIBRARIES}
 )
 
+add_executable(occupancy_map_from_colmap
+  src/exe/occupancy_map_from_colmap.cpp
+  ../src/common.cpp
+  src/occupancy_map.h
+  src/occupancy_map.hxx
+  src/occupancy_map_tree_navigator.hxx
+  src/occupancy_map.cpp
+  src/occupancy_node.h
+  src/occupancy_node.cpp
+  src/reconstruction/sparse_reconstruction.h
+  src/reconstruction/sparse_reconstruction.cpp
+  src/reconstruction/dense_reconstruction.h
+  src/reconstruction/dense_reconstruction.cpp
+)
+target_link_libraries(occupancy_map_from_colmap
+  ${OCTOMAP_LIBRARIES}
+  ${Boost_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+)
+
 QT5_WRAP_UI(viewpoint_planner_UIS_H src/viewer_settings_panel.ui src/viewer_info_panel.ui)
 add_executable(viewpoint_planner WIN32
-  src/viewpoint_planner_app.cpp
+  src/exe/viewpoint_planner_app.cpp
   ../src/common.cpp
   ../src/mLib.cpp
   ../src/utilities.cpp
