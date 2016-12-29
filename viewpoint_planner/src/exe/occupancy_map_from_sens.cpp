@@ -10,13 +10,14 @@
 
 #include <boost/program_options.hpp>
 
-#include <octomap/octomap.h>
-#include "../occupancy_map.h"
-
-#include <ait/mLib.h>
-
 #include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>
+
+#include <octomap/octomap.h>
+
+#include "../octree/occupancy_map.h"
+#include "../mLib/mLib.h"
+
 
 using std::cout;
 using std::endl;
@@ -143,6 +144,9 @@ int main(int argc, char** argv)
       cv::imshow("depth", depth_img2);
       cv::waitKey(100);
     }
+
+    const ml::mat4f& transform_image_to_world = frame.getCameraToWorld();
+    std::cout << "transform_image_to_world: " << transform_image_to_world << std::endl;
     oct::point3d sensor_origin(sensor_translation.x, sensor_translation.y, sensor_translation.z);
     //          std::cout << "sensor_position=" << sensor_translation << std::endl;
     oct::Pointcloud pc;

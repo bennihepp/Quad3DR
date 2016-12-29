@@ -133,7 +133,7 @@ void SparseReconstructionDrawer::uploadPointData() {
   point_data.reserve(points3D.size());
 
   for (const auto& entry : points3D) {
-    const Point3D& point3D = entry.second;
+    const reconstruction::Point3D& point3D = entry.second;
     if (point3D.error <= RENDER_MAX_POINT_ERROR
         && point3D.feature_track.size() >= RENDER_MIN_TRACK_LENGTH) {
       OGLVertexDataRGBA point;
@@ -164,19 +164,19 @@ void SparseReconstructionDrawer::generateImageModel(const PinholeCameraColmap& c
       static_cast<float>(camera_extent / camera.getMeanFocalLength());
   const float focal_length = 2.0f * image_extent / camera_extent_normalized;
 
-  const Eigen::Matrix<float, 3, 4> inv_proj_matrix =
+  const Eigen::Matrix<float, 3, 4> transform_image_to_world =
       image.pose().getTransformationImageToWorld().cast<float>();
 //        std::cout << "inv_proj_matrix=" << inv_proj_matrix << std::endl;
 
   // Projection center, top-left, top-right, bottom-right, bottom-left corners
-  const Eigen::Vector3f pc = inv_proj_matrix.rightCols<1>().cast<float>();
-  const Eigen::Vector3f tl = inv_proj_matrix
+  const Eigen::Vector3f pc = transform_image_to_world.rightCols<1>().cast<float>();
+  const Eigen::Vector3f tl = transform_image_to_world
                              * Eigen::Vector4f(-image_width, image_height, focal_length, 1);
-  const Eigen::Vector3f tr = inv_proj_matrix
+  const Eigen::Vector3f tr = transform_image_to_world
                              * Eigen::Vector4f(image_width, image_height, focal_length, 1);
-  const Eigen::Vector3f br = inv_proj_matrix
+  const Eigen::Vector3f br = transform_image_to_world
                              * Eigen::Vector4f(image_width, -image_height, focal_length, 1);
-  const Eigen::Vector3f bl = inv_proj_matrix
+  const Eigen::Vector3f bl = transform_image_to_world
                              * Eigen::Vector4f(-image_width, -image_height, focal_length, 1);
 
 //        std::cout << "pc=" << pc << std::endl;

@@ -7,19 +7,17 @@
 //==================================================
 #pragma once
 
+#include <iostream>
+#include <ait/eigen.h>
 #include <ait/eigen_utils.h>
 
 namespace ait {
 
 // A pose gives the transformation from world to image coordinate system
-struct Pose
-{
-  using FloatType = double;
-  using Quaternion = Eigen::Quaternion<FloatType>;
-  using Vector3 = Eigen::Matrix<FloatType, 3, 1>;
-  using Matrix4x4 = Eigen::Matrix<FloatType, 4, 4>;
-  using Matrix3x3 = Eigen::Matrix<FloatType, 3, 3>;
-  using Matrix3x4 = Eigen::Matrix<FloatType, 3, 4>;
+template <typename T>
+struct Pose {
+  using FloatType = T;
+  USE_FIXED_EIGEN_TYPES(FloatType)
 
   Pose()
   : translation_(0, 0, 0), quaternion_(1, 0, 0, 0) {}
@@ -31,7 +29,18 @@ struct Pose
   : translation_(translation), quaternion_(rotation) {}
 
   Pose(const Matrix4x4& matrix)
-  : translation_(matrix.col(3).topRows<3>()), quaternion_(matrix.topLeftCorner<3, 3>()) {}
+  : translation_(matrix.col(3).template topRows<3>()),
+    quaternion_(matrix.template topLeftCorner<3, 3>()) {}
+
+  static Pose createFromImageToWorldTransformation(
+      const Vector3& translation, const Matrix3x3& rotation) {
+    return Pose(translation, rotation);
+  }
+
+  static Pose createFromImageToWorldTransformation(
+      const Vector3& translation, const Quaternion& quaternion) {
+    return Pose(translation, quaternion);
+  }
 
   static Pose createFromWorldToImageTransformation(
       const Vector3& translation, const Matrix3x3& rotation) {
@@ -41,6 +50,10 @@ struct Pose
   static Pose createFromWorldToImageTransformation(
       const Vector3& translation, const Quaternion& quaternion) {
     return Pose(translation, quaternion).inverse();
+  }
+
+  bool isValid() const {
+    return translation_.allFinite() && quaternion_.coeffs().allFinite();
   }
 
   Vector3& translation() {
@@ -66,7 +79,8 @@ struct Pose
   }
 
   Vector3 getWorldPosition() const {
-    return - (quaternion_.inverse() * translation_);
+    return translation_;
+//    return - (quaternion_.inverse() * translation_);
   }
 
   Pose inverse() const {
@@ -80,18 +94,17 @@ struct Pose
     return quaternion_.toRotationMatrix();
   }
 
-  Matrix3x4 getTransformationWorldToImage() const {
+  Matrix3x4 getTransformationImageToWorld() const {
     Matrix3x4 transformation;
-    transformation.leftCols<3>() = quaternion_.toRotationMatrix();
-    transformation.rightCols<1>() = translation_;
+    transformation.template leftCols<3>() = quaternion_.toRotationMatrix();
+    transformation.template rightCols<1>() = translation_;
     return transformation;
   }
 
-  Matrix3x4 getTransformationImageToWorld() const {
-    Matrix3x4 transformation_world_to_camera = getTransformationWorldToImage();
+  Matrix3x4 getTransformationWorldToImage() const {
     Matrix3x4 transformation;
-    transformation.leftCols<3>() = transformation_world_to_camera.leftCols<3>().transpose();
-    transformation.rightCols<1>() = - transformation.leftCols<3>() * transformation_world_to_camera.rightCols<1>();
+    transformation.template leftCols<3>() = quaternion_.inverse().toRotationMatrix();
+    transformation.template rightCols<1>() = - transformation.template leftCols<3>() * translation_;
     return transformation;
   }
 
@@ -101,5 +114,11 @@ private:
   Vector3 translation_;
   Quaternion quaternion_;
 };
+
+template <typename _CharT, typename FloatType>
+std::basic_ostream<_CharT>& operator<<(std::basic_ostream<_CharT>& out, const Pose<FloatType>& pose) {
+  out << "t: (" << pose.translation().transpose() << "), q: (" << pose.quaternion() << ")" << std::endl;
+  return out;
+}
 
 }

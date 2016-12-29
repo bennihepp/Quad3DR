@@ -20,6 +20,7 @@ namespace bvh {
 #pragma GCC push_options
 #pragma GCC optimize ("fast-math")
 
+// TODO: Duplicate with Viewpoint ray
 struct Ray {
   Eigen::Vector3f origin;
   Eigen::Vector3f direction;
@@ -75,7 +76,7 @@ public:
     return min_;
   }
 
-  const FloatType getMinimum(size_t index) const {
+  const FloatType getMinimum(std::size_t index) const {
     return min_(index);
   }
 
@@ -83,7 +84,7 @@ public:
     return max_;
   }
 
-  const FloatType getMaximum(size_t index) const {
+  const FloatType getMaximum(std::size_t index) const {
     return max_(index);
   }
 
@@ -91,11 +92,15 @@ public:
     return max_ - min_;
   }
 
+  FloatType getExtent(std::size_t index) const {
+    return (max_ - min_)(index);
+  }
+
   const FloatType getMaxExtent() const {
     return (max_ - min_).maxCoeff();
   }
 
-  const FloatType getMaxExtent(size_t* index) const {
+  const FloatType getMaxExtent(std::size_t* index) const {
     return (max_ - min_).maxCoeff(index);
   }
 
@@ -103,8 +108,12 @@ public:
     return (min_ + max_) / 2;
   }
 
-  const FloatType getCenter(size_t index) const {
+  const FloatType getCenter(std::size_t index) const {
     return (min_(index) + max_(index)) / 2;
+  }
+
+  FloatType getVolume() const {
+    return getExtent().array().prod();
   }
 
   bool isOutside(const Vector3& point) const {
@@ -125,6 +134,24 @@ public:
   bool isInsideOf(const BoundingBox3D& bbox) const {
     return (max_.array() >= bbox.min_.array()).all()
         && (min_.array() <= bbox.max_.array()).all();
+  }
+
+  /// Return squared distance to closest point on the outside (if point is inside distance is 0)
+  FloatType squaredDistanceTo(const Vector3& point) const {
+    FloatType dist_sq = 0;
+    for (std::size_t i = 0; i < 3; ++i) {
+      bool outside = point(i) < getMinimum(i) || point(i) > getMaximum(i);
+      if (outside) {
+        FloatType d = std::min(std::abs(point(i) - getMinimum(i)), std::abs(point(i) - getMaximum(i)));
+        dist_sq += d * d;
+      }
+    }
+    return dist_sq;
+  }
+
+  /// Return distance to closest point on the outside (if point is inside distance is 0)
+  FloatType distanceTo(const Vector3& point) const {
+    return std::sqrt(squaredDistanceTo(point));
   }
 
   bool contains(const BoundingBox3D& other) const {
@@ -152,7 +179,7 @@ public:
     float t_min = -std::numeric_limits<FloatType>::max();
     float t_max = std::numeric_limits<FloatType>::max();
 
-  //  for (size_t i = 0; i < 3; ++i) {
+  //  for (std::size_t i = 0; i < 3; ++i) {
   //    if (ray_data.direction(i) != 0) {
   //      float t0 = (min_(i) - ray_data.origin(i)) * ray_data.inv_direction(i);
   //      float t1 = (max_(i) - ray_data.origin(i)) * ray_data.inv_direction(i);
@@ -167,7 +194,7 @@ public:
   //  }
 
     // Faster version without explicit check for directions parallel to an axis
-    for (size_t i = 0; i < 3; ++i) {
+    for (std::size_t i = 0; i < 3; ++i) {
       float t0 = (min_(i) - ray_data.origin(i)) * ray_data.inv_direction(i);
       float t1 = (max_(i) - ray_data.origin(i)) * ray_data.inv_direction(i);
       t_min = std::max(t_min, std::min(t0, t1));
@@ -180,6 +207,10 @@ public:
       *intersection = ray_data.origin + ray_data.direction * t_min;
     }
     return intersect;
+  }
+
+  BoundingBox3D operator*(FloatType scale) const {
+    return BoundingBox3D::createFromCenterAndExtent(getCenter(), scale * getExtent());
   }
 
   static BoundingBox3D getUnion(const BoundingBox3D& bbox_a, const BoundingBox3D& bbox_b) {
@@ -219,6 +250,11 @@ private:
   Vector3 min_;
   Vector3 max_;
 };
+
+template <typename FloatType>
+BoundingBox3D<FloatType> operator*(FloatType scale, const BoundingBox3D<FloatType>& bbox) {
+  return BoundingBox3D<FloatType>::createFromCenterAndExtent(bbox.getCenter(), scale * bbox.getExtent());
+}
 
 using BoundingBox3Df = BoundingBox3D<float>;
 using BoundingBox3Dd = BoundingBox3D<double>;
@@ -321,7 +357,7 @@ template <typename ObjectType, typename FloatType>
 class Tree
 {
 public:
-  using Vector3 = Eigen::Matrix<FloatType, 3, 1>;
+  USE_FIXED_EIGEN_TYPES(FloatType)
   using NodeType = Node<ObjectType, FloatType>;
   using BoundingBoxType = BoundingBox3D<FloatType>;
 
@@ -336,7 +372,7 @@ public:
 
     Vector3 intersection;
     NodeType* node;
-    size_t depth;
+    std::size_t depth;
     float dist_sq;
 
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -344,7 +380,7 @@ public:
 
   struct BBoxIntersectionResult {
     NodeType* node;
-    size_t depth;
+    std::size_t depth;
   };
 
   struct IntersectionData {
@@ -391,16 +427,16 @@ public:
     return root_;
   }
 
-  size_t getDepth() const {
+  std::size_t getDepth() const {
     return depth_;
   }
 
-  size_t getNumOfNodes() const {
+  std::size_t getNumOfNodes() const {
 //    return nodes_.size();
     return num_nodes_;
   }
 
-  size_t getNumOfLeafNodes() const {
+  std::size_t getNumOfLeafNodes() const {
     return num_leaf_nodes_;
   }
 
@@ -486,9 +522,9 @@ private:
       // Write some metadata
       out << kFileTag << std::endl;
       out << ObjectType::kFileTag << std::endl;
-      ait::writeToStream<size_t>(out, tree->getDepth());
-      ait::writeToStream<size_t>(out, tree->getNumOfNodes());
-      ait::writeToStream<size_t>(out, tree->getNumOfLeafNodes());
+      ait::writeToStream<std::size_t>(out, tree->getDepth());
+      ait::writeToStream<std::size_t>(out, tree->getNumOfNodes());
+      ait::writeToStream<std::size_t>(out, tree->getNumOfLeafNodes());
       // Write out all nodes
       std::deque<const NodeType*> node_queue;
       node_queue.push_front(tree->getRoot());
@@ -498,17 +534,17 @@ private:
         // Write child indices to disk and push childs into writing list
         if (node->hasLeftChild()) {
           node_queue.push_front(node->getLeftChild());
-          ait::writeToStream<size_t>(out, node_counter_ + node_queue.size());
+          ait::writeToStream<std::size_t>(out, node_counter_ + node_queue.size());
         }
         else {
-          ait::writeToStream<size_t>(out, 0);
+          ait::writeToStream<std::size_t>(out, 0);
         }
         if (node->getRightChild()) {
           node_queue.push_front(node->getRightChild());
-          ait::writeToStream<size_t>(out, node_counter_ + node_queue.size());
+          ait::writeToStream<std::size_t>(out, node_counter_ + node_queue.size());
         }
         else {
-          ait::writeToStream<size_t>(out, 0);
+          ait::writeToStream<std::size_t>(out, 0);
         }
         node->getBoundingBox().write(out);
         if (node->getObject() != nullptr) {
@@ -522,7 +558,7 @@ private:
       }
     }
 
-    size_t node_counter_;
+    std::size_t node_counter_;
   };
 
   struct Reader {
@@ -540,18 +576,18 @@ private:
       if (object_tag != ObjectType::kFileTag) {
         throw AIT_EXCEPTION(std::string("Found unexpected object tag: ") + object_tag);
       }
-      size_t depth = ait::readFromStream<size_t>(in);
-      size_t num_of_nodes = ait::readFromStream<size_t>(in);
-      size_t num_of_leaf_nodes = ait::readFromStream<size_t>(in);
+      std::size_t depth = ait::readFromStream<std::size_t>(in);
+      std::size_t num_of_nodes = ait::readFromStream<std::size_t>(in);
+      std::size_t num_of_leaf_nodes = ait::readFromStream<std::size_t>(in);
       std::cout << "Tree has depth " << depth << ", " << num_of_nodes << " nodes " << " and " << num_of_leaf_nodes << " leaf nodes" << std::endl;
       // Read nodes from disk
       std::vector<NodeType> nodes;
-      size_t leaf_counter = 0;
+      std::size_t leaf_counter = 0;
       nodes.resize(num_of_nodes);
       for (auto it = nodes.begin(); it != nodes.end(); ++it) {
 //        std::cout << "Reading node " << (it - nodes.begin()) << " of " << nodes.size() << std::endl;
-        size_t left_child_index = ait::readFromStream<size_t>(in);
-        size_t right_child_index = ait::readFromStream<size_t>(in);
+        std::size_t left_child_index = ait::readFromStream<std::size_t>(in);
+        std::size_t right_child_index = ait::readFromStream<std::size_t>(in);
         NodeType& node = *it;
         if (left_child_index == 0) {
           node.left_child_ = nullptr;
@@ -604,7 +640,7 @@ private:
     computeInfoRecursive(getRoot(), 0);
   }
 
-  void computeInfoRecursive(const NodeType* node, size_t cur_depth) {
+  void computeInfoRecursive(const NodeType* node, std::size_t cur_depth) {
     depth_ = std::max(cur_depth, depth_);
     ++num_nodes_;
     if (node->isLeaf()) {
@@ -652,13 +688,13 @@ private:
 
   void splitMedian(NodeType* node,
       typename std::vector<ObjectWithBoundingBox>::iterator begin, typename std::vector<ObjectWithBoundingBox>::iterator end,
-      size_t sort_axis) {
+      std::size_t sort_axis) {
     if (end - begin > 1) {
       std::stable_sort(begin, end, [&](const ObjectWithBoundingBox& a, const ObjectWithBoundingBox& b) -> bool {
         return a.bounding_box.getCenter(sort_axis) < b.bounding_box.getCenter(sort_axis);
       });
 
-      size_t next_sort_axis = (sort_axis + 1) % 3;
+      std::size_t next_sort_axis = (sort_axis + 1) % 3;
 
       node->left_child_ = allocateNode();
       node->right_child_ = allocateNode();
@@ -684,11 +720,11 @@ private:
   }
 
   void splitMidPoint(NodeType* node,
-      typename std::vector<ObjectWithBoundingBox>::iterator begin, typename std::vector<ObjectWithBoundingBox>::iterator end, size_t cur_depth) {
+      typename std::vector<ObjectWithBoundingBox>::iterator begin, typename std::vector<ObjectWithBoundingBox>::iterator end, std::size_t cur_depth) {
     if (end - begin > 1) {
       BoundingBoxType bbox = computeBoundingBox(begin, end);
 
-      size_t max_extent_index;
+      std::size_t max_extent_index;
       FloatType max_extent = bbox.getMaxExtent(&max_extent_index);
       typename std::vector<ObjectWithBoundingBox>::iterator mid_it = begin + 1;
       std::stable_sort(begin, end, [&](const ObjectWithBoundingBox& a, const ObjectWithBoundingBox& b) -> bool {
@@ -727,7 +763,7 @@ private:
     }
   }
 
-  bool intersectsRecursive(const IntersectionData& data, NodeType* cur_node, size_t cur_depth, IntersectionResult* result) const {
+  bool intersectsRecursive(const IntersectionData& data, NodeType* cur_node, std::size_t cur_depth, IntersectionResult* result) const {
     // Early break because of node semantics (i.e. free nodes)
 //    if (CollisionPredicate::earlyBreak(this, cur_node)) {
 //      return false;
@@ -795,7 +831,7 @@ private:
     return intersects_left || intersects_right;
   }
 
-  void intersectsRecursive(const BoundingBoxType& bbox, NodeType* cur_node, size_t cur_depth,
+  void intersectsRecursive(const BoundingBoxType& bbox, NodeType* cur_node, std::size_t cur_depth,
       std::vector<BBoxIntersectionResult>* results) const {
     const bool intersects = cur_node->getBoundingBox().intersects(bbox);
 //    std::cout << "cur_depth: " << cur_depth << std::endl;
@@ -835,9 +871,9 @@ private:
   std::vector<NodeType> nodes_;
   bool stored_as_vector_;
   bool owns_objects_;
-  size_t depth_;
-  size_t num_nodes_;
-  size_t num_leaf_nodes_;
+  std::size_t depth_;
+  std::size_t num_nodes_;
+  std::size_t num_leaf_nodes_;
 };
 
 template <typename ObjectType, typename FloatType>

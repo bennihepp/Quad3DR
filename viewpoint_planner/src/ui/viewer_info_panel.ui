@@ -29,7 +29,7 @@
       </sizepolicy>
      </property>
      <property name="title">
-      <string>Viewer info</string>
+      <string>Info</string>
      </property>
      <property name="alignment">
       <set>Qt::AlignHCenter|Qt::AlignTop</set>

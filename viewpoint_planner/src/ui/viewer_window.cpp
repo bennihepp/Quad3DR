@@ -13,20 +13,24 @@
 using namespace std;
 
 ViewerWindow::ViewerWindow(ViewpointPlanner* planner, QWidget *parent)
-    : QMainWindow(parent), planner_(planner) {
+    : QMainWindow(parent), planner_(planner), viewer_widget_(nullptr) {
     // Info panel at the right side
     info_panel_ = new ViewerInfoPanel(this);
     QDockWidget* info_dock = new QDockWidget("Info", this);
     info_dock->setWidget(info_panel_);
-    this->addDockWidget(Qt::RightDockWidgetArea, info_dock);
+    this->addDockWidget(Qt::LeftDockWidgetArea, info_dock);
 
-    // Settings panel at the right side
-    settings_panel_ = new ViewerSettingsPanel(this);
-    QDockWidget* settings_dock = new QDockWidget("Settings", this);
-    settings_dock->setWidget(settings_panel_);
-    this->addDockWidget(Qt::RightDockWidgetArea, settings_dock);
+    // Settings and planner panel at the right side
+    QDockWidget* tab_dock = new QDockWidget("Settings", this);
+    panel_tab_ = new QTabWidget(tab_dock);
+    settings_panel_ = new ViewerSettingsPanel(panel_tab_);
+    panel_tab_->addTab(settings_panel_, "Settings");
+    planner_panel_ = new ViewerPlannerPanel(panel_tab_);
+    panel_tab_->addTab(planner_panel_, "Planner");
+    tab_dock->setWidget(panel_tab_);
+    this->addDockWidget(Qt::RightDockWidgetArea, tab_dock);
 
-    viewer_widget_ = ViewerWidget::create(planner_, settings_panel_, this);
+    viewer_widget_ = ViewerWidget::create(planner_, settings_panel_, planner_panel_, this);
     this->setCentralWidget(viewer_widget_);
     viewer_widget_->showOctree(planner_->getOctree());
     viewer_widget_->showSparseReconstruction(planner_->getReconstruction());

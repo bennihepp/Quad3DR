@@ -10,6 +10,8 @@
 #include <ait/boost_utilities.h>
 #include "dense_reconstruction.h"
 
+using namespace reconstruction;
+
 DenseReconstruction::DenseReconstruction() {}
 
 DenseReconstruction::~DenseReconstruction() {}

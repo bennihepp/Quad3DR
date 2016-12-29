@@ -14,6 +14,7 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/filesystem.hpp>
 #include <ait/eigen.h>
+#include <ait/eigen_utils.h>
 #include <ait/common.h>
 #include <ait/utilities.h>
 #include <ait/string_utils.h>
@@ -39,7 +40,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-using ait::Pose;
+using namespace reconstruction;
 
 using CameraMapType = SparseReconstruction::CameraMapType;
 using ImageMapType = SparseReconstruction::ImageMapType;
@@ -70,38 +71,38 @@ const CameraMatrix& PinholeCamera::intrinsics() const {
   return intrinsics_;
 }
 
-Eigen::Vector2d PinholeCamera::projectPoint(const Eigen::Vector3d& hom_point_camera) const {
-  Eigen::Vector2d point_camera(hom_point_camera.hnormalized());
-  Eigen::Vector2d point_image;
+Vector2 PinholeCamera::projectPoint(const Vector3& hom_point_camera) const {
+  Vector2 point_camera(hom_point_camera.hnormalized());
+  Vector2 point_image;
   point_image(0) = intrinsics_(0, 0) * point_camera(0) + intrinsics_(0, 2);
   point_image(1) = intrinsics_(1, 1) * point_camera(1) + intrinsics_(1, 2);
   return point_image;
 }
 
-Eigen::Vector3d PinholeCamera::getCameraRay(double x, double y) const {
-  Eigen::Vector3d camera_ray;
+Vector3 PinholeCamera::getCameraRay(FloatType x, FloatType y) const {
+  Vector3 camera_ray;
   camera_ray(0) = (x - intrinsics_(0, 2)) / intrinsics_(0, 0);
   camera_ray(1) = (y - intrinsics_(1, 2)) / intrinsics_(1, 1);
   camera_ray(2) = 1;
   return camera_ray;
 }
 
-Eigen::Vector3d PinholeCamera::getCameraRay(const Eigen::Vector2d& point_image) const {
-  Eigen::Vector3d camera_ray;
+Vector3 PinholeCamera::getCameraRay(const Vector2& point_image) const {
+  Vector3 camera_ray;
   camera_ray(0) = (point_image(0) - intrinsics_(0, 2)) / intrinsics_(0, 0);
   camera_ray(1) = (point_image(1) - intrinsics_(1, 2)) / intrinsics_(1, 1);
   camera_ray(2) = 1;
   return camera_ray;
 }
 
-Eigen::Vector3d PinholeCamera::unprojectPoint(double x, double y, double distance) const {
-  Eigen::Vector2d point_image;
+Vector3 PinholeCamera::unprojectPoint(FloatType x, FloatType y, FloatType distance) const {
+  Vector2 point_image;
   point_image << x, y;
   return unprojectPoint(point_image, distance);
 }
 
-Eigen::Vector3d PinholeCamera::unprojectPoint(const Eigen::Vector2d& point_image, double distance) const {
-  Eigen::Vector3d hom_point_camera;
+Vector3 PinholeCamera::unprojectPoint(const Vector2& point_image, FloatType distance) const {
+  Vector3 hom_point_camera;
   hom_point_camera(0) = (point_image(0) - intrinsics_(0, 2)) / intrinsics_(0, 0);
   hom_point_camera(1) = (point_image(1) - intrinsics_(1, 2)) / intrinsics_(1, 1);
   hom_point_camera(2) = 1;
@@ -109,36 +110,36 @@ Eigen::Vector3d PinholeCamera::unprojectPoint(const Eigen::Vector2d& point_image
   return hom_point_camera;
 }
 
-double PinholeCamera::getMeanFocalLength() const {
+FloatType PinholeCamera::getMeanFocalLength() const {
   return (intrinsics_(0, 0) + intrinsics_(1, 1)) / 2.0;
 }
 
-double PinholeCamera::getFocalLengthX() const {
+FloatType PinholeCamera::getFocalLengthX() const {
   return intrinsics_(0, 0);
 }
 
-double PinholeCamera::getFocalLengthY() const {
+FloatType PinholeCamera::getFocalLengthY() const {
   return intrinsics_(1, 1);
 }
 
-bool PinholeCamera::isPointInViewport(const Eigen::Vector2d& point) const {
+bool PinholeCamera::isPointInViewport(const Vector2& point) const {
   return point(0) >= 0 && point(0) < width_
           && point(1) >= 0 && point(1) < height_;
 }
 
-bool PinholeCamera::isPointInViewport(const Eigen::Vector2d& point, double margin) const {
+bool PinholeCamera::isPointInViewport(const Vector2& point, FloatType margin) const {
   return point(0) >= margin && point(0) < width_ - margin
           && point(1) >= margin && point(1) < height_ - margin;
 }
 
-PinholeCameraColmap::PinholeCameraColmap(CameraId id, size_t width, size_t height, const std::vector<double>& params)
+PinholeCameraColmap::PinholeCameraColmap(CameraId id, size_t width, size_t height, const std::vector<FloatType>& params)
 : PinholeCamera(width, height, makeIntrinsicsFromParameters(params)), id_(id) {}
 
 CameraId PinholeCameraColmap::id() const {
   return id_;
 }
 
-CameraMatrix PinholeCameraColmap::makeIntrinsicsFromParameters(const std::vector<double>& params) {
+CameraMatrix PinholeCameraColmap::makeIntrinsicsFromParameters(const std::vector<FloatType>& params) {
   if (params.size() != 4) {
     throw AIT_EXCEPTION(std::string("Expected 4 parameters but got ") + std::to_string(params.size()));
   }
@@ -153,7 +154,7 @@ CameraMatrix PinholeCameraColmap::makeIntrinsicsFromParameters(const std::vector
 
 
 ImageColmap::ImageColmap(
-    ImageId id, const ait::Pose& pose, const std::string& name,
+    ImageId id, const Pose& pose, const std::string& name,
     const std::vector<Feature>& features, CameraId camera_id)
 : id_(id), pose_(pose), name_(name), features_(features), camera_id_(camera_id) {}
 
@@ -161,7 +162,7 @@ ImageId ImageColmap::id() const {
   return id_;
 }
 
-const ait::Pose& ImageColmap::pose() const {
+const Pose& ImageColmap::pose() const {
   return pose_;
 }
 
@@ -179,24 +180,24 @@ const CameraId& ImageColmap::camera_id() const {
 
 
 Point3DStatistics::Point3DStatistics()
-: average_distance_(std::numeric_limits<double>::quiet_NaN()),
-  stddev_distance_(std::numeric_limits<double>::quiet_NaN()),
-  stddev_one_minus_dot_product_(std::numeric_limits<double>::quiet_NaN()) {}
+: average_distance_(std::numeric_limits<FloatType>::quiet_NaN()),
+  stddev_distance_(std::numeric_limits<FloatType>::quiet_NaN()),
+  stddev_one_minus_dot_product_(std::numeric_limits<FloatType>::quiet_NaN()) {}
 
-Point3DStatistics::Point3DStatistics(double average_distance, double stddev_distance,
-    double stddev_one_minus_dot_product)
+Point3DStatistics::Point3DStatistics(FloatType average_distance, FloatType stddev_distance,
+    FloatType stddev_one_minus_dot_product)
 : average_distance_(average_distance), stddev_distance_(stddev_distance),
   stddev_one_minus_dot_product_(stddev_one_minus_dot_product) {}
 
-double Point3DStatistics::averageDistance() const {
+FloatType Point3DStatistics::averageDistance() const {
   return average_distance_;
 }
 
-double Point3DStatistics::stddevDistance() const {
+FloatType Point3DStatistics::stddevDistance() const {
   return stddev_distance_;
 }
 
-double Point3DStatistics::stddevOneMinusDotProduct() const {
+FloatType Point3DStatistics::stddevOneMinusDotProduct() const {
   return stddev_one_minus_dot_product_;
 }
 
@@ -204,11 +205,11 @@ Point3DId Point3D::getId() const {
   return id;
 }
 
-const Eigen::Vector3d& Point3D::getPosition() const {
+const Vector3& Point3D::getPosition() const {
   return pos;
 }
 
-const Eigen::Vector3d& Point3D::getNormal() const {
+const Vector3& Point3D::getNormal() const {
   return normal;
 }
 
@@ -255,30 +256,30 @@ Point3DMapType& SparseReconstruction::getPoints3D() {
 
 void SparseReconstruction::computePoint3DNormalAndStatistics(Point3D& point) const {
     // Retrieve all observation distances and normals
-  std::vector<double> distances;
-  std::vector<Eigen::Vector3d> normals;
+  std::vector<FloatType> distances;
+  std::vector<Vector3> normals;
   for (const auto& feature_entry : point.feature_track) {
     const ImageColmap& image = images_.at(feature_entry.image_id);
-    std::tuple<double, Eigen::Vector3d> result = ait::computeDistanceAndDirection(point.getPosition(), image.pose().getWorldPosition());
+    std::tuple<FloatType, Vector3> result = ait::computeDistanceAndDirection(point.getPosition(), image.pose().getWorldPosition());
     distances.push_back(std::get<0>(result));
     normals.push_back(std::get<1>(result));
   }
 
   // Compute distance average and stddev
-  double average_distance = std::accumulate(distances.cbegin(), distances.cend(), 0.0) / distances.size();
-  double acc_squared_dist_deviations = std::accumulate(distances.cbegin(), distances.cend(), 0.0, [&](double acc, double dist) {
-    double deviation = dist - average_distance;
+  FloatType average_distance = std::accumulate(distances.cbegin(), distances.cend(), 0.0) / distances.size();
+  FloatType acc_squared_dist_deviations = std::accumulate(distances.cbegin(), distances.cend(), 0.0, [&](FloatType acc, FloatType dist) {
+    FloatType deviation = dist - average_distance;
     return acc + deviation * deviation;
   });
-  double stddev_distance = std::sqrt(acc_squared_dist_deviations / (distances.size() - 1));
+  FloatType stddev_distance = std::sqrt(acc_squared_dist_deviations / (distances.size() - 1));
 
   // Compute normal average and dot product stddev
-  Eigen::Vector3d average_normal = std::accumulate(normals.cbegin(), normals.cend(), Eigen::Vector3d::Zero().eval()) / normals.size();
-  double acc_squared_1_minus_dot_product = std::accumulate(normals.cbegin(), normals.cend(), 0.0, [&](double acc, const Eigen::Vector3d& normal) {
-    double one_minus_dot_product = 1.0 - normal.dot(average_normal);
+  Vector3 average_normal = std::accumulate(normals.cbegin(), normals.cend(), Vector3::Zero().eval()) / normals.size();
+  FloatType acc_squared_1_minus_dot_product = std::accumulate(normals.cbegin(), normals.cend(), 0.0, [&](FloatType acc, const Vector3& normal) {
+    FloatType one_minus_dot_product = 1.0 - normal.dot(average_normal);
     return acc + one_minus_dot_product * one_minus_dot_product;
   });
-  double stddev_1_minus_dot_product = std::sqrt(acc_squared_1_minus_dot_product / (distances.size() - 1));
+  FloatType stddev_1_minus_dot_product = std::sqrt(acc_squared_1_minus_dot_product / (distances.size() - 1));
 
   Point3DStatistics statistics(average_distance, stddev_distance, stddev_1_minus_dot_product);
   point.normal = average_normal;
@@ -334,11 +335,11 @@ void SparseReconstruction::readCameras(std::istream& in) {
     size_t height = boost::lexical_cast<size_t>(item);
 
     // PARAMS
-    std::vector<double> params;
+    std::vector<FloatType> params;
     while (!line_stream.eof()) {
       std::getline(line_stream, item, ' ');
       ait::trim(item);
-      params.push_back(boost::lexical_cast<double>(item));
+      params.push_back(boost::lexical_cast<FloatType>(item));
     }
 
     PinholeCameraColmap camera(camera_id, width, height, params);
@@ -374,30 +375,33 @@ void SparseReconstruction::readImages(std::istream& in) {
 
     // QVEC (qw, qx, qy, qz)
     std::getline(line_stream1, item, ' ');
-    double qw = boost::lexical_cast<double>(item);
+    FloatType qw = boost::lexical_cast<FloatType>(item);
 
     std::getline(line_stream1, item, ' ');
-    double qx = boost::lexical_cast<double>(item);
+    FloatType qx = boost::lexical_cast<FloatType>(item);
 
     std::getline(line_stream1, item, ' ');
-    double qy = boost::lexical_cast<double>(item);
+    FloatType qy = boost::lexical_cast<FloatType>(item);
 
     std::getline(line_stream1, item, ' ');
-    double qz = boost::lexical_cast<double>(item);
+    FloatType qz = boost::lexical_cast<FloatType>(item);
 
-    ait::Pose image_pose;
-    image_pose.quaternion() = Eigen::Quaterniond(qw, qx, qy, qz);
-    image_pose.quaternion().normalize();
+    Pose image_pose_world_to_image;
+    image_pose_world_to_image.quaternion() = Quaternion(qw, qx, qy, qz);
+    image_pose_world_to_image.quaternion().normalize();
 
     // TVEC
     std::getline(line_stream1, item, ' ');
-    image_pose.translation()(0) = boost::lexical_cast<double>(item);
+    image_pose_world_to_image.translation()(0) = boost::lexical_cast<FloatType>(item);
 
     std::getline(line_stream1, item, ' ');
-    image_pose.translation()(1) = boost::lexical_cast<double>(item);
+    image_pose_world_to_image.translation()(1) = boost::lexical_cast<FloatType>(item);
 
     std::getline(line_stream1, item, ' ');
-    image_pose.translation()(2) = boost::lexical_cast<double>(item);
+    image_pose_world_to_image.translation()(2) = boost::lexical_cast<FloatType>(item);
+
+    const Pose image_pose = image_pose_world_to_image.inverse();
+//    std::cout << "image_pose: " << image_pose << std::endl;
 
     // CAMERA_ID
     std::getline(line_stream1, item, ' ');
@@ -412,7 +416,7 @@ void SparseReconstruction::readImages(std::istream& in) {
     ait::trim(line);
     std::stringstream line_stream2(line);
 
-    std::vector<Eigen::Vector2d> points;
+    std::vector<Vector2> points;
     std::vector<Point3DId> point3D_ids;
 
     std::vector<Feature> image_features;
@@ -420,10 +424,10 @@ void SparseReconstruction::readImages(std::istream& in) {
       Feature feature;
 
       std::getline(line_stream2, item, ' ');
-      feature.point(0) = boost::lexical_cast<double>(item);
+      feature.point(0) = boost::lexical_cast<FloatType>(item);
 
       std::getline(line_stream2, item, ' ');
-      feature.point(1) = boost::lexical_cast<double>(item);
+      feature.point(1) = boost::lexical_cast<FloatType>(item);
 
       std::getline(line_stream2, item, ' ');
       if (item == "-1") {
@@ -472,13 +476,13 @@ void SparseReconstruction::readPoints3D(std::istream& in) {
 
     // XYZ
     std::getline(line_stream, item, ' ');
-    point3D.pos(0) = boost::lexical_cast<double>(item);
+    point3D.pos(0) = boost::lexical_cast<FloatType>(item);
 
     std::getline(line_stream, item, ' ');
-    point3D.pos(1) = boost::lexical_cast<double>(item);
+    point3D.pos(1) = boost::lexical_cast<FloatType>(item);
 
     std::getline(line_stream, item, ' ');
-    point3D.pos(2) = boost::lexical_cast<double>(item);
+    point3D.pos(2) = boost::lexical_cast<FloatType>(item);
 
     // Color
     std::getline(line_stream, item, ' ');
@@ -492,7 +496,7 @@ void SparseReconstruction::readPoints3D(std::istream& in) {
 
     // ERROR
     std::getline(line_stream, item, ' ');
-    point3D.error = boost::lexical_cast<double>(item);
+    point3D.error = boost::lexical_cast<FloatType>(item);
 
     // TRACK
     while (!line_stream.eof()) {

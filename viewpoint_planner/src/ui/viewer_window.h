@@ -10,10 +10,11 @@
 #include <octomap/octomap.h>
 #include <qglviewer.h>
 #include <QMainWindow>
+#include "../planner/viewpoint_planner.h"
 #include "viewer_widget.h"
 #include "viewer_info_panel.h"
 #include "viewer_settings_panel.h"
-#include "planner/viewpoint_planner.h"
+#include "viewer_planner_panel.h"
 
 class ViewerWindow : public QMainWindow {
   Q_OBJECT
@@ -30,7 +31,9 @@ class ViewerWindow : public QMainWindow {
 
 protected:
    ViewpointPlanner* planner_;
+   ViewerWidget* viewer_widget_;
+   QTabWidget* panel_tab_;
    ViewerInfoPanel* info_panel_;
    ViewerSettingsPanel* settings_panel_;
-   ViewerWidget* viewer_widget_;
+   ViewerPlannerPanel* planner_panel_;
 };

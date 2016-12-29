@@ -25,14 +25,15 @@ OcTreeDrawer::OcTreeDrawer()
     render_observation_threshold_(1),
     min_occupancy_(0), max_occupancy_(1),
     min_observations_(0), max_observations_(std::numeric_limits<uint32_t>::max()),
-    min_voxel_size_(0), max_voxel_size_(std::numeric_limits<float>::max()),
-    min_weight_(0), max_weight_(std::numeric_limits<float>::max()),
-    low_weight_(0), high_weight_(std::numeric_limits<float>::max()) {
+    low_observation_count_(0), high_observation_count_(std::numeric_limits<uint32_t>::max()),
+    min_voxel_size_(0), max_voxel_size_(std::numeric_limits<FloatType>::max()),
+    min_weight_(0), max_weight_(std::numeric_limits<FloatType>::max()),
+    low_weight_(0), high_weight_(std::numeric_limits<FloatType>::max()) {
   // origin and movement
   initial_origin_ = octomap::pose6d(0, 0, 0, 0, 0, 0);
   origin_ = initial_origin_;
   for (size_t i = 0; i < 10; ++i) {
-    float occupancy_bin = i / 10.0;
+    FloatType occupancy_bin = i / 10.0;
     occupancy_bins_.push_back(occupancy_bin);
   }
   occupancy_threshold_ = occupancy_bins_[occupancy_bins_.size() / 2];
@@ -49,11 +50,11 @@ void OcTreeDrawer::draw(const QMatrix4x4& pvm_matrix, const QMatrix4x4& view_mat
   }
 }
 
-float OcTreeDrawer::getOccupancyBinThreshold() const {
+OcTreeDrawer::FloatType OcTreeDrawer::getOccupancyBinThreshold() const {
     return occupancy_threshold_;
 }
 
-void OcTreeDrawer::setOccupancyBinThreshold(float occupancy_bin_threshold) {
+void OcTreeDrawer::setOccupancyBinThreshold(FloatType occupancy_bin_threshold) {
     occupancy_threshold_ = occupancy_bin_threshold;
 }
 
@@ -76,7 +77,7 @@ void OcTreeDrawer::setDrawFreeVoxels(bool draw_free_voxels) {
     draw_free_voxels_ = draw_free_voxels;
 }
 
-void OcTreeDrawer::setAlphaOccupied(float alpha) {
+void OcTreeDrawer::setAlphaOccupied(FloatType alpha) {
     alpha_override_ = alpha;
     for (auto& entry : voxel_drawer_map_) {
       entry.second.overrideAlpha(alpha_override_);
@@ -89,18 +90,18 @@ void OcTreeDrawer::setDrawSingleBin(bool draw_single_bin) {
     draw_single_bin_ = draw_single_bin;
 }
 
-const std::vector<float>& OcTreeDrawer::getOccupancyBins() const {
+const std::vector<OcTreeDrawer::FloatType>& OcTreeDrawer::getOccupancyBins() const {
     return occupancy_bins_;
 }
 
-void OcTreeDrawer::setMinOccupancy(float min_occupancy) {
+void OcTreeDrawer::setMinOccupancy(FloatType min_occupancy) {
   min_occupancy_ = min_occupancy;
   forEachVoxelDrawer([this](VoxelDrawer& voxel_drawer) {
     voxel_drawer.setMinOccupancy(min_occupancy_);
   });
 }
 
-void OcTreeDrawer::setMaxOccupancy(float max_occupancy) {
+void OcTreeDrawer::setMaxOccupancy(FloatType max_occupancy) {
   max_occupancy_ = max_occupancy;
   forEachVoxelDrawer([this](VoxelDrawer& voxel_drawer) {
     voxel_drawer.setMaxOccupancy(max_occupancy_);
@@ -121,28 +122,28 @@ void OcTreeDrawer::setMaxObservations(uint32_t max_observations) {
   });
 }
 
-void OcTreeDrawer::setMinVoxelSize(float min_voxel_size) {
+void OcTreeDrawer::setMinVoxelSize(FloatType min_voxel_size) {
   min_voxel_size_ = min_voxel_size;
   forEachVoxelDrawer([this](VoxelDrawer& voxel_drawer) {
     voxel_drawer.setMinVoxelSize(min_voxel_size_);
   });
 }
 
-void OcTreeDrawer::setMaxVoxelSize(float max_voxel_size) {
+void OcTreeDrawer::setMaxVoxelSize(FloatType max_voxel_size) {
   max_voxel_size_ = max_voxel_size;
   forEachVoxelDrawer([this](VoxelDrawer& voxel_drawer) {
     voxel_drawer.setMaxVoxelSize(max_voxel_size_);
   });
 }
 
-void OcTreeDrawer::setMinWeight(float min_weight) {
+void OcTreeDrawer::setMinWeight(FloatType min_weight) {
   min_weight_ = min_weight;
   forEachVoxelDrawer([this](VoxelDrawer& voxel_drawer) {
     voxel_drawer.setMinWeight(min_weight_);
   });
 }
 
-void OcTreeDrawer::setMaxWeight(float max_weight) {
+void OcTreeDrawer::setMaxWeight(FloatType max_weight) {
   max_weight_ = max_weight;
   forEachVoxelDrawer([this](VoxelDrawer& voxel_drawer) {
     voxel_drawer.setMaxWeight(max_weight_);
@@ -182,7 +183,7 @@ void OcTreeDrawer::updateVoxelsFromOctree()
   timer.printTiming("Updating voxel arrays");
 }
 
-float OcTreeDrawer::findOccupancyBin(float occupancy) const {
+OcTreeDrawer::FloatType OcTreeDrawer::findOccupancyBin(FloatType occupancy) const {
     auto it = std::upper_bound(occupancy_bins_.cbegin(), occupancy_bins_.cend(), occupancy);
     if (it == occupancy_bins_.cend()) {
         return occupancy_bins_.back();
@@ -194,14 +195,14 @@ float OcTreeDrawer::findOccupancyBin(float occupancy) const {
 }
 
 void OcTreeDrawer::updateRaycastVoxels(
-    std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, float>>& raycats_voxels) {
+    std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, FloatType>>& raycats_voxels) {
   std::vector<OGLVoxelData> voxel_data;
   std::vector<OGLColorData> color_data;
   std::vector<OGLVoxelInfoData> info_data;
-  float low_weight = std::numeric_limits<float>::max();
-  float high_weight = std::numeric_limits<float>::lowest();
-  float low_information = std::numeric_limits<float>::max();
-  float high_information = std::numeric_limits<float>::lowest();
+  FloatType low_weight = std::numeric_limits<FloatType>::max();
+  FloatType high_weight = std::numeric_limits<FloatType>::lowest();
+  FloatType low_information = std::numeric_limits<FloatType>::max();
+  FloatType high_information = std::numeric_limits<FloatType>::lowest();
   for (const auto& entry : raycats_voxels) {
     const auto& node = entry.first.node;
     // TODO
@@ -215,7 +216,7 @@ void OcTreeDrawer::updateRaycastVoxels(
 //    std::cout << "observation sum: " << nav->getObservationCountSum() << std::endl;
 //    std::cout << "weight: " << nav->getWeight() << std::endl;
     const Eigen::Vector3f voxel_position = node->getBoundingBox().getCenter();
-    float voxel_size = node->getBoundingBox().getMaxExtent();
+    FloatType voxel_size = node->getBoundingBox().getMaxExtent();
 
     OGLVertexData vertex(voxel_position(0), voxel_position(1), voxel_position(2));
     voxel_data.emplace_back(vertex, voxel_size);
@@ -232,11 +233,11 @@ void OcTreeDrawer::updateRaycastVoxels(
 //      color_data.emplace_back(0, 1, 1, 1);
 //    }
 
-//    float occupancy = nav->getOccupancy();
-//    float weight = nav->getWeight();
-    float weight = node->getObject()->weight;
-//    const float information = entry.second;
-    const float information = entry.second;
+//    FloatType occupancy = nav->getOccupancy();
+//    FloatType weight = nav->getWeight();
+    FloatType weight = node->getObject()->weight;
+//    const FloatType information = entry.second;
+    const FloatType information = entry.second;
     info_data.emplace_back(node->getObject()->occupancy, node->getObject()->observation_count, weight, information);
 
     low_information = std::min(information, low_information);
@@ -257,12 +258,12 @@ void OcTreeDrawer::updateRaycastVoxels(
 }
 
 void OcTreeDrawer::updateRaycastVoxels(
-    const std::vector<std::pair<ViewpointPlanner::ConstTreeNavigatorType, float>>& raycast_voxels) {
+    const std::vector<std::pair<ViewpointPlanner::ConstTreeNavigatorType, FloatType>>& raycast_voxels) {
   std::vector<OGLVoxelData> voxel_data;
   std::vector<OGLColorData> color_data;
   std::vector<OGLVoxelInfoData> info_data;
-  float low_information = std::numeric_limits<float>::max();
-  float high_information = std::numeric_limits<float>::lowest();
+  FloatType low_information = std::numeric_limits<FloatType>::max();
+  FloatType high_information = std::numeric_limits<FloatType>::lowest();
   for (const auto& entry : raycast_voxels) {
     const auto& nav = entry.first;
     // TODO
@@ -276,7 +277,7 @@ void OcTreeDrawer::updateRaycastVoxels(
 //    std::cout << "observation sum: " << nav->getObservationCountSum() << std::endl;
 //    std::cout << "weight: " << nav->getWeight() << std::endl;
     const Eigen::Vector3f voxel_position = nav.getPosition();
-    float voxel_size = nav.getSize();
+    FloatType voxel_size = nav.getSize();
 
     OGLVertexData vertex(voxel_position(0), voxel_position(1), voxel_position(2));
     voxel_data.emplace_back(vertex, voxel_size);
@@ -287,9 +288,9 @@ void OcTreeDrawer::updateRaycastVoxels(
       color_data.emplace_back(0, 1, 1, 1);
     }
 
-    float occupancy = nav->getOccupancy();
-    float weight = nav->getWeight();
-    const float information = entry.second;
+    FloatType occupancy = nav->getOccupancy();
+    FloatType weight = nav->getWeight();
+    const FloatType information = entry.second;
     info_data.emplace_back(occupancy, nav->getObservationCount(), weight,information);
 
     low_information = std::min(information, low_information);
@@ -309,33 +310,33 @@ void OcTreeDrawer::updateRaycastVoxels(
 void OcTreeDrawer::updateVoxelData() {
   AIT_ASSERT_STR(octree_ != nullptr, "Octree was not initialized");
 
-  std::unordered_map<float, std::vector<OGLVoxelData>> voxel_data;
-  std::unordered_map<float, std::vector<OGLColorData>> color_data;
-  std::unordered_map<float, std::vector<OGLVoxelInfoData>> info_data;
-  for (float occupancy_bin : occupancy_bins_) {
+  std::unordered_map<FloatType, std::vector<OGLVoxelData>> voxel_data;
+  std::unordered_map<FloatType, std::vector<OGLColorData>> color_data;
+  std::unordered_map<FloatType, std::vector<OGLVoxelInfoData>> info_data;
+  for (FloatType occupancy_bin : occupancy_bins_) {
     voxel_data.emplace(occupancy_bin, std::vector<OGLVoxelData>());
     color_data.emplace(occupancy_bin, std::vector<OGLColorData>());
     info_data.emplace(occupancy_bin, std::vector<OGLVoxelInfoData>());
   }
 
   // Ranges of weight and observation counts
-  low_weight_ = std::numeric_limits<float>::max();
-  high_weight_ = std::numeric_limits<float>::lowest();
+  low_weight_ = std::numeric_limits<FloatType>::max();
+  high_weight_ = std::numeric_limits<FloatType>::lowest();
   low_observation_count_ = std::numeric_limits<uint32_t>::max();
   high_observation_count_ = std::numeric_limits<uint32_t>::lowest();
   // Range of z coordinate height color map
-  float min_z = std::numeric_limits<float>::infinity();
-  float max_z = -std::numeric_limits<float>::infinity();
+  FloatType min_z = std::numeric_limits<FloatType>::infinity();
+  FloatType max_z = -std::numeric_limits<FloatType>::infinity();
 
   for(ViewpointPlanner::OccupancyMapType::tree_iterator it = octree_->begin_tree(render_tree_depth_), end=octree_->end_tree(); it!= end; ++it) {
     if (it.isLeaf() && it->getObservationCount() >= render_observation_threshold_) {
 
       const octomap::point3d& voxel_position = it.getCoordinate();
-      float voxel_size = it.getSize();
+      FloatType voxel_size = it.getSize();
 
-      float occupancy = it->getOccupancy();
-      float occupancy_bin = findOccupancyBin(occupancy);
-      float weight = it->getWeight();
+      FloatType occupancy = it->getOccupancy();
+      FloatType occupancy_bin = findOccupancyBin(occupancy);
+      FloatType weight = it->getWeight();
 
       OGLVertexData vertex(voxel_position.x(), voxel_position.y(), voxel_position.z());
       voxel_data.at(occupancy_bin).emplace_back(vertex, voxel_size);
@@ -355,15 +356,15 @@ void OcTreeDrawer::updateVoxelData() {
     }
   }
   // Compute and output observation and weight ranges for each bin
-  for (float occupancy_bin : occupancy_bins_) {
+  for (FloatType occupancy_bin : occupancy_bins_) {
     for (const OGLVoxelData& voxel : voxel_data.at(occupancy_bin)) {
       OGLColorData color = getVoxelColorData(voxel, min_z, max_z);
       color_data.at(occupancy_bin).emplace_back(color);
     }
-    float weight_low = std::numeric_limits<float>::max();
-    float weight_high = std::numeric_limits<float>::lowest();
-    float observation_low = std::numeric_limits<float>::max();
-    float observation_high = std::numeric_limits<float>::lowest();
+    FloatType weight_low = std::numeric_limits<FloatType>::max();
+    FloatType weight_high = std::numeric_limits<FloatType>::lowest();
+    FloatType observation_low = std::numeric_limits<FloatType>::max();
+    FloatType observation_high = std::numeric_limits<FloatType>::lowest();
     for (const OGLVoxelInfoData& info : info_data.at(occupancy_bin)) {
       weight_low = std::min(info.weight, weight_low);
       weight_high = std::max(info.weight, weight_high);
@@ -379,7 +380,7 @@ void OcTreeDrawer::updateVoxelData() {
   std::cout << "Observation count range: [" << low_observation_count_ << ", " << high_observation_count_ << "]" << std::endl;
 
   voxel_drawer_map_.clear();
-  for (float occupancy_bin : occupancy_bins_) {
+  for (FloatType occupancy_bin : occupancy_bins_) {
     const auto result = voxel_drawer_map_.emplace(std::piecewise_construct, std::make_tuple(occupancy_bin), std::make_tuple());
     VoxelDrawer& voxel_drawer = result.first->second;
     voxel_drawer.init();
@@ -413,8 +414,8 @@ void OcTreeDrawer::setVertexDataFromOctomathVector(OGLVertexDataRGBA& vertex, co
     vertex.z = vec.z();
 }
 
-OGLColorData OcTreeDrawer::getVoxelColorData(const OGLVoxelData& voxel_data, float min_z, float max_z) const {
-  float h = voxel_data.vertex.z;
+OGLColorData OcTreeDrawer::getVoxelColorData(const OGLVoxelData& voxel_data, FloatType min_z, FloatType max_z) const {
+  FloatType h = voxel_data.vertex.z;
 
   if (min_z >= max_z)
     h = 0.5f;
@@ -423,14 +424,14 @@ OGLColorData OcTreeDrawer::getVoxelColorData(const OGLVoxelData& voxel_data, flo
   }
 
   // blend over HSV-values (more colors)
-  float r, g, b;
-  float s = 1.0f;
-  float v = 1.0f;
+  FloatType r, g, b;
+  FloatType s = 1.0f;
+  FloatType v = 1.0f;
 
   h -= floor(h);
   h *= 6;
   int i;
-  float m, n, f;
+  FloatType m, n, f;
 
   i = floor(h);
   f = h - i;
@@ -468,13 +469,13 @@ OGLColorData OcTreeDrawer::getVoxelColorData(const OGLVoxelData& voxel_data, flo
 }
 
 void OcTreeDrawer::drawVoxelsAboveThreshold(const QMatrix4x4& pvm_matrix, const QMatrix4x4& view_matrix, const QMatrix4x4& model_matrix,
-    float occupancy_threshold, bool draw_below_threshold) {
+    FloatType occupancy_threshold, bool draw_below_threshold) {
   if (draw_single_bin_) {
     // Find closest lower bin
-    float closest_key = 0;
-    float closest_dist = std::numeric_limits<float>::infinity();
+    FloatType closest_key = 0;
+    FloatType closest_dist = std::numeric_limits<FloatType>::infinity();
     for (const auto& entry : voxel_drawer_map_) {
-      float dist = std::abs(occupancy_threshold_ - entry.first);
+      FloatType dist = std::abs(occupancy_threshold_ - entry.first);
       if (dist < closest_dist) {
         closest_key = entry.first;
         closest_dist = dist;

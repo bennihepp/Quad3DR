@@ -11,13 +11,15 @@
 #include <QWidget>
 #include <ait/common.h>
 #include "ui_viewer_settings_panel.h"
-#include "reconstruction/sparse_reconstruction.h"
+#include "../reconstruction/sparse_reconstruction.h"
 
 #define _TREE_MAX_DEPTH 20
 
 class ViewerSettingsPanel : public QWidget
 {
     Q_OBJECT
+
+    using ImageId = reconstruction::ImageId;
 
 public:
     ViewerSettingsPanel(QWidget *parent = 0)
@@ -31,14 +33,12 @@ public:
         connect(ui.drawSingleBin, SIGNAL(stateChanged(int)), this, SLOT(setDrawSingleBinStateInternal(int)));
         connect(ui.drawOctree, SIGNAL(stateChanged(int)), this, SLOT(setDrawOctreeInternal(int)));
         connect(ui.drawCameras, SIGNAL(stateChanged(int)), this, SLOT(setDrawCamerasInternal(int)));
-        connect(ui.drawPlannedViewpoints, SIGNAL(stateChanged(int)), this, SLOT(setDrawPlannedViewpointsInternal(int)));
         connect(ui.drawSparsePoints, SIGNAL(stateChanged(int)), this, SLOT(setDrawSparsePointsInternal(int)));
         connect(ui.refreshTree, SIGNAL(clicked(void)), this, SLOT(signalRefreshTreeInternal()));
         connect(ui.drawRaycast, SIGNAL(stateChanged(int)), this, SLOT(setDrawRaycastInternal(int)));
         connect(ui.captureRaycast, SIGNAL(clicked(void)), this, SLOT(signalCaptureRaycastInternal()));
         connect(ui.useDroneCamera, SIGNAL(stateChanged(int)), this, SLOT(setUseDroneCameraInternal(int)));
         connect(ui.imagePose, SIGNAL(activated(int)), this, SLOT(setImagePoseInternal(int)));
-        connect(ui.plannedViewpoints, SIGNAL(activated(int)), this, SLOT(setPlannedViewpointInternal(int)));
         connect(ui.minOccupancy, SIGNAL(valueChanged(double)), this, SLOT(setMinOccupancyInternal(double)));
         connect(ui.maxOccupancy, SIGNAL(valueChanged(double)), this, SLOT(setMaxOccupancyInternal(double)));
         connect(ui.minObservations, SIGNAL(valueChanged(int)), this, SLOT(setMinObservationsInternal(int)));
@@ -85,16 +85,6 @@ public:
         ui.imagePose->addItem(QString::fromStdString(entry.first), QVariant(static_cast<int>(entry.second)));
       }
       ui.imagePose->blockSignals(false);
-    }
-
-    void initializePlannedViewpoints(const std::vector<std::pair<std::string, size_t>>& entries) {
-      ui.plannedViewpoints->blockSignals(true);
-      ui.plannedViewpoints->clear();
-      ui.plannedViewpoints->addItem(QString::fromStdString("<free view>"), QVariant(static_cast<int>(-1)));
-      for (const auto& entry : entries) {
-        ui.plannedViewpoints->addItem(QString::fromStdString(entry.first), QVariant(static_cast<int>(entry.second)));
-      }
-      ui.plannedViewpoints->blockSignals(false);
     }
 
     void selectColorFlags(const uint32_t color_flags) {
@@ -245,10 +235,6 @@ protected slots:
         emit drawCamerasChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
     }
 
-    void setDrawPlannedViewpointsInternal(int state) {
-      emit drawPlannedViewpointsChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
-    }
-
     void setDrawSparsePointsInternal(int state) {
         emit drawSparsePointsChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
     }
@@ -276,20 +262,8 @@ protected slots:
             throw AIT_EXCEPTION("Unable to convert camera pose user data user data to int");
         }
         if (user_data >= 0) {
-            ImageId image_id = static_cast<ImageId>(user_data);
+          ImageId image_id = static_cast<ImageId>(user_data);
             emit imagePoseChanged(image_id);
-        }
-    }
-
-    void setPlannedViewpointInternal(int index) {
-        bool ok;
-        int user_data = ui.plannedViewpoints->itemData(index).toInt(&ok);
-        if (!ok) {
-            throw AIT_EXCEPTION("Unable to convert planned view pose user data user data to int");
-        }
-        if (user_data >= 0) {
-          size_t pose_index = static_cast<size_t>(user_data);
-          emit plannedViewpointChanged(pose_index);
         }
     }
 
@@ -342,14 +316,12 @@ signals:
   void drawSingleBinChanged(bool draw_single_bin);
   void drawOctreeChanged(bool draw_octree);
   void drawCamerasChanged(bool draw_cameras);
-  void drawPlannedViewpointsChanged(bool draw_planned_viewpoints);
   void drawSparsePointsChanged(bool draw_sparse_points);
   void useDroneCameraChanged(bool use_drone_camera);
   void refreshTree();
   void drawRaycastChanged(bool draw_raycast);
   void captureRaycast();
   void imagePoseChanged(ImageId image_id);
-  void plannedViewpointChanged(size_t index);
   void minOccupancyChanged(double min_occupancy);
   void maxOccupancyChanged(double max_occupancy);
   void minObservationsChanged(uint32_t min_observations);

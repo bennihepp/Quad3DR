@@ -6,7 +6,7 @@
 //  Created on: Dec 14, 2016
 //==================================================
 
-#include "occupancy_map.h"
+#include <src/octree/occupancy_map.h>
 
 template <>
 OccupancyMap<OccupancyNode>::StaticMemberInitializer OccupancyMap<OccupancyNode>::ocTreeMemberInit{};

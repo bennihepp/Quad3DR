@@ -13,37 +13,55 @@
 #include <boost/functional/hash.hpp>
 #include <ait/common.h>
 #include <ait/options.h>
+#include <ait/random.h>
+#include <ait/eigen_utils.h>
 #include <ait/serialization.h>
-#include "../occupancy_map.h"
+#include "../mLib/mLib.h"
+#include "../octree/occupancy_map.h"
 #include "../reconstruction/dense_reconstruction.h"
-#include "viewpoint_planner_data.h"
 #include "../graph/graph.h"
+#include "viewpoint_planner_data.h"
 
+using reconstruction::CameraId;
+using reconstruction::PinholeCamera;
+using reconstruction::PinholeCameraColmap;
+using reconstruction::ImageId;
+using reconstruction::ImageColmap;
+using reconstruction::Point3DId;
+using reconstruction::Point3D;
+using reconstruction::Point3DStatistics;
+using reconstruction::SparseReconstruction;
+using reconstruction::DenseReconstruction;
+
+template <typename T>
 struct Ray {
-  Ray(const Eigen::Vector3f& origin, const Eigen::Vector3f& direction)
+  using FloatType = T;
+  USE_FIXED_EIGEN_TYPES(FloatType)
+
+  Ray(const Vector3& origin, const Vector3& direction)
   : origin_(origin), direction_(direction.normalized()) {}
 
-  Ray(const Eigen::Vector3d& origin, const Eigen::Vector3d& direction)
-  : origin_(origin.cast<float>()), direction_(direction.normalized().cast<float>()) {}
-
-  const Eigen::Vector3f& origin() const {
+  const Vector3& origin() const {
     return origin_;
   }
 
-  const Eigen::Vector3f& direction() const {
+  const Vector3& direction() const {
     return direction_;
   }
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
 private:
-  Eigen::Vector3f origin_;
-  Eigen::Vector3f direction_;
+  Vector3 origin_;
+  Vector3 direction_;
 };
 
 class Viewpoint {
 public:
-  using FloatType = ait::Pose::FloatType;
+  using FloatType = reconstruction::FloatType;
+  USE_FIXED_EIGEN_TYPES(FloatType)
+  using RayType = Ray<FloatType>;
+  using Pose = reconstruction::Pose;
 
   static constexpr FloatType DEFAULT_PROJECTION_MARGIN = 10;
   static constexpr FloatType MAX_DISTANCE_DEVIATION_BY_STDDEV = 3;
@@ -51,7 +69,7 @@ public:
 
   Viewpoint(FloatType projection_margin = DEFAULT_PROJECTION_MARGIN);
 
-  Viewpoint(const PinholeCamera* camera, const ait::Pose& pose, FloatType projection_margin = DEFAULT_PROJECTION_MARGIN);
+  Viewpoint(const PinholeCamera* camera, const Pose& pose, FloatType projection_margin = DEFAULT_PROJECTION_MARGIN);
 
   Viewpoint(const Viewpoint& other);
 
@@ -61,7 +79,7 @@ public:
 
   Viewpoint& operator=(Viewpoint&& other);
 
-  const ait::Pose& pose() const {
+  const Pose& pose() const {
     return pose_;
   }
 
@@ -79,38 +97,57 @@ public:
 
   bool isPointFiltered(const Point3D& point) const;
 
-  Eigen::Vector2d projectWorldPointIntoImage(const Eigen::Vector3d& point_world) const;
+  Vector2 projectWorldPointIntoImage(const Vector3& point_world) const;
 
-  Ray getCameraRay(FloatType x, FloatType y) const;
+  Ray<FloatType> getCameraRay(FloatType x, FloatType y) const;
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
 private:
   const PinholeCamera* camera_;
-  ait::Pose pose_;
+  Pose pose_;
   FloatType projection_margin_;
-  Eigen::Matrix3x4d transformation_world_to_image_;
+  Matrix3x4 transformation_world_to_image_;
 };
 
 class ViewpointPlanner {
 public:
   using FloatType = ViewpointPlannerData::FloatType;
-  using Vector3 = ViewpointPlannerData::Vector3;
+  USE_FIXED_EIGEN_TYPES(FloatType)
   using BoundingBoxType = ViewpointPlannerData::BoundingBoxType;
+  using RayType = Ray<FloatType>;
+  using Pose = ait::Pose<FloatType>;
+
+  static constexpr FloatType kDotProdEqualTolerance = FloatType { 1e-5 };
+  static constexpr FloatType kOcclusionDistMarginFactor = FloatType { 4 };
 
   struct Options : ait::ConfigOptions {
     Options()
     : ait::ConfigOptions("viewpoint_planner", "ViewpointPlanner options") {
-      addOption<size_t>("rng_seed", 0);
-      addOption<FloatType>("virtual_camera_scale", 0.05f);
-      addOption<size_t>("num_sampled_poses", 100);
-      addOption<size_t>("num_planned_viewpoints", 10);
+      addOption<std::size_t>("rng_seed", &rng_seed);
+      addOption<FloatType>("virtual_camera_scale", &virtual_camera_scale);
+      addOption<FloatType>("drone_extent_x", 3);
+      addOption<FloatType>("drone_extent_y", 3);
+      addOption<FloatType>("drone_extent_z", 3);
+      addOption<std::size_t>("pose_sample_num_trials", &pose_sample_num_trials);
+      addOption<FloatType>("pose_sample_min_radius", &pose_sample_min_radius);
+      addOption<FloatType>("pose_sample_max_radius", &pose_sample_max_radius);
+      addOption<FloatType>("sampling_roi_factor", &sampling_roi_factor);
+      addOption<std::size_t>("num_sampled_poses", &num_sampled_poses);
+      addOption<std::size_t>("num_planned_viewpoints", &num_planned_viewpoints);
     }
 
     ~Options() override {}
-  };
 
-  static constexpr FloatType OCCLUSION_DIST_MARGIN_FACTOR = 4;
+    std::size_t rng_seed = -0;
+    FloatType virtual_camera_scale = 0.05f;
+    std::size_t pose_sample_num_trials = 100;
+    FloatType pose_sample_min_radius = 2;
+    FloatType pose_sample_max_radius = 5;
+    FloatType sampling_roi_factor = 2;
+    std::size_t num_sampled_poses = 100;
+    std::size_t num_planned_viewpoints = 10;
+  };
 
   using MeshType = ViewpointPlannerData::MeshType;
 //    using OctomapType = octomap::OcTree;
@@ -123,6 +160,7 @@ public:
   using WeightType = OccupancyMapType::NodeType::WeightType;
   using VoxelType = ViewpointPlannerData::OccupiedTreeType::NodeType;
 
+  /// Voxel node and it's corresponding amount of information
   struct VoxelWithInformation {
     VoxelWithInformation(const VoxelType* voxel, const FloatType information)
     : voxel(voxel), information(information) {}
@@ -146,27 +184,28 @@ public:
 
   using VoxelWithInformationSet = std::unordered_set<VoxelWithInformation, VoxelWithInformation::Hash>;
 
-  struct ViewpointNode {
-    ViewpointNode()
+  /// Describes a viewpoint, the set of voxels observed by it and the corresponding information
+  struct ViewpointEntry {
+    ViewpointEntry()
     : total_information(0) {}
 
-    ViewpointNode(const Viewpoint& viewpoint, const FloatType total_information,
+    ViewpointEntry(const Viewpoint& viewpoint, const FloatType total_information,
         const VoxelWithInformationSet& voxel_set)
     : viewpoint(viewpoint), total_information(total_information), voxel_set(voxel_set) {}
 
-    ViewpointNode(const Viewpoint& viewpoint, const FloatType total_information,
+    ViewpointEntry(const Viewpoint& viewpoint, const FloatType total_information,
         VoxelWithInformationSet&& voxel_set)
     : viewpoint(viewpoint), total_information(total_information), voxel_set(std::move(voxel_set)) {}
 
-    ViewpointNode(const ViewpointNode& other)
+    ViewpointEntry(const ViewpointEntry& other)
     : viewpoint(other.viewpoint), total_information(other.total_information),
       voxel_set(other.voxel_set) {}
 
-    ViewpointNode(ViewpointNode&& other)
+    ViewpointEntry(ViewpointEntry&& other)
     : viewpoint(std::move(other.viewpoint)), total_information(other.total_information),
       voxel_set(std::move(other.voxel_set)) {}
 
-    ViewpointNode& operator=(const ViewpointNode& other) {
+    ViewpointEntry& operator=(const ViewpointEntry& other) {
       if (this != &other) {
         viewpoint = other.viewpoint;
         total_information = other.total_information;
@@ -175,7 +214,7 @@ public:
       return *this;
     }
 
-    ViewpointNode& operator=(ViewpointNode&& other) {
+    ViewpointEntry& operator=(ViewpointEntry&& other) {
       if (this != &other) {
         viewpoint = std::move(other.viewpoint);
         total_information = other.total_information;
@@ -191,19 +230,25 @@ public:
 
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   };
+  using ViewpointEntryVector = std::vector<ViewpointEntry>;
+  using ViewpointEntryIndex = ViewpointEntryVector::size_type;
 
+  /// Describes a viewpoint and the information it adds to the previous viewpoints
   struct ViewpointPathEntry {
-    ViewpointPathEntry(const ViewpointNode* node, FloatType information)
-    : node(node), information(information) {}
+    ViewpointPathEntry(ViewpointEntryIndex viewpoint_index, FloatType information)
+    : viewpoint_index(viewpoint_index), information(information) {}
 
-    const ViewpointNode* node;
+    ViewpointEntryIndex viewpoint_index;
     FloatType information;
   };
 
-  using ViewpointGraph = Graph<ViewpointNode, FloatType>;
+  using ViewpointGraph = Graph<ViewpointEntryIndex, FloatType>;
   using ViewpointPath = std::vector<ViewpointPathEntry>;
+  using FeatureViewpointMap = std::unordered_map<std::size_t, std::vector<const Viewpoint*>>;
 
   ViewpointPlanner(const Options* options, std::unique_ptr<ViewpointPlannerData> data);
+
+  void reset();
 
   const OccupancyMapType* getOctree() const {
       return data_->octree_.get();
@@ -217,6 +262,10 @@ public:
     return data_->poisson_mesh_.get();
   }
 
+  const ViewpointEntryVector& getViewpointEntries() const {
+    return viewpoint_entries_;
+  }
+
   const ViewpointGraph& getViewpointGraph() const {
     return viewpoint_graph_;
   }
@@ -225,24 +274,48 @@ public:
     return viewpoint_path_;
   }
 
-  std::pair<bool, ait::Pose> samplePose(size_t max_trials = 500);
+  std::mutex& mutex() {
+    return mutex_;
+  }
 
-  std::pair<bool, ait::Pose> samplePose(const BoundingBoxType& bbox,
-      const Vector3& object_extent, size_t max_trials = 500);
+  template <typename IteratorT>
+  std::pair<bool, Pose> sampleSurroundingPose(IteratorT first, IteratorT last) const;
 
-  std::pair<bool, ViewpointPlanner::Vector3> samplePosition(size_t max_trials = 500);
+  template <typename IteratorT>
+  std::pair<bool, Pose> sampleSurroundingPoseFromEntries(IteratorT first, IteratorT last) const;
+
+  std::pair<bool, Pose> sampleSurroundingPose(const Pose& pose) const;
+
+  std::pair<bool, Pose> samplePose(std::size_t max_trials = (std::size_t)-1) const;
+
+  std::pair<bool, Pose> samplePose(const BoundingBoxType& bbox,
+      const Vector3& object_extent, std::size_t max_trials = (std::size_t)-1) const;
+
+  std::pair<bool, ViewpointPlanner::Vector3> samplePosition(std::size_t max_trials = (std::size_t)-1) const;
 
   std::pair<bool, ViewpointPlanner::Vector3> samplePosition(const BoundingBoxType& bbox,
-      const Vector3& object_extent, size_t max_trials = 500);
+      const Vector3& object_extent, std::size_t max_trials = (std::size_t)-1) const;
 
-  void setVirtualCamera(size_t virtual_width, size_t virtual_height, const Eigen::Matrix4d& virtual_intrinsics);
+  Pose::Quaternion sampleOrientation() const;
 
-  void setScaledVirtualCamera(CameraId camera_id, double scale_factor);
+  /// Sample an orientation biased towards a bounding box.
+  ///
+  /// A single angle is sampled from a normal distribution (stddev depends on bounding box size) and clamped to [0, 2 pi].
+  /// A spherical angle is then computed by sampling from [0, 2 pi] to determine the direction of the angle.
+  /// Finally, the spherical angle is transformed to a 3D vector so that the sampling distribution is around the bounding box center
+  /// seen from pos.
+  Pose::Quaternion sampleBiasedOrientation(const Vector3& pos, const BoundingBoxType& bias_bbox) const;
+
+  void setVirtualCamera(std::size_t virtual_width, std::size_t virtual_height, const Matrix4x4& virtual_intrinsics);
+
+  void setScaledVirtualCamera(CameraId camera_id, FloatType scale_factor);
 
   void run();
 
+  bool generateNextViewpoint();
+
   template <typename T>
-  T rayCastAccumulate(const CameraId camera_id, const ait::Pose& pose_world_to_image, bool ignore_unknown,
+  T rayCastAccumulate(const CameraId camera_id, const Pose& pose_world_to_image, bool ignore_unknown,
       std::function<T(bool, const octomap::point3d&)> func, T init = 0) const;
 
   template <typename T>
@@ -250,33 +323,33 @@ public:
       std::function<T(bool, const octomap::point3d&)> func, T init = 0) const;
 
   std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxelsBVH(
-      const ait::Pose& pose_world_to_image) const;
+      const Pose& pose_world_to_image) const;
 
-  std::vector<std::pair<ConstTreeNavigatorType, float>> getRaycastHitVoxels(const ait::Pose& pose_world_to_image) const;
+  std::vector<std::pair<ConstTreeNavigatorType, FloatType>> getRaycastHitVoxels(const Pose& pose_world_to_image) const;
 
   std::pair<VoxelWithInformationSet, FloatType>
-    getRaycastHitVoxelsWithInformationScoreBVH(const ait::Pose& pose_world_to_image) const;
+    getRaycastHitVoxelsWithInformationScoreBVH(const Pose& pose_world_to_image) const;
 
   FloatType computeInformationScore(const ViewpointPlannerData::OccupiedTreeType::IntersectionResult& result) const;
 
-  FloatType computeInformationScoreBVH(const ait::Pose& pose_world_to_image) const;
+  FloatType computeInformationScoreBVH(const Pose& pose_world_to_image) const;
 
-  FloatType computeInformationScore(const ait::Pose& pose_world_to_image) const;
+  FloatType computeInformationScore(const Pose& pose_world_to_image) const;
 
-  std::unordered_set<Point3DId> computeProjectedMapPoints(const CameraId camera_id, const ait::Pose& pose,
-          double projection_margin=Viewpoint::DEFAULT_PROJECTION_MARGIN) const;
+  std::unordered_set<Point3DId> computeProjectedMapPoints(const CameraId camera_id, const Pose& pose,
+      FloatType projection_margin=Viewpoint::DEFAULT_PROJECTION_MARGIN) const;
 
-  std::unordered_set<Point3DId> computeFilteredMapPoints(const CameraId camera_id, const ait::Pose& pose,
-          double projection_margin=Viewpoint::DEFAULT_PROJECTION_MARGIN) const;
+  std::unordered_set<Point3DId> computeFilteredMapPoints(const CameraId camera_id, const Pose& pose,
+      FloatType projection_margin=Viewpoint::DEFAULT_PROJECTION_MARGIN) const;
 
-  std::unordered_set<Point3DId> computeVisibleMapPoints(const CameraId camera_id, const ait::Pose& pose,
-          double projection_margin=Viewpoint::DEFAULT_PROJECTION_MARGIN) const;
+  std::unordered_set<Point3DId> computeVisibleMapPoints(const CameraId camera_id, const Pose& pose,
+      FloatType projection_margin=Viewpoint::DEFAULT_PROJECTION_MARGIN) const;
 
-  std::unordered_set<Point3DId> computeVisibleMapPointsFiltered(const CameraId camera_id, const ait::Pose& pose,
-          double projection_margin=Viewpoint::DEFAULT_PROJECTION_MARGIN) const;
+  std::unordered_set<Point3DId> computeVisibleMapPointsFiltered(const CameraId camera_id, const Pose& pose,
+      FloatType projection_margin=Viewpoint::DEFAULT_PROJECTION_MARGIN) const;
 
   template <typename Set1, typename Set2>
-  size_t computeSetIntersectionSize(const Set1& set1, const Set2& set2) const;
+  std::size_t computeSetIntersectionSize(const Set1& set1, const Set2& set2) const;
 
   template <typename Set1, typename Set2>
   Set1 computeSetIntersection(const Set1& set1, const Set2& set2) const;
@@ -284,55 +357,57 @@ public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
 private:
-  void removeOccludedPoints(const ait::Pose& pose_world_to_image, std::unordered_set<Point3DId>& point3D_ids, double dist_margin) const;
+  void removeOccludedPoints(const Pose& pose_world_to_image, std::unordered_set<Point3DId>& point3D_ids, FloatType dist_margin) const;
 
   static WeightType computeObservationWeightFactor(CounterType observation_count);
   static WeightType computeObservationInformationFactor(CounterType observation_count);
 
+  ait::Random<FloatType, std::int64_t> random_;
+
   Options options_;
 
+  Vector3 drone_extent_;
+
   std::unique_ptr<ViewpointPlannerData> data_;
-  std::mt19937_64 rng_;
   PinholeCamera virtual_camera_;
 
+  std::mutex mutex_;
+
+  ViewpointEntryVector viewpoint_entries_;
+  VoxelWithInformationSet observed_voxel_set_;
   ViewpointGraph viewpoint_graph_;
   ViewpointPath viewpoint_path_;
+  // Map from triangle index to viewpoints that project features into it
+  FeatureViewpointMap feature_viewpoint_map_;
 };
 
-//template <typename T>
-//T ViewpointPlanner::rayCastAccumulate(const CameraId camera_id, const ait::Pose& pose_world_to_image, bool ignore_unknown,
-//    std::function<T(bool, const octomap::point3d&)> func, T init) const {
-//  const PinholeCamera& camera = reconstruction_->getCameras().at(camera_id);
-//  Viewpoint viewpoint(&camera, pose_world_to_image);
-//  return rayCastAccumulate(viewpoint, ignore_unknown, func, init);
-//}
-//
-//template <typename T>
-//T ViewpointPlanner::rayCastAccumulate(const Viewpoint& viewpoint, bool ignore_unknown,
-//    std::function<T(bool, const octomap::point3d&)> acc_func, T init) const {
-//  ait::Timer timer;
-//  ait::Pose pose_image_to_world = viewpoint.pose().inverse();
-//  Eigen::Vector3d eigen_origin = pose_image_to_world.translation();
-//  octomap::point3d origin(eigen_origin(0), eigen_origin(1), eigen_origin(2));
-//  octomap::OcTreeKey origin_key;
-//  if (!octree_->coordToKeyChecked(origin, origin_key)) {
-//    std::cout << "WARNING: Requesting ray cast for out of bounds viewpoint" << std::endl;
-//    return std::numeric_limits<double>::quiet_NaN();
-//  }
-//  T acc = init;
-//  for (size_t y = 0; y < virtual_height_; ++y) {
-//    std::cout << "Raycasting row row " << y << std::endl;
-//    for (size_t x = 0; x < virtual_width_; ++x) {
-//      Eigen::Vector3d ray = viewpoint.camera().getCameraRay(x, y);
-//      octomap::point3d direction(ray(0), ray(1), ray(2));
-////      double max_range = -1.0;
-//      octomap::point3d hit_point;
-////      bool result = octree_->castRay(origin, direction, hit_point, ignore_unknown);
-//      bool result = octree_->castRayFast(origin, direction, hit_point, ignore_unknown);
-//      // TODO
-//      acc += func(result, hit_point);
-//    }
-//  }
-//  timer.printTiming("rayCastAccumulate");
-//  return acc;
-//}
+template <typename IteratorT>
+std::pair<bool, ViewpointPlanner::Pose> ViewpointPlanner::sampleSurroundingPose(IteratorT first, IteratorT last) const {
+  AIT_ASSERT_STR(last - first > 0, "Unable to sample surrounding pose from empty pose set");
+  std::size_t index = random_.sampleUniformIntExclusive(0, last - first);
+//  std::uniform_int_distribution<std::size_t> dist(0, last - first);
+//  std::size_t index = dist(rng_);
+  IteratorT it = first;
+  for (std::size_t i = 0; i < index; ++i) {
+    ++it;
+  }
+  std::cout << "index=" << index << ", last-first=" << (last-first) << std::endl;
+  const Pose& pose = it->viewpoint.pose();
+  return sampleSurroundingPose(pose);
+}
+
+template <typename IteratorT>
+std::pair<bool, ViewpointPlanner::Pose> ViewpointPlanner::sampleSurroundingPoseFromEntries(IteratorT first, IteratorT last) const {
+  AIT_ASSERT_STR(last - first > 0, "Unable to sample surrounding pose from empty pose set");
+  std::size_t index = random_.sampleUniformIntExclusive(0, last - first);
+//  std::uniform_int_distribution<std::size_t> dist(0, last - first);
+//  std::size_t index = dist(rng_);
+  IteratorT it = first;
+  for (std::size_t i = 0; i < index; ++i) {
+    ++it;
+  }
+//  std::cout << "index=" << index << ", last-first=" << (last-first) << std::endl;
+  const ViewpointEntryIndex viewpoint_index = *it;
+  const Pose& pose = viewpoint_entries_[viewpoint_index].viewpoint.pose();
+  return sampleSurroundingPose(pose);
+}

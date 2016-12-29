@@ -32,7 +32,7 @@
  * along with this program. If not, see http://www.gnu.org/licenses/.
  */
 
-#include "occupancy_node.h"
+#include <src/octree/occupancy_node.h>
 
 /// Initialize with zero counts
 OccupancyNode::OccupancyNode()

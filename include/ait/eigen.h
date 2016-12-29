@@ -41,3 +41,12 @@ EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Quaterniond)
 #define EIGEN_ALIGNED_UNORDERED_MAP3(Key, T, Hash, EqualTo) std::unordered_map<Key, T, Hash, EqualTo, \
     Eigen::aligned_allocator<std::pair<Key, T>>>;
 
+#define USE_FIXED_EIGEN_TYPES(FloatType) \
+    using Vector2 = Eigen::Matrix<FloatType, 2, 1>; \
+    using Vector3 = Eigen::Matrix<FloatType, 3, 1>; \
+    using Vector4 = Eigen::Matrix<FloatType, 4, 1>; \
+    using Matrix4x4 = Eigen::Matrix<FloatType, 4, 4>; \
+    using Matrix3x3 = Eigen::Matrix<FloatType, 3, 3>; \
+    using Matrix3x4 = Eigen::Matrix<FloatType, 3, 4>; \
+    using Quaternion = Eigen::Quaternion<FloatType>; \
+    using AngleAxis = Eigen::AngleAxis<FloatType>;

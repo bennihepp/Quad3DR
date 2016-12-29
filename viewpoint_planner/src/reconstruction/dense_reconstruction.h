@@ -11,6 +11,8 @@
 #include <ait/common.h>
 #include "sparse_reconstruction.h"
 
+namespace reconstruction {
+
 template <typename T>
 class DataArray {
 public:
@@ -100,7 +102,6 @@ private:
 
 class DenseReconstruction : public SparseReconstruction {
 public:
-  using FloatType = float;
   using DepthMap = DataArray<FloatType>;
   using NormalMap = DataArray<FloatType>;
   using DepthMapMapType = EIGEN_ALIGNED_UNORDERED_MAP(ImageId, DepthMap);
@@ -140,3 +141,5 @@ private:
   mutable DepthMapMapType depth_maps_;
   mutable NormalMapMapType normal_maps_;
 };
+
+}

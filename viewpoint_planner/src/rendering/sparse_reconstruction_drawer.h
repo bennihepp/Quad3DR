@@ -7,7 +7,7 @@
 //==================================================
 #pragma once
 
-#include "reconstruction/sparse_reconstruction.h"
+#include "../reconstruction/sparse_reconstruction.h"
 #include "triangle_drawer.h"
 #include "line_drawer.h"
 
@@ -21,6 +21,10 @@ class SparseReconstructionDrawer {
   const float CAMERA_LINE_WIDTH = 1.0f;
   const double RENDER_MAX_POINT_ERROR = 2.0;
   const size_t RENDER_MIN_TRACK_LENGTH = 3;
+
+  using SparseReconstruction = reconstruction::SparseReconstruction;
+  using PinholeCameraColmap = reconstruction::PinholeCameraColmap;
+  using ImageColmap = reconstruction::ImageColmap;
 
 public:
   SparseReconstructionDrawer();

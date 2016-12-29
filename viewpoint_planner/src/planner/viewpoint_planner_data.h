@@ -13,7 +13,7 @@
 #include <ait/common.h>
 #include <ait/options.h>
 #include <ait/serialization.h>
-#include "../occupancy_map.h"
+#include "../octree/occupancy_map.h"
 #include "../reconstruction/dense_reconstruction.h"
 #include "../bvh/bvh.h"
 
@@ -54,20 +54,34 @@ public:
       addOption<std::string>("octree_filename", "");
       addOption<std::string>("bvh_filename", "");
       addOption<std::string>("distance_field_filename", "");
-      addOption<size_t>("grid_dimension", 128);
+      addOption<bool>("regenerate_augmented_octree", &regenerate_augmented_octree);
+      addOption<bool>("regenerate_bvh_tree", &regenerate_bvh_tree);
+      addOption<bool>("regenerate_distance_field", &regenerate_distance_field);
+      addOption<std::size_t>("grid_dimension", &grid_dimension);
+      addOption<FloatType>("distance_field_cutoff", &distance_field_cutoff);
+      addOption<FloatType>("bvh_bbox_min_x", -1000);
+      addOption<FloatType>("bvh_bbox_min_y", -1000);
+      addOption<FloatType>("bvh_bbox_min_z", -1000);
+      addOption<FloatType>("bvh_bbox_max_x", +1000);
+      addOption<FloatType>("bvh_bbox_max_y", +1000);
+      addOption<FloatType>("bvh_bbox_max_z", +1000);
       addOption<FloatType>("roi_bbox_min_x", -50);
       addOption<FloatType>("roi_bbox_min_y", -50);
       addOption<FloatType>("roi_bbox_min_z", -50);
       addOption<FloatType>("roi_bbox_max_x", +50);
       addOption<FloatType>("roi_bbox_max_y", +50);
       addOption<FloatType>("roi_bbox_max_z", +50);
-      addOption<FloatType>("drone_extent_x", 3);
-      addOption<FloatType>("drone_extent_y", 3);
-      addOption<FloatType>("drone_extent_z", 3);
-      addOption<FloatType>("distance_field_cutoff", 5);
+      addOption<FloatType>("roi_falloff_distance", &roi_falloff_distance);
     }
 
     ~Options() override {}
+
+    bool regenerate_augmented_octree = false;
+    bool regenerate_bvh_tree = false;
+    bool regenerate_distance_field = false;
+    std::size_t grid_dimension = 128;
+    FloatType roi_falloff_distance = 10;
+    FloatType distance_field_cutoff = 5;
   };
 
   static constexpr double OCCUPANCY_WEIGHT_DEPTH = 12;
@@ -130,19 +144,21 @@ private:
 //  static WeightType computeWeightContribution(
 //      const Eigen::Vector3f& query_pos, FloatType dist_cutoff_sq, const ConstTreeNavigatorType& nav);
 
-  BoundingBoxType roi_bbox_;
-  Vector3 drone_extent_;
+  Options options_;
 
-  std::unique_ptr<DenseReconstruction> reconstruction_;
+  BoundingBoxType bvh_bbox_;
+  BoundingBoxType roi_bbox_;
+
+  std::unique_ptr<reconstruction::DenseReconstruction> reconstruction_;
   std::unique_ptr<OccupancyMapType> octree_;
 
   std::unique_ptr<MeshType> poisson_mesh_;
+
   BoundingBoxType grid_bbox_;
-  size_t grid_dimension_;
   Vector3i grid_dim_;
   Vector3 grid_origin_;
   FloatType grid_increment_;
+
   DistanceFieldType distance_field_;
-  FloatType df_cutoff_;
   OccupiedTreeType occupied_bvh_;
 };

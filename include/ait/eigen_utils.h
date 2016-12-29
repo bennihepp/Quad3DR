@@ -13,11 +13,13 @@
 namespace ait
 {
 
-inline std::tuple<double, Eigen::Vector3d> computeDistanceAndDirection(const Eigen::Vector3d& from, const Eigen::Vector3d& to) {
-    Eigen::Vector3d direction = to - from;
-    double distance = direction.norm();
-    direction.normalize();
-    return std::make_tuple(distance, direction);
+template <typename Derived1, typename Derived2>
+inline std::tuple<typename Derived1::Scalar, typename Derived1::PlainObject> computeDistanceAndDirection(
+    const Eigen::MatrixBase<Derived1>& from, const Eigen::MatrixBase<Derived2>& to) {
+  typename Derived1::PlainObject direction = to - from;
+  double distance = direction.norm();
+  direction.normalize();
+  return std::make_tuple(distance, direction);
 }
 
 //inline Eigen::Vector3d fromHomogeneousVector(const Eigen::Vector4d& vector) {
@@ -82,5 +84,11 @@ inline std::tuple<double, Eigen::Vector3d> computeDistanceAndDirection(const Eig
 ////    hom_vector(Rows, 0) = 1;
 //    return hom_vector;
 //}
+
+template <typename _CharT, typename Scalar>
+std::basic_ostream<_CharT>& operator<<(std::basic_ostream<_CharT>& out, const Eigen::Quaternion<Scalar>& quat) {
+  out << quat.w() << ", " << quat.x() << ", " << quat.y() << ", " << quat.z() << std::endl;
+  return out;
+}
 
 }

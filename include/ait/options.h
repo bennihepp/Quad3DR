@@ -46,7 +46,7 @@ public:
   template <typename T>
   void addOption(const std::string& name) {
     options_.add_options()
-          (getFullOptionName(name).c_str(), po::value<T>()->required(), name.c_str());
+        (getFullOptionName(name).c_str(), po::value<T>()->required(), name.c_str());
   }
 
   template <typename T>
@@ -56,19 +56,21 @@ public:
   }
 
   template <typename T>
-  void addOption(const std::string& name, T* value_ptr, bool required = false) {
-    po::typed_value<T>* po_value = po::value<T>(value_ptr);
-    if (required) {
-      po_value = po_value->required();
-    }
+  void addOptionRequired(const std::string& name, T* value_ptr) {
     options_.add_options()
-          (getFullOptionName(name).c_str(), po_value, name.c_str());
+        (getFullOptionName(name).c_str(), po::value<T>(value_ptr)->required(), name.c_str());
+  }
+
+  template <typename T>
+  void addOption(const std::string& name, T* value_ptr) {
+    options_.add_options()
+        (getFullOptionName(name).c_str(), po::value<T>(value_ptr), name.c_str());
   }
 
   template <typename T>
   void addOption(const std::string& name, T* value_ptr, T init_value) {
     options_.add_options()
-        (getFullOptionName(name).c_str(), po::value<T>(value_ptr)->default_value(init_value), name.c_str());
+      (getFullOptionName(name).c_str(), po::value<T>(value_ptr)->default_value(init_value), name.c_str());
   }
 
   bool isSet(const std::string& name) {

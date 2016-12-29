@@ -289,8 +289,9 @@ bool OccupancyMap<NodeT>::pruneNode(NodeT* node) {
 
 template <typename NodeT>
 bool OccupancyMap<NodeT>::isNodeCollapsible(const NodeT* node) const {
-  // all children must exist, must not have children of
+  // All children must exist, must not have children of
   // their own and have the same occupancy and observation count values.
+  // Exception are free space voxels.
   if (!node->hasChild(0)) {
     return false;
   }
@@ -305,18 +306,22 @@ bool OccupancyMap<NodeT>::isNodeCollapsible(const NodeT* node) const {
       return false;
     }
     const NodeT* child = this->getNodeChild(node, i);
-//    if (this->isNodeOccupied(child) != this->isNodeOccupied(first_child)) {
-//      return false;
-//    }
-//    if (this->isNodeKnown(child) != this->isNodeKnown(first_child)) {
-//      return false;
-//    }
-    if (child->getOccupancy() != first_child->getOccupancy()) {
+    if (this->isNodeOccupied(child) != this->isNodeOccupied(first_child)) {
       return false;
     }
-    if (child->getObservationCount() != first_child->getObservationCount()) {
+    if (this->isNodeKnown(child) != this->isNodeKnown(first_child)) {
       return false;
     }
+//    if (this->isNodeFree(first_child) && this->isNodeKnown(first_child)
+//        && this->isNodeFree(child) && this->isNodeKnown(child)) {
+//      continue;
+//    }
+//    if (child->getOccupancy() != first_child->getOccupancy()) {
+//      return false;
+//    }
+//    if (child->getObservationCount() != first_child->getObservationCount()) {
+//      return false;
+//    }
   }
 
   return true;

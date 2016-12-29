@@ -45,7 +45,7 @@
 #include <octomap/OcTreeBaseImpl.h>
 #include <octomap/AbstractOccupancyOcTree.h>
 #include <ait/eigen.h>
-#include "occupancy_node.h"
+#include <src/octree/occupancy_node.h>
 
 using octomap::OcTreeKey;
 using octomap::KeyBoolMap;
@@ -639,5 +639,5 @@ protected:
 OccupancyMap<AugmentedOccupancyNode>* convertToAugmentedMap(const OccupancyMap<OccupancyNode>* input_tree);
 
 
-#include "occupancy_map.hxx"
-#include "occupancy_map_tree_navigator.hxx"
+#include <src/octree/occupancy_map.hxx>
+#include <src/octree/occupancy_map_tree_navigator.hxx>

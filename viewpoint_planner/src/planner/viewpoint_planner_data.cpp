@@ -10,7 +10,16 @@
 
 const std::string NodeObject::kFileTag = "NodeObject";
 
-ViewpointPlannerData::ViewpointPlannerData(const Options* options) {
+ViewpointPlannerData::ViewpointPlannerData(const Options* options)
+: options_(*options) {
+  bvh_bbox_ = BoundingBoxType(
+      Vector3(options->getValue<FloatType>("bvh_bbox_min_x"),
+          options->getValue<FloatType>("bvh_bbox_min_y"),
+          options->getValue<FloatType>("bvh_bbox_min_z")),
+      Vector3(options->getValue<FloatType>("bvh_bbox_max_x"),
+          options->getValue<FloatType>("bvh_bbox_max_y"),
+          options->getValue<FloatType>("bvh_bbox_max_z")));
+  // Get ROI (for sampling and weight computation)
   roi_bbox_ = BoundingBoxType(
       Vector3(options->getValue<FloatType>("roi_bbox_min_x"),
           options->getValue<FloatType>("roi_bbox_min_y"),
@@ -18,12 +27,6 @@ ViewpointPlannerData::ViewpointPlannerData(const Options* options) {
       Vector3(options->getValue<FloatType>("roi_bbox_max_x"),
           options->getValue<FloatType>("roi_bbox_max_y"),
           options->getValue<FloatType>("roi_bbox_max_z")));
-  drone_extent_ = Vector3(
-      options->getValue<FloatType>("drone_extent_x"),
-      options->getValue<FloatType>("drone_extent_y"),
-      options->getValue<FloatType>("drone_extent_z"));
-  grid_dimension_ = options->getValue<size_t>("grid_dimension");
-  df_cutoff_ = options->getValue<FloatType>("distance_field_cutoff");
 
   const std::string reconstruction_path = options->getValue<std::string>("dense_reconstruction_path");
   const std::string raw_octree_filename = options->getValue<std::string>("raw_octree_filename");
@@ -58,7 +61,7 @@ ViewpointPlannerData::ViewpointPlannerData(const Options* options) {
 void ViewpointPlannerData::readDenseReconstruction(const std::string& path) {
   std::cout << "Reading dense reconstruction workspace" << std::endl;
   ait::Timer timer;
-  reconstruction_.reset(new DenseReconstruction());
+  reconstruction_.reset(new reconstruction::DenseReconstruction());
   reconstruction_->read(path);
   timer.printTiming("Loading dense reconstruction");
 }
@@ -121,7 +124,7 @@ void ViewpointPlannerData::readPoissonMesh(const std::string& mesh_filename) {
 bool ViewpointPlannerData::readBVHTree(std::string bvh_filename, const std::string& octree_filename) {
   // Read cached BVH tree (if up-to-date) or generate it
   bool read_cached_tree = false;
-  if (boost::filesystem::exists(bvh_filename)) {
+  if (!options_.regenerate_bvh_tree && boost::filesystem::exists(bvh_filename)) {
     if (boost::filesystem::last_write_time(bvh_filename) > boost::filesystem::last_write_time(octree_filename)) {
       std::cout << "Loading up-to-date cached BVH tree." << std::endl;
       readCachedBVHTree(bvh_filename);
@@ -143,7 +146,7 @@ bool ViewpointPlannerData::readBVHTree(std::string bvh_filename, const std::stri
 bool ViewpointPlannerData::readMeshDistanceField(std::string df_filename, const std::string& mesh_filename) {
   // Read cached distance field (if up-to-date) or generate it.
   bool read_cached_df = false;
-  if (boost::filesystem::exists(df_filename)) {
+  if (!options_.regenerate_distance_field && boost::filesystem::exists(df_filename)) {
     if (boost::filesystem::last_write_time(df_filename) > boost::filesystem::last_write_time(mesh_filename)) {
       std::cout << "Loading up-to-date cached distance field." << std::endl;
       ml::BinaryDataStreamFile file_stream(df_filename, false);
@@ -157,6 +160,7 @@ bool ViewpointPlannerData::readMeshDistanceField(std::string df_filename, const 
   if (!read_cached_df) {
     std::cout << "Generating distance field." << std::endl;
     generateDistanceField();
+    std::cout << "Done" << std::endl;
     ml::BinaryDataStreamFile file_stream(df_filename, true);
     file_stream << distance_field_;
   }
@@ -182,16 +186,21 @@ void ViewpointPlannerData::updateWeights() {
 //  std::cout << "max_distance: " << max_distance << std::endl;
 //  FloatType max_weight = std::numeric_limits<FloatType>::lowest();
 //  FloatType min_weight = std::numeric_limits<FloatType>::max();
-  for (int x = 0; x < grid_dim_(0); ++x) {
-    for (int y = 0; y < grid_dim_(1); ++y) {
-      for (int z = 0; z < grid_dim_(2); ++z) {
-        FloatType distance = distance_field_(x, y, z);
+  for (int ix = 0; ix < grid_dim_(0); ++ix) {
+    for (int iy = 0; iy < grid_dim_(1); ++iy) {
+      for (int iz = 0; iz < grid_dim_(2); ++iz) {
+        BoundingBoxType::Vector3 xyz = getGridPosition(ix, iy, iz);
+//        std::cout << "roi_distance=" << roi_distance << ", roi_weight=" << roi_weight << std::endl;
+        FloatType roi_weight = 1;
+        if (roi_bbox_.isOutside(xyz)) {
+          FloatType roi_distance = roi_bbox_.distanceTo(xyz);
+          roi_distance = std::min(roi_distance, options_.roi_falloff_distance);
+          roi_weight = (options_.roi_falloff_distance - roi_distance) / options_.roi_falloff_distance;
+        }
+        FloatType distance = distance_field_(ix, iy, iz);
         FloatType inv_distance = (max_distance - distance) / (FloatType)max_distance;
-        FloatType weight = inv_distance * inv_distance;
-//        max_weight = std::max(max_weight, weight);
-//        min_weight = std::min(min_weight, weight);
-        Vector3 pos = getGridPosition(x, y, z);
-        BoundingBoxType bbox(pos, grid_increment_);
+        FloatType weight = roi_weight * inv_distance * inv_distance;
+        BoundingBoxType bbox(xyz, grid_increment_);
         std::vector<OccupiedTreeType::BBoxIntersectionResult> results =
             occupied_bvh_.intersects(bbox);
         for (const OccupiedTreeType::BBoxIntersectionResult& result : results) {
@@ -214,7 +223,7 @@ bool ViewpointPlannerData::readAndAugmentOctree(
     std::string octree_filename, const std::string& raw_octree_filename, bool binary) {
   // Read cached augmented tree (if up-to-date) or generate it
   bool read_cached_tree = false;
-  if (boost::filesystem::exists(octree_filename)) {
+  if (!options_.regenerate_augmented_octree && boost::filesystem::exists(octree_filename)) {
     if (boost::filesystem::last_write_time(octree_filename) > boost::filesystem::last_write_time(raw_octree_filename)) {
       std::cout << "Loading up-to-date cached augmented tree [" << octree_filename << "]" << std::endl;
       octree_ = OccupancyMapType::read(octree_filename);
@@ -380,7 +389,7 @@ void ViewpointPlannerData::generateBVHTree(const OccupancyMapType* octree) {
       object_with_bbox.object->occupancy = it->getOccupancy();
       object_with_bbox.object->observation_count = it->getObservationCount();
       object_with_bbox.object->weight = it->getWeight();
-      object_with_bbox.bounding_box.constrainTo(roi_bbox_);
+      object_with_bbox.bounding_box.constrainTo(bvh_bbox_);
       if (object_with_bbox.bounding_box.isEmpty()) {
         continue;
       }
@@ -402,14 +411,13 @@ void ViewpointPlannerData::readCachedBVHTree(const std::string& filename) {
 }
 
 void ViewpointPlannerData::generateDistanceField() {
-  std::cout << "Generating mesh distance field" << std::endl;
-  ml::Grid3f seed_grid(grid_dimension_, grid_dimension_, grid_dimension_);
+  ml::Grid3f seed_grid(options_.grid_dimension, options_.grid_dimension, options_.grid_dimension);
   seed_grid.setValues(std::numeric_limits<float>::max());
   BoundingBoxType bbox = occupied_bvh_.getRoot()->getBoundingBox();
-  grid_dim_ = Vector3i(grid_dimension_, grid_dimension_, grid_dimension_);
+  grid_dim_ = Vector3i(options_.grid_dimension, options_.grid_dimension, options_.grid_dimension);
   grid_origin_ = bbox.getMinimum();
-  grid_increment_ = bbox.getMaxExtent() / (grid_dimension_ + 1);
-  Vector3 grid_max = grid_origin_ + Vector3(grid_increment_, grid_increment_, grid_increment_) * (grid_dimension_ + 1);
+  grid_increment_ = bbox.getMaxExtent() / (options_.grid_dimension + 1);
+  Vector3 grid_max = grid_origin_ + Vector3(grid_increment_, grid_increment_, grid_increment_) * (options_.grid_dimension + 1);
   grid_bbox_ = BoundingBoxType(grid_origin_, grid_max);
   //  std::cout << "grid_dim_: " << grid_dim_ << std::endl;
   //  std::cout << "grid_origin_: " << grid_origin_ << std::endl;
@@ -438,13 +446,12 @@ void ViewpointPlannerData::generateDistanceField() {
   for (int x = 0; x < grid_dim_(0); ++x) {
     for (int y = 0; y < grid_dim_(1); ++y) {
       for (int z = 0; z < grid_dim_(2); ++z) {
-        if (distance_field_(x, y, z) > df_cutoff_) {
-          distance_field_(x, y, z) = df_cutoff_;
+        if (distance_field_(x, y, z) > options_.distance_field_cutoff) {
+          distance_field_(x, y, z) = options_.distance_field_cutoff;
         }
       }
     }
   }
-  std::cout << "Done" << std::endl;
 }
 
 bool ViewpointPlannerData::isInsideGrid(const Vector3& xyz) const {

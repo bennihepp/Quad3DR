@@ -31,12 +31,20 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+namespace reconstruction {
+
+using FloatType = float;
+USE_FIXED_EIGEN_TYPES(FloatType)
+
+using CameraMatrix = Eigen::Matrix<FloatType, 4, 4>;
+using ColorVector = Eigen::Matrix<uint8_t, 3, 1>;
+
 using CameraId = size_t;
 using ImageId = size_t;
 using Point3DId = size_t;
 using FeatureId = size_t;
 
-using CameraMatrix = Eigen::Matrix4d;
+using Pose = ait::Pose<FloatType>;
 
 class PinholeCamera {
 public:
@@ -52,25 +60,25 @@ public:
 
   const CameraMatrix& intrinsics() const;
 
-  Eigen::Vector2d projectPoint(const Eigen::Vector3d& hom_point_camera) const;
+  Vector2 projectPoint(const Vector3& hom_point_camera) const;
 
-  Eigen::Vector3d getCameraRay(double x, double y) const;
+  Vector3 getCameraRay(FloatType x, FloatType y) const;
 
-  Eigen::Vector3d getCameraRay(const Eigen::Vector2d& point_image) const;
+  Vector3 getCameraRay(const Vector2& point_image) const;
 
-  Eigen::Vector3d unprojectPoint(double x, double y, double distance) const;
+  Vector3 unprojectPoint(FloatType x, FloatType y, FloatType distance) const;
 
-  Eigen::Vector3d unprojectPoint(const Eigen::Vector2d& point_image, double distance) const;
+  Vector3 unprojectPoint(const Vector2& point_image, FloatType distance) const;
 
-  double getMeanFocalLength() const;
+  FloatType getMeanFocalLength() const;
 
-  double getFocalLengthX() const;
+  FloatType getFocalLengthX() const;
 
-  double getFocalLengthY() const;
+  FloatType getFocalLengthY() const;
 
-  bool isPointInViewport(const Eigen::Vector2d& point) const;
+  bool isPointInViewport(const Vector2& point) const;
 
-  bool isPointInViewport(const Eigen::Vector2d& point, double margin) const;
+  bool isPointInViewport(const Vector2& point, FloatType margin) const;
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
@@ -82,20 +90,20 @@ private:
 
 class PinholeCameraColmap : public PinholeCamera {
 public:
-  PinholeCameraColmap(CameraId id, size_t width, size_t height, const std::vector<double>& params);
+  PinholeCameraColmap(CameraId id, size_t width, size_t height, const std::vector<FloatType>& params);
 
   CameraId id() const;
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
 private:
-  static CameraMatrix makeIntrinsicsFromParameters(const std::vector<double>& params);
+  static CameraMatrix makeIntrinsicsFromParameters(const std::vector<FloatType>& params);
 
   CameraId id_;
 };
 
 struct Feature {
-  Eigen::Vector2d point;
+  Vector2 point;
   Point3DId point3d_id;
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -103,11 +111,11 @@ struct Feature {
 
 struct ImageColmap {
 public:
-  ImageColmap(ImageId id, const ait::Pose& pose, const std::string& name,
+  ImageColmap(ImageId id, const Pose& pose, const std::string& name,
       const std::vector<Feature>& features, CameraId camera_id);
 
   ImageId id() const;
-  const ait::Pose& pose() const;
+  const Pose& pose() const;
   const std::string& name() const;
   const std::vector<Feature>& features() const;
   const CameraId& camera_id() const;
@@ -116,13 +124,13 @@ public:
 
 private:
   ImageId id_;
-  ait::Pose pose_;
+  Pose pose_;
   std::string name_;
   std::vector<Feature> features_;
   CameraId camera_id_;
 };
 
-struct Color : public Eigen::Matrix<uint8_t, 3, 1> {
+struct Color : public ColorVector {
   uint8_t& r() { return (*this)(0); };
   uint8_t& g() { return (*this)(1); };
   uint8_t& b() { return (*this)(2); };
@@ -137,21 +145,21 @@ class Point3DStatistics {
 public:
   Point3DStatistics();
 
-  Point3DStatistics(double average_distance, double stddev_distance,
-          double stddev_one_minus_dot_product);
+  Point3DStatistics(FloatType average_distance, FloatType stddev_distance,
+      FloatType stddev_one_minus_dot_product);
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-  double averageDistance() const;
+  FloatType averageDistance() const;
 
-  double stddevDistance() const;
+  FloatType stddevDistance() const;
 
-  double stddevOneMinusDotProduct() const;
+  FloatType stddevOneMinusDotProduct() const;
 
 private:
-  double average_distance_;
-  double stddev_distance_;
-  double stddev_one_minus_dot_product_;
+  FloatType average_distance_;
+  FloatType stddev_distance_;
+  FloatType stddev_one_minus_dot_product_;
 };
 
 struct Point3D {
@@ -163,18 +171,18 @@ struct Point3D {
 
   Point3DId getId() const;
 
-  const Eigen::Vector3d& getPosition() const;
+  const Vector3& getPosition() const;
 
-  const Eigen::Vector3d& getNormal() const;
+  const Vector3& getNormal() const;
 
   const Point3DStatistics& getStatistics() const;
 
   Point3DId id;
-  Eigen::Vector3d pos;
+  Vector3 pos;
   Color color;
-  double error;
+  FloatType error;
   std::vector<TrackEntry> feature_track;
-  Eigen::Vector3d normal;
+  Vector3 normal;
   Point3DStatistics statistics;
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -225,3 +233,5 @@ private:
   ImageMapType images_;
   Point3DMapType points3D_;
 };
+
+}

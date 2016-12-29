@@ -15,20 +15,19 @@
 #include <ait/common.h>
 #include <ait/utilities.h>
 #include <ait/options.h>
-//#include <ait/mLib.h>
 
 #include <QApplication>
 
 #include "../reconstruction/dense_reconstruction.h"
-#include "../occupancy_map.h"
+#include "../octree/occupancy_map.h"
 #include "../planner/viewpoint_planner.h"
-#include "../viewer_window.h"
+#include "../ui/viewer_window.h"
 
 using std::cout;
 using std::endl;
 using std::string;
 
-class ViewpointPlannerApp {
+class ViewpointPlannerGui {
 public:
   static std::map<std::string, std::unique_ptr<ait::ConfigOptions>> getConfigOptions() {
     std::map<std::string, std::unique_ptr<ait::ConfigOptions>> config_options;
@@ -41,7 +40,7 @@ public:
     return config_options;
   }
 
-    ViewpointPlannerApp(const std::map<std::string, std::unique_ptr<ait::ConfigOptions>>& config_options) {
+  ViewpointPlannerGui(const std::map<std::string, std::unique_ptr<ait::ConfigOptions>>& config_options) {
       const ViewpointPlannerData::Options* viewpoint_planner_data_options =
           dynamic_cast<ViewpointPlannerData::Options*>(config_options.at("viewpoint_planner.data").get());
       std::unique_ptr<ViewpointPlannerData> planner_data(
@@ -52,7 +51,7 @@ public:
       window_ptr_ = new ViewerWindow(planner_ptr_);
     }
 
-    ~ViewpointPlannerApp() {
+    ~ViewpointPlannerGui() {
         SAFE_DELETE(window_ptr_);
         SAFE_DELETE(planner_ptr_);
     }
@@ -71,14 +70,6 @@ public:
 
     const ViewerWindow& getWindow() const {
         return *window_ptr_;
-    }
-
-    void run() {
-        planner_ptr_->run();
-        window_ptr_->getViewerWidget()->showViewpointPath(planner_ptr_->getViewpointPath());
-//        window_ptr_->start();
-//        std::shared_ptr<ob::ProblemDefinition> pdef = quad_planner_ptr_->run();
-        //        window_ptr_->join();
     }
 
 private:
@@ -158,7 +149,7 @@ int main(int argc, char** argv)
     qapp.setApplicationName("Quad3DR viewpoint planner");
 
     std::map<std::string, std::unique_ptr<ait::ConfigOptions>> config_options =
-        ViewpointPlannerApp::getConfigOptions();
+        ViewpointPlannerGui::getConfigOptions();
 
     // Handle command line and config file
     std::pair<bool, boost::program_options::variables_map> cmdline_result =
@@ -168,10 +159,9 @@ int main(int argc, char** argv)
     }
     boost::program_options::variables_map vm = std::move(cmdline_result.second);
 
-    ViewpointPlannerApp planner_app(config_options);
-    planner_app.getWindow().show();
-    planner_app.run();
-    if (planner_app.getWindow().isVisible()) {
+    ViewpointPlannerGui planner_gui(config_options);
+    planner_gui.getWindow().show();
+    if (planner_gui.getWindow().isVisible()) {
         return qapp.exec();
     }
     else {

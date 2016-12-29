@@ -11,18 +11,23 @@
 
 #include <octomap/octomap.h>
 
+#include <ait/eigen.h>
 #include <ait/vision_utilities.h>
-#include "../occupancy_map.h"
 #include "../reconstruction/dense_reconstruction.h"
 
 #include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>
+#include "../octree/occupancy_map.h"
 
 using std::cout;
 using std::endl;
 using std::string;
+using FloatType = float;
+
+USE_FIXED_EIGEN_TYPES(FloatType)
+
 namespace oct = octomap;
-using FloatType = double;
+using reconstruction::DenseReconstruction;
 
 std::pair<bool, boost::program_options::variables_map> process_commandline(int argc, char** argv) {
   namespace po = boost::program_options;
@@ -42,7 +47,7 @@ std::pair<bool, boost::program_options::variables_map> process_commandline(int a
       ("max-range", po::value<FloatType>()->default_value(std::numeric_limits<FloatType>().max()), "Max integration range")
       ("map-file", po::value<string>()->default_value("output_map.ot"), "Octomap output file")
       ("lazy-eval", po::bool_switch()->default_value(true), "Only update inner nodes once at the end")
-      ("dense", po::bool_switch()->default_value(false), "Make a dense tree by inserting unknown nodes")
+      ("dense", po::bool_switch()->default_value(true), "Make a dense tree by inserting unknown nodes")
       ;
 
     po::options_description options;
@@ -95,12 +100,13 @@ int main(int argc, char** argv) {
   std::cout << "Total number of frames to integrate: " << num_frames_to_extract << std::endl;
   auto it = reconstruction.getImages().cbegin();
   for (std::size_t i = 0; i < num_frames_to_extract; ++i, ++it) {
-    const ImageId image_id = it->first;
-    const ImageColmap& image = it->second;
-    const PinholeCameraColmap& camera = reconstruction.getCameras().at(image.camera_id());
+    const reconstruction::ImageId image_id = it->first;
+    const reconstruction::ImageColmap& image = it->second;
+    const reconstruction::PinholeCameraColmap& camera = reconstruction.getCameras().at(image.camera_id());
 
     cout << "Integrating frame " << (i+1) << " of " << reconstruction.getImages().size() << endl;
-    DenseReconstruction::DepthMap depth_map = reconstruction.readDepthMap(image_id, DenseReconstruction::DenseMapType::GEOMETRIC_FUSED);
+    DenseReconstruction::DepthMap depth_map =
+        reconstruction.readDepthMap(image_id, DenseReconstruction::DenseMapType::GEOMETRIC_FUSED);
 
     // Show depth maps for debugging
     {
@@ -111,6 +117,7 @@ int main(int argc, char** argv) {
           depth_img.at<float>(y, x) = depth;
         }
       }
+      depth_img.setTo(0, depth_img > max_range);
       double min, max;
       cv::minMaxIdx(depth_img, &min, &max);
       cout << "min=" << min << ", max=" << max << endl;
@@ -119,17 +126,20 @@ int main(int argc, char** argv) {
       cv::waitKey(100);
     }
 
-    const CameraMatrix& intrinsics = camera.intrinsics();
-    FloatType depth_camera_scale = depth_map.width() / (FloatType)camera.height();
-    const CameraMatrix depth_intrinsics = ait::getScaledIntrinsics(intrinsics, depth_camera_scale);
-    const CameraMatrix inv_depth_intrinsics = depth_intrinsics.inverse();
+    const reconstruction::CameraMatrix& intrinsics = camera.intrinsics();
+//    std::cout << "intrinsics=" << intrinsics << std::endl;
+    FloatType depth_camera_scale = depth_map.width() / (FloatType)camera.width();
+    const reconstruction::CameraMatrix depth_intrinsics = ait::getScaledIntrinsics(intrinsics, depth_camera_scale);
+    const reconstruction::CameraMatrix inv_depth_intrinsics = depth_intrinsics.inverse();
     cout << "depth_intrinsics=" << depth_intrinsics << endl;
-    cout << "inv_depth_intrinsics=" << inv_depth_intrinsics << endl;
-    const ait::Pose::Matrix3x4 transform_image_to_world = image.pose().getTransformationImageToWorld();
+//    cout << "inv_depth_intrinsics=" << inv_depth_intrinsics << endl;
+    const Matrix3x4 transform_image_to_world = image.pose().getTransformationImageToWorld();
+//    std::cout << "transform_image_to_world: " << transform_image_to_world << std::endl;
 
-    const ait::Pose::Vector3 sensor_pos = image.pose().getWorldPosition();
+//    const ait::Pose::Vector3 sensor_pos = image.pose().getWorldPosition();
+    const Vector3 sensor_pos = transform_image_to_world.col(3).topRows(3);
     oct::point3d sensor_origin(sensor_pos(0), sensor_pos(1), sensor_pos(2));
-//    std::cout << "sensor_position=" << sensor_pos.transpose() << std::endl;
+    std::cout << "sensor_position=" << sensor_pos.transpose() << std::endl;
 
     oct::Pointcloud pc;
     for (size_t y = 0; y < depth_map.height(); ++y) {
@@ -139,8 +149,8 @@ int main(int argc, char** argv) {
           continue;
         }
 //        cout << "x=" << x << ", y=" << y << ", depth=" << depth << endl;
-        Eigen::Vector4d p4d = inv_depth_intrinsics * Eigen::Vector4d(x, y, 1, 1);
-        Eigen::Vector3d p3d = depth * p4d.topRows(3);
+        Vector4 p4d = inv_depth_intrinsics * Vector4(x, y, 1, 1);
+        Vector3 p3d = depth * p4d.topRows(3);
         p3d = transform_image_to_world * p3d.homogeneous();
         oct::point3d p(p3d(0), p3d(1), p3d(2));
         pc.push_back(p);
