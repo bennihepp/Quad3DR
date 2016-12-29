@@ -96,9 +96,6 @@ void ViewpointDrawer<FloatType>::draw(const QMatrix4x4& pvm_matrix, const int wi
 
 template <typename FloatType>
 void ViewpointDrawer<FloatType>::uploadCameraData() {
-  if (poses_.empty()) {
-    return;
-  }
   if (!camera_.isValid()) {
     return;
   }
