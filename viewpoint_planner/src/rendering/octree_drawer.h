@@ -43,7 +43,9 @@ public:
   void updateVoxelData();
   void updateVoxelColorHeightmap();
   void updateRaycastVoxels(const std::vector<std::pair<ViewpointPlanner::ConstTreeNavigatorType, FloatType>>& raycast_voxels);
-  void updateRaycastVoxels(std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, FloatType>>& raycats_voxels);
+  void updateRaycastVoxels(const std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, FloatType>>& raycast_voxels);
+  void updateRaycastVoxels(const std::vector<std::pair<const ViewpointPlanner::VoxelType*, FloatType>>& raycast_voxels);
+  void updateRaycastVoxels(const ViewpointPlanner::VoxelWithInformationSet& raycast_voxels);
   void configVoxelDrawer(VoxelDrawer& voxel_drawer) const;
 
   FloatType getOccupancyBinThreshold() const;
