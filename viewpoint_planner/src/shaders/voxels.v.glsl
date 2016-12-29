@@ -122,9 +122,9 @@ void main(void) {
 
   v_vertex_position_cameraspace = transformVectorToCameraspace(view_model_matrix, vertex_position).xyz;
   v_vertex_normal_cameraspace = transformVectorToCameraspace(view_model_matrix, vec4(vertex_normal, 0)).xyz;
-//  v_light_position_cameraspace = transformVectorToCameraspace(view_model_matrix, vec4(u_light_position, 1)).xyz;
+  v_light_position_cameraspace = transformVectorToCameraspace(view_model_matrix, vec4(u_light_position, 1)).xyz;
   // Let light move with camera
-  v_light_position_cameraspace = u_light_position;
+  //v_light_position_cameraspace = u_light_position;
 
 //  v_vertex_normal_cameraspace = (view_model_matrix * vec4(0, 0, 1, 1)).xyz;
 //  v_light_position_cameraspace = (view_model_matrix * vec4(0, 0, 10, 1)).xyz;
