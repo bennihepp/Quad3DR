@@ -15,9 +15,11 @@ class ApproximateNearestNeighbor {
 public:
   using FloatType = FloatT;
   using Point = Eigen::Matrix<FloatType, dimension, 1>;
+  using PointNotAligned = Eigen::Matrix<FloatType, dimension, 1, Eigen::DontAlign>;
   using IndexType = std::size_t;
   using DistanceType = typename NormT::ResultType;
-  using FlannMatrix = flann::Matrix<FloatType>;
+  using FlannElementType = typename NormT::ElementType;
+  using FlannMatrix = flann::Matrix<FlannElementType>;
   using FlannIndexMatrix = flann::Matrix<std::size_t>;
   using FlannDistanceMatrix = flann::Matrix<DistanceType>;
   using EigenMatrix = Eigen::Matrix<FloatType, Eigen::Dynamic, Eigen::Dynamic>;
@@ -32,6 +34,10 @@ public:
   : initialized_(false), index_params_(index_params),
     norm_(norm),  index_(index_params, norm) {
     setSearchParams(getDefaultSearchParams());
+  }
+
+  ~ApproximateNearestNeighbor() {
+    clear();
   }
 
   static flann::SearchParams getDefaultSearchParams() {
@@ -49,51 +55,36 @@ public:
   void clear() {
     initialized_ = false;
     index_ = flann::Index<NormT>(index_params_, norm_);
+    init_points_.clear();
+    for (FlannElementType* point_ptr : points_) {
+      delete[] point_ptr;
+    }
+    points_.clear();
   }
 
   void setSearchParams(const flann::SearchParams& params) {
     search_params_ = params;
   }
 
-  // Initialize from an Eigen matrix with size num_points x dimension
-  void initIndex(const EigenMatrix& points) {
-    // FLANN is not supposed to modify the values
-    EigenMatrix& points_nonconst = const_cast<EigenMatrix&>(points);
-    FlannMatrix flann_points(points_nonconst.data(), points_nonconst.rows(), points_nonconst.cols());
+  // Initialize from a container of Eigen column vectors
+  template <typename Iterator>
+  void initIndex(Iterator begin, Iterator end) {
+    init_points_.reserve((end - begin) * dimension);
+    for (Iterator it = begin; it != end; ++it) {
+      for (std::size_t col = 0; col < dimension; ++col) {
+        init_points_.push_back((*it)(col));
+      }
+    }
+    FlannMatrix flann_points(init_points_.data(), init_points_.size() / dimension, dimension);
     index_.buildIndex(flann_points);
     initialized_ = true;
   }
 
-  // Initialize from a container of Eigen column vectors
-  template <typename Iterator>
-  void initIndex(Iterator begin, Iterator end) {
-    std::size_t num_points = end - begin;
-    EigenMatrix points(num_points, dimension);
-    for (Iterator it = begin; it != end; ++it) {
-      points.row(it - begin) = it->transpose();
-    }
-    initIndex(points);
-  }
-
-  void addPoints(const EigenMatrix& points, FloatType rebuild_threshold = 2) {
-    if (!initialized_) {
-      initIndex(points);
-      return;
-    }
-    // FLANN is not supposed to modify the values
-    EigenMatrix& points_nonconst = const_cast<EigenMatrix&>(points);
-    FlannMatrix flann_points(points.data(), points.rows(), points.cols());
-    index_.addPoints(flann_points, (float)rebuild_threshold);
-  }
-
   template <typename Iterator>
   void addPoints(Iterator begin, Iterator end, FloatType rebuild_threshold = 2) {
-    std::size_t num_points = end - begin;
-    EigenMatrix points(num_points, dimension);
     for (Iterator it = begin; it != end; ++it) {
-      points.row(it - begin) = it->transpose();
+      addPoint(*it);
     }
-    addPoints(points, rebuild_threshold);
   }
 
   void addPoint(const Point& point, FloatType rebuild_threshold = 2) {
@@ -101,10 +92,20 @@ public:
       initIndex(&point, &point + 1);
       return;
     }
-    // FLANN is not supposed to modify the values
-    Point& point_nonconst = const_cast<Point&>(point);
-    FlannMatrix flann_point(point_nonconst.data(), 1, point_nonconst.rows());
+    FlannElementType* point_ptr = addPointInternal(point);
+    FlannMatrix flann_point(point_ptr, 1, point.cols());
     index_.addPoints(flann_point, (float)rebuild_threshold);
+  }
+
+  Point getPoint(std::size_t point_id) const {
+    // FLANN is not supposed to modify anything
+    flann::Index<NormT>& index_const = const_cast<flann::Index<NormT>&>(index_);
+    const FlannElementType* flann_point = index_const.getPoint(point_id);
+    Point point;
+    for (std::size_t i = 0; i < dimension; ++i) {
+      point(i) = static_cast<FloatType>(flann_point[i]);
+    }
+    return point;
   }
 
   struct SingleResult {
@@ -165,9 +166,25 @@ public:
   }
 
 private:
+  FlannElementType* addPointInternal(const Point& point) {
+    FlannElementType* point_ptr = new FlannElementType[dimension];
+    for (std::size_t col = 0; col < dimension; ++col) {
+      point_ptr[col] = point(col);
+    }
+    points_.push_back(point_ptr);
+    return point_ptr;
+  }
+
+  std::size_t numPointsInternal() const {
+    return points_.size() / dimension;
+  }
+
   bool initialized_;
   flann::IndexParams index_params_;
   NormT norm_;
   flann::Index<NormT> index_;
   flann::SearchParams search_params_;
+  // Need two arrays here because points for initialization need to be dense
+  std::vector<FlannElementType> init_points_;
+  std::vector<FlannElementType*> points_;
 };

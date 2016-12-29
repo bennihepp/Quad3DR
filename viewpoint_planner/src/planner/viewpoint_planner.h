@@ -20,6 +20,7 @@
 #include "../octree/occupancy_map.h"
 #include "../reconstruction/dense_reconstruction.h"
 #include "../graph/graph.h"
+#include "../ann/approximate_nearest_neighbor.h"
 #include "viewpoint_planner_data.h"
 
 using reconstruction::CameraId;
@@ -129,22 +130,55 @@ public:
       addOption<FloatType>("drone_extent_x", 3);
       addOption<FloatType>("drone_extent_y", 3);
       addOption<FloatType>("drone_extent_z", 3);
-      addOption<std::size_t>("pose_sample_num_trials", &pose_sample_num_trials);
+      addOption<FloatType>("sampling_roi_factor", &sampling_roi_factor);
       addOption<FloatType>("pose_sample_min_radius", &pose_sample_min_radius);
       addOption<FloatType>("pose_sample_max_radius", &pose_sample_max_radius);
-      addOption<FloatType>("sampling_roi_factor", &sampling_roi_factor);
+      addOption<std::size_t>("pose_sample_num_trials", &pose_sample_num_trials);
+      addOption<std::size_t>("viewpoint_sample_count", &viewpoint_sample_count);
+      addOption<std::size_t>("viewpoint_min_voxel_count", &viewpoint_min_voxel_count);
+      addOption<FloatType>("viewpoint_min_information", &viewpoint_min_information);
+      addOption<std::size_t>("viewpoint_discard_dist_knn", &viewpoint_discard_dist_knn);
+      addOption<FloatType>("viewpoint_discard_dist_thres_square", &viewpoint_discard_dist_thres_square);
+      addOption<std::size_t>("viewpoint_discard_dist_count_thres", &viewpoint_discard_dist_count_thres);
+      // TODO:
       addOption<std::size_t>("num_sampled_poses", &num_sampled_poses);
       addOption<std::size_t>("num_planned_viewpoints", &num_planned_viewpoints);
     }
 
     ~Options() override {}
 
-    std::size_t rng_seed = -0;
+    // Random number generator seed (0 will seed from current time)
+    std::size_t rng_seed = 0;
+
+    // Scale factor from real camera to virtual camera
     FloatType virtual_camera_scale = 0.05f;
-    std::size_t pose_sample_num_trials = 100;
+
+    // Viewpoint sampling parameters
+
+    // Region of interest dilation for viewpoint sampling
+    FloatType sampling_roi_factor = 2;
+    // Spherical shell for viewpoint sampling
     FloatType pose_sample_min_radius = 2;
     FloatType pose_sample_max_radius = 5;
-    FloatType sampling_roi_factor = 2;
+    // Number of trials for viewpoint position sampling
+    std::size_t pose_sample_num_trials = 100;
+    // Number of viewpoints to sample per iteration
+    std::size_t viewpoint_sample_count = 10;
+    // Minimum voxel count for viewpoints
+    std::size_t viewpoint_min_voxel_count = 100;
+    // Minimum information for viewpoints
+    FloatType viewpoint_min_information = 10;
+
+    // For checking whether a sampled viewpoint is too close to existing ones
+    //
+    // How many nearest neighbors to consider
+    std::size_t viewpoint_discard_dist_knn = 10;
+    // Squared distance considered to be too close
+    FloatType viewpoint_discard_dist_thres_square = 4;
+    // How many other viewpoints need to be too close for the sampled viewpoint to be discarded
+    std::size_t viewpoint_discard_dist_count_thres = 3;
+
+    // TODO: Needed?
     std::size_t num_sampled_poses = 100;
     std::size_t num_planned_viewpoints = 10;
   };
@@ -244,11 +278,14 @@ public:
 
   using ViewpointGraph = Graph<ViewpointEntryIndex, FloatType>;
   using ViewpointPath = std::vector<ViewpointPathEntry>;
+  using ViewpointANN = ApproximateNearestNeighbor<FloatType, 3>;
   using FeatureViewpointMap = std::unordered_map<std::size_t, std::vector<const Viewpoint*>>;
 
   ViewpointPlanner(const Options* options, std::unique_ptr<ViewpointPlannerData> data);
 
   void reset();
+
+  void resetViewpointPath();
 
   const OccupancyMapType* getOctree() const {
       return data_->octree_.get();
@@ -262,21 +299,31 @@ public:
     return data_->poisson_mesh_.get();
   }
 
+  /// Return viewpoint entries for reading. Mutex needs to be locked.
   const ViewpointEntryVector& getViewpointEntries() const {
     return viewpoint_entries_;
   }
 
+  /// Return viewpoint graph for reading. Mutex needs to be locked.
   const ViewpointGraph& getViewpointGraph() const {
     return viewpoint_graph_;
   }
 
+  /// Return viewpoint path for reading. Mutex needs to be locked.
   const ViewpointPath& getViewpointPath() const {
     return viewpoint_path_;
+  }
+
+  std::unique_lock<std::mutex> acquireLock() {
+//    return std::move(std::unique_lock<std::mutex>(mutex_));
+    return std::unique_lock<std::mutex>(mutex_);
   }
 
   std::mutex& mutex() {
     return mutex_;
   }
+
+  // Pose and viewpoint sampling
 
   template <typename IteratorT>
   std::pair<bool, Pose> sampleSurroundingPose(IteratorT first, IteratorT last) const;
@@ -306,13 +353,18 @@ public:
   /// seen from pos.
   Pose::Quaternion sampleBiasedOrientation(const Vector3& pos, const BoundingBoxType& bias_bbox) const;
 
+  /// Check if an object can be placed at a position (i.e. is it free space)
+  bool isValidObjectPosition(const Vector3& position, const Vector3& object_extent);
+
   void setVirtualCamera(std::size_t virtual_width, std::size_t virtual_height, const Matrix4x4& virtual_intrinsics);
 
   void setScaledVirtualCamera(CameraId camera_id, FloatType scale_factor);
 
   void run();
 
-  bool generateNextViewpoint();
+  bool generateNextViewpointEntry();
+
+  bool findNextViewpointPathEntry();
 
   template <typename T>
   T rayCastAccumulate(const CameraId camera_id, const Pose& pose_world_to_image, bool ignore_unknown,
@@ -374,8 +426,9 @@ private:
   std::mutex mutex_;
 
   ViewpointEntryVector viewpoint_entries_;
-  VoxelWithInformationSet observed_voxel_set_;
+  ViewpointANN viewpoint_ann_;
   ViewpointGraph viewpoint_graph_;
+  VoxelWithInformationSet observed_voxel_set_;
   ViewpointPath viewpoint_path_;
   // Map from triangle index to viewpoints that project features into it
   FeatureViewpointMap feature_viewpoint_map_;

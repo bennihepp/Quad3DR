@@ -47,14 +47,33 @@ class ViewerWidget;
 
 class ViewpointPlannerThread : public ait::PausableThread {
 public:
+  enum Operation {
+    NOP,
+    VIEWPOINT_GRAPH,
+    VIEWPOINT_PATH,
+  };
+
   ViewpointPlannerThread(ViewpointPlanner* planner, ViewerWidget* viewer_widget);
+
+  void setOperation(Operation operation) {
+    operation_ = operation;
+  }
+
+  Operation operation() const {
+    return operation_;
+  }
+
+  void updateViewpoints();
 
 protected:
   Result runIteration() override;
 
+  void updateViewpointsInternal();
+
 private:
   ViewpointPlanner* planner_;
   ViewerWidget* viewer_widget_;
+  Operation operation_;
 };
 
 class ViewerWidget : public QGLViewer
@@ -130,19 +149,25 @@ public slots:
   void setMaxWeight(double max_weight);
   void setRenderTreeDepth(size_t render_tree_depth);
   void setRenderObservationThreshold(size_t render_observation_threshold);
+
   // Planner panel slots
-  void pauseContinuePlanning();
+  void pauseContinueViewpointGraph();
+  void pauseContinueViewpointPath();
+  void resetViewpoints();
+  void resetViewpointPath();
+  void continuePlannerThread();
+  void pausePlannerThread();
 
   void signalViewpointsChanged();
+  void signalPlannerThreadPaused();
 
 protected slots:
-  void onTimeout();
-  void onTimeoutHandlerFinished();
   void updateViewpoints();
+  void onPlannerThreadPaused();
 
 signals:
-  void timeoutHandlerFinished();
   void viewpointsChanged();
+  void plannerThreadPaused();
 
 protected:
     void draw() override;
@@ -180,7 +205,7 @@ private:
 
 //    QTimer* process_timer_;
     ViewpointPlannerThread planner_thread_;
-    std::vector<std::pair<Pose, FloatType>> viewpoint_graph_copy_;
-    std::vector<std::pair<Pose, FloatType>> viewpoint_path_copy_;
+    std::vector<std::tuple<ViewpointPlanner::ViewpointEntryIndex, Pose, FloatType>> viewpoint_graph_copy_;
+    std::vector<std::tuple<ViewpointPlanner::ViewpointEntryIndex, Pose, FloatType>> viewpoint_path_copy_;
 
 };

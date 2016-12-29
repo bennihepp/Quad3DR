@@ -39,6 +39,17 @@ public:
 //    explicit Thread(Function&& f, Args&& args)
 //    : thread_(std::forward(f), std::forward(args)), keep_running_(true), finished_(false) {}
 
+  void setFinishedCallback(std::function<void()> finished_callback) {
+    finished_callback_ = finished_callback;
+  }
+
+  virtual void reset() {
+    finish();
+    thread_ = std::thread();
+    finished_ = false;
+    keep_running_ = true;
+  }
+
   void start() {
     AIT_ASSERT(!isFinished());
     thread_ = std::thread(std::bind(&Thread::runInternal, this));
@@ -94,11 +105,15 @@ private:
   void runInternal() {
     run();
     finished_ = true;
+    if (finished_callback_) {
+      finished_callback_();
+    }
   }
 
   std::thread thread_;
   std::atomic<bool> keep_running_;
   std::atomic<bool> finished_;
+  std::function<void()> finished_callback_;
 };
 
 class WorkerThread : public Thread {
@@ -135,12 +150,22 @@ public:
 
   ~PausableThread() override {}
 
+  void setPausedCallback(std::function<void()> paused_callback) {
+    paused_callback_ = paused_callback;
+  }
+
+  void reset() override {
+    paused_ = false;
+    Thread::reset();
+  }
+
   bool isPaused() const {
     return paused_;
   }
 
   void signalStop() override {
     Thread::signalStop();
+    std::unique_lock<std::mutex> lock(mutex_);
     pause_cond_.notify_one();
   }
 
@@ -150,6 +175,7 @@ public:
 
   void signalContinue() {
     paused_ = false;
+    std::unique_lock<std::mutex> lock(mutex_);
     pause_cond_.notify_one();
   }
 
@@ -162,6 +188,7 @@ protected:
       waitIfPaused();
       // Stop could have been signaled while waiting for condition
       if (shouldStop()) {
+        std::cout << "Stopping thread" << std::endl;
         break;
       }
       result = runIteration();
@@ -178,7 +205,13 @@ protected:
 
   void waitIfPaused() {
     if (shouldPause()) {
+      if (paused_callback_) {
+        paused_callback_();
+      }
+      std::cout << "Pausing thread and waiting for condition" << std::endl;
       waitForContinue();
+      std::cout << "Thread was woken up" << std::endl;
+      std::cout << "shouldStop()=" << shouldStop() << std::endl;
     }
   }
 
@@ -193,6 +226,7 @@ private:
   std::mutex mutex_;
   std::condition_variable pause_cond_;
   std::atomic<bool> paused_;
+  std::function<void()> paused_callback_;
 };
 
 }

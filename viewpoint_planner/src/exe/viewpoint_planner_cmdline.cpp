@@ -61,7 +61,7 @@ public:
     }
 
     bool runIteration() {
-      bool result = planner_ptr_->generateNextViewpoint();
+      bool result = planner_ptr_->generateNextViewpointEntry();
       return result;
     }
 

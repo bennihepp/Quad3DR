@@ -35,45 +35,77 @@
      </rect>
     </property>
     <layout class="QFormLayout" name="formLayout">
-     <item row="0" column="0">
-      <widget class="QPushButton" name="pauseContinuePlanning">
+     <item row="2" column="0">
+      <widget class="QLabel" name="label_6">
        <property name="text">
-        <string>Pause</string>
+        <string>Viewpoint graph</string>
        </property>
       </widget>
      </item>
-     <item row="1" column="0">
-      <widget class="QPushButton" name="updateViewpoints">
+     <item row="2" column="1">
+      <widget class="QPushButton" name="pauseContinueViewpointGraph">
        <property name="text">
-        <string>UpdateViewpoints</string>
+        <string>Continue</string>
        </property>
       </widget>
      </item>
      <item row="3" column="0">
+      <widget class="QLabel" name="label_5">
+       <property name="text">
+        <string>Viewpoint path</string>
+       </property>
+      </widget>
+     </item>
+     <item row="3" column="1">
+      <widget class="QPushButton" name="pauseContinueViewpointPath">
+       <property name="text">
+        <string>Continue</string>
+       </property>
+      </widget>
+     </item>
+     <item row="4" column="0">
+      <widget class="QPushButton" name="resetViewpoints">
+       <property name="text">
+        <string>Reset viewpoints</string>
+       </property>
+      </widget>
+     </item>
+     <item row="4" column="1">
+      <widget class="QPushButton" name="resetViewpointPath">
+       <property name="text">
+        <string>Reset path</string>
+       </property>
+      </widget>
+     </item>
+     <item row="7" column="0">
+      <widget class="QLabel" name="label_3">
+       <property name="text">
+        <string>ViewpointPathSize</string>
+       </property>
+      </widget>
+     </item>
+     <item row="7" column="1">
+      <widget class="QLabel" name="viewpointPathSize">
+       <property name="text">
+        <string/>
+       </property>
+      </widget>
+     </item>
+     <item row="8" column="0">
       <widget class="QLabel" name="label">
        <property name="text">
         <string>ViewpointGraphSize</string>
        </property>
       </widget>
      </item>
-     <item row="3" column="1">
+     <item row="8" column="1">
       <widget class="QLabel" name="viewpointGraphSize">
        <property name="text">
         <string/>
        </property>
       </widget>
      </item>
-     <item row="6" column="0">
-      <widget class="QLabel" name="label_2">
-       <property name="text">
-        <string>Graph viewpoints</string>
-       </property>
-      </widget>
-     </item>
-     <item row="6" column="1">
-      <widget class="QComboBox" name="viewpointGraphSelection"/>
-     </item>
-     <item row="4" column="0">
+     <item row="9" column="0">
       <widget class="QCheckBox" name="drawViewpointGraph">
        <property name="text">
         <string>DrawViewpointGraph</string>
@@ -83,31 +115,7 @@
        </property>
       </widget>
      </item>
-     <item row="2" column="0">
-      <widget class="QLabel" name="label_3">
-       <property name="text">
-        <string>ViewpointPathSize</string>
-       </property>
-      </widget>
-     </item>
-     <item row="2" column="1">
-      <widget class="QLabel" name="viewpointPathSize">
-       <property name="text">
-        <string/>
-       </property>
-      </widget>
-     </item>
-     <item row="7" column="0">
-      <widget class="QLabel" name="label_4">
-       <property name="text">
-        <string>Path viewpoints</string>
-       </property>
-      </widget>
-     </item>
-     <item row="7" column="1">
-      <widget class="QComboBox" name="viewpointPathSelection"/>
-     </item>
-     <item row="5" column="0">
+     <item row="10" column="0">
       <widget class="QCheckBox" name="drawViewpointPath">
        <property name="text">
         <string>DrawViewpointPath</string>
@@ -116,6 +124,26 @@
         <bool>true</bool>
        </property>
       </widget>
+     </item>
+     <item row="11" column="0">
+      <widget class="QLabel" name="label_2">
+       <property name="text">
+        <string>Graph viewpoints</string>
+       </property>
+      </widget>
+     </item>
+     <item row="11" column="1">
+      <widget class="QComboBox" name="viewpointGraphSelection"/>
+     </item>
+     <item row="12" column="0">
+      <widget class="QLabel" name="label_4">
+       <property name="text">
+        <string>Path viewpoints</string>
+       </property>
+      </widget>
+     </item>
+     <item row="12" column="1">
+      <widget class="QComboBox" name="viewpointPathSelection"/>
      </item>
     </layout>
    </widget>

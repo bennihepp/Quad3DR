@@ -20,19 +20,41 @@ public:
     ViewerPlannerPanel(QWidget *parent = 0)
     : QWidget(parent) {
         ui.setupUi(this);
-        connect(ui.pauseContinuePlanning, SIGNAL(clicked(void)), this, SLOT(pauseContinuePlanningInternal()));
-        connect(ui.updateViewpoints, SIGNAL(clicked(void)), this, SIGNAL(updateViewpoints()));
+        connect(ui.pauseContinueViewpointGraph, SIGNAL(clicked(void)), this, SLOT(pauseContinueViewpointGraphInternal()));
+        connect(ui.pauseContinueViewpointPath, SIGNAL(clicked(void)), this, SLOT(pauseContinueViewpointPathInternal()));
+        connect(ui.resetViewpoints, SIGNAL(clicked(void)), this, SLOT(resetViewpointsInternal()));
+        connect(ui.resetViewpointPath, SIGNAL(clicked(void)), this, SLOT(resetViewpointPathInternal()));
         connect(ui.drawViewpointGraph, SIGNAL(stateChanged(int)), this, SLOT(setDrawViewpointGraphInternal(int)));
-        connect(ui.viewpointGraphSelection, SIGNAL(activated(int)), this, SLOT(setViewpoingGraphSelectionInternal(int)));
+        connect(ui.viewpointGraphSelection, SIGNAL(activated(int)), this, SLOT(setViewpointGraphSelectionInternal(int)));
         connect(ui.drawViewpointPath, SIGNAL(stateChanged(int)), this, SLOT(setDrawViewpointPathInternal(int)));
-        connect(ui.viewpointPathSelection, SIGNAL(activated(int)), this, SLOT(setViewpoingPathSelectionInternal(int)));
+        connect(ui.viewpointPathSelection, SIGNAL(activated(int)), this, SLOT(setViewpointPathSelectionInternal(int)));
     }
 
     ~ViewerPlannerPanel() {
     }
 
-    void setPauseContinueText(const std::string& text) {
-      ui.pauseContinuePlanning->setText(QString::fromStdString(text));
+    void setPauseContinueViewpointGraphEnabled(bool enabled) {
+      ui.pauseContinueViewpointGraph->setEnabled(enabled);
+    }
+
+    void setPauseContinueViewpointGraphText(const std::string& text) {
+      ui.pauseContinueViewpointGraph->setText(QString::fromStdString(text));
+    }
+
+    void setPauseContinueViewpointPathEnabled(bool enabled) {
+      ui.pauseContinueViewpointPath->setEnabled(enabled);
+    }
+
+    void setPauseContinueViewpointPathText(const std::string& text) {
+      ui.pauseContinueViewpointPath->setText(QString::fromStdString(text));
+    }
+
+    void setResetViewpointsEnabled(bool enabled) {
+      ui.resetViewpoints->setEnabled(enabled);
+    }
+
+    void setResetViewpointPathEnabled(bool enabled) {
+      ui.resetViewpointPath->setEnabled(enabled);
     }
 
     void initializeViewpointGraph(const std::vector<std::pair<std::string, size_t>>& entries) {
@@ -68,7 +90,7 @@ protected slots:
       emit drawViewpointGraphChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
     }
 
-    void setViewpoingGraphSelectionInternal(int index) {
+    void setViewpointGraphSelectionInternal(int index) {
         bool ok;
         int user_data = ui.viewpointGraphSelection->itemData(index).toInt(&ok);
         if (!ok) {
@@ -84,7 +106,7 @@ protected slots:
       emit drawViewpointPathChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
     }
 
-    void setViewpoingPathSelectionInternal(int index) {
+    void setViewpointPathSelectionInternal(int index) {
         bool ok;
         int user_data = ui.viewpointPathSelection->itemData(index).toInt(&ok);
         if (!ok) {
@@ -96,17 +118,31 @@ protected slots:
         }
     }
 
-  void pauseContinuePlanningInternal() {
-    emit pauseContinuePlanning();
+  void pauseContinueViewpointGraphInternal() {
+    emit pauseContinueViewpointGraph();
+  }
+
+  void pauseContinueViewpointPathInternal() {
+    emit pauseContinueViewpointPath();
+  }
+
+  void resetViewpointsInternal() {
+    emit resetViewpoints();
+  }
+
+  void resetViewpointPathInternal() {
+    emit resetViewpointPath();
   }
 
 signals:
-  void pauseContinuePlanning();
-  void updateViewpoints();
+  void pauseContinueViewpointGraph();
+  void pauseContinueViewpointPath();
   void drawViewpointGraphChanged(bool draw_viewpoint_graph_changed);
   void viewpointGraphSelectionChanged(size_t index);
   void drawViewpointPathChanged(bool draw_viewpoint_path_changed);
   void viewpointPathSelectionChanged(size_t index);
+  void resetViewpoints();
+  void resetViewpointPath();
 
 private:
     Ui::ViewerPlannerPanelClass ui;

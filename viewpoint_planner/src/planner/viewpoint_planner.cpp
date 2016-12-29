@@ -150,14 +150,18 @@ ViewpointPlanner::ViewpointPlanner(const Options* options, std::unique_ptr<Viewp
 }
 
 void ViewpointPlanner::reset() {
+  std::unique_lock<std::mutex> lock(mutex_);
   viewpoint_entries_.clear();
+  viewpoint_ann_.clear();
   observed_voxel_set_.clear();
   viewpoint_graph_.clear();
   viewpoint_path_.clear();
   feature_viewpoint_map_.clear();
+  lock.unlock();
 
   // Initialize viewpoint graph from existing real images
   std::cout << "Adding previous camera viewpoints to viewpoint graph" << std::endl;
+  std::vector<Vector3> ann_points;
   for (const auto& entry : data_->reconstruction_->getImages()) {
     const Pose& pose = entry.second.pose();
 //    std::cout << "  image id=" << entry.first << ", pose=" << pose << std::endl;
@@ -168,95 +172,34 @@ void ViewpointPlanner::reset() {
 //    std::cout << "voxel_set: " << voxel_set.size() << ", total_information: " << total_information << std::endl;
     FloatType total_information = 0;
     VoxelWithInformationSet voxel_set;
+    std::unique_lock<std::mutex> lock(mutex_);
     ViewpointEntryIndex viewpoint_index = viewpoint_entries_.size();
     viewpoint_entries_.emplace_back(Viewpoint(&virtual_camera_, pose), total_information, std::move(voxel_set));
-    // TODO: Do these initial viewpoints have to be in the graph
+    ann_points.push_back(pose.getWorldPosition());
+    // TODO: Initial viewpoints are in the graph for initial sampling.
+    // Maybe an explicit start position is better?
     viewpoint_graph_.addNode(viewpoint_index);
+    lock.unlock();
   }
+  // Initialize viewpoint nearest neighbor index
+  viewpoint_ann_.initIndex(ann_points.cbegin(), ann_points.cend());
   std::cout << "initialized viewpoint graph with " << viewpoint_graph_.numOfNodes() << " viewpoints" << std::endl;
+
+  for (std::size_t i = 0; i < ann_points.size(); ++i) {
+    std::cout << "ann_points1[" << i << "]=" << ann_points[i].transpose() << std::endl;
+    std::cout << "ann_points2[" << i << "]=" << viewpoint_ann_.getPoint(i).transpose() << std::endl;
+  }
+//  AIT_ASSERT(false);
 
   // TODO: Initialize feature_viewpoint_map_ from existing real images
 //  for (std::size_t i = 0; i < data_->poisson_mesh_->)
+}
 
-  // TODO:
-  // Initialize viewpoint nearest neighbor index
-
-//  // Compute viewpoint informations for sampled poses
-//  std::cout << "Sampling viewpoints and computing information score ..." << std::endl;
-//  const PinholeCamera* camera = &data_->reconstruction_->getCameras().cbegin()->second;
-//  std::vector<ViewpointNode> viewpoint_nodes;
-//  std::size_t num_sampled_poses = options_.num_sampled_poses;
-//  for (std::size_t i = 0; i < num_sampled_poses; ++i) {
-//    std::cout << "Computing pose " << i << " out of " << num_sampled_poses << std::endl;
-//    std::pair<bool, Pose> result = samplePose(options_.sampling_roi_factor * data_->roi_bbox_, drone_extent_);
-//    if (result.first) {
-//      const Pose& pose = result.second;
-//      std::cout << "  Pose: " << pose << std::endl;
-//      std::pair<VoxelWithInformationSet, FloatType> result =
-//          getRaycastHitVoxelsWithInformationScoreBVH(pose);
-//      VoxelWithInformationSet& voxel_set = result.first;
-//      FloatType total_information = result.second;
-//      ViewpointNode viewpoint_node(Viewpoint(camera, pose), total_information, std::move(voxel_set));
-//      viewpoint_nodes.push_back(std::move(viewpoint_node));
-//    }
-//  }
-//  std::cout << "Successfully computed " << viewpoint_nodes.size() << " poses" << std::endl;
-//  std::sort(viewpoint_nodes.begin(), viewpoint_nodes.end(),
-//      [](const ViewpointNode& a, const ViewpointNode& b) {
-//    return a.total_information > b.total_information;
-//  });
-//  for (const ViewpointNode& node : viewpoint_nodes) {
-//    std::cout << "information: " << node.total_information << std::endl;
-//  }
-//  std::cout << "Done." << std::endl;
-//
-//  std::cout << "Computing viewpoint distances ..." << std::endl;
-//  viewpoint_graph_ = ViewpointGraph(viewpoint_nodes.begin(), viewpoint_nodes.end());
-//  for (ViewpointGraph::Index i = 0; i < viewpoint_graph_.numOfNodes(); ++i) {
-//    const ViewpointGraph::NodeType& node1 = viewpoint_graph_.getNode(i);
-//    for (ViewpointGraph::Index j = i + 1; j < viewpoint_graph_.numOfNodes(); ++j) {
-//      const ViewpointGraph::NodeType& node2 = viewpoint_graph_.getNode(j);
-//      ViewpointGraph::WeightType distance = node1.viewpoint.getDistanceTo(node2.viewpoint);
-//      viewpoint_graph_.setWeight(i, j, distance);
-//      viewpoint_graph_.setWeight(j, i, distance);
-//    }
-//  }
-//  std::cout << "Done." << std::endl;
-//
-//  std::size_t num_planned_viewpoints = options_.num_planned_viewpoints;
-//  if (viewpoint_nodes.size() < num_planned_viewpoints) {
-//    std::cout << "WARNING: Could not sample enough viewpoints to construct viewpoint plan." << std::endl;
-//    return;
-//  }
-//  // Try to find a good path of viewpoints.
-//  std::cout << "Constructing viewpoint path ..." << std::endl;
-//  viewpoint_path_.clear();
-//  std::unordered_set<const ViewpointNode*> visited_nodes;
-//  VoxelWithInformationSet seen_voxel_set;
-//  for (std::size_t i = 0; i < num_planned_viewpoints; ++i) {
-//    std::cout << "i=" << i << ", seen_voxel_set.size()=" << seen_voxel_set.size() << std::endl;
-//    ViewpointPathEntry best_entry(nullptr, std::numeric_limits<FloatType>::lowest());
-//    for (std::size_t j = 0; j < viewpoint_graph_.numOfNodes(); ++j) {
-//      const ViewpointNode& next_node = viewpoint_graph_.getNode(j);
-//      VoxelWithInformationSet difference_set = ait::computeSetDifference(next_node.voxel_set, seen_voxel_set);
-////      std::cout << "  j=" << j << ", next_node.voxel_set.size()= " << next_node.voxel_set.size() << std::endl;
-////      std::cout << "  j=" << j << ", difference_set.size()= " << difference_set.size() << std::endl;
-//      FloatType new_information = std::accumulate(difference_set.cbegin(), difference_set.cend(),
-//          FloatType { 0 }, [](const FloatType& value, const VoxelWithInformation& voxel) {
-//            return value + voxel.information;
-//      });
-////      std::cout << "  j=" << j << ", new_information=" << new_information << std::endl;
-//      if (new_information > best_entry.information) {
-//        best_entry = ViewpointPathEntry(&next_node, new_information);
-//      }
-//    }
-//    AIT_ASSERT(best_entry.node != nullptr);
-//    viewpoint_path_.push_back(best_entry);
-//    seen_voxel_set.insert(best_entry.node->voxel_set.cbegin(), best_entry.node->voxel_set.cend());
-//    std::cout << "  " << i << ": new information: " <<  best_entry.information <<
-//        ", information: " << best_entry.node->total_information << std::endl;
-//  }
-//  std::cout << "Done." << std::endl;
+void ViewpointPlanner::resetViewpointPath() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  observed_voxel_set_.clear();
+  viewpoint_path_.clear();
+  lock.unlock();
 }
 
 std::pair<bool, ViewpointPlanner::Pose> ViewpointPlanner::samplePose(std::size_t max_trials /*= (std::size_t)-1*/) const {
@@ -309,7 +252,6 @@ ViewpointPlanner::Pose::Quaternion ViewpointPlanner::sampleOrientation() const {
 }
 
 ViewpointPlanner::Pose::Quaternion ViewpointPlanner::sampleBiasedOrientation(const Vector3& pos, const BoundingBoxType& bias_bbox) const {
-  // TODO: Yaw and Pitch should not necessarily be distributed the same.
   FloatType dist = (pos - bias_bbox.getCenter()).norm();
   FloatType bbox_fov_angle = std::atan(bias_bbox.getMaxExtent() / (2 * dist));
   FloatType angle_stddev = 2 * bbox_fov_angle;
@@ -317,11 +259,10 @@ ViewpointPlanner::Pose::Quaternion ViewpointPlanner::sampleBiasedOrientation(con
   FloatType angle2 = std::abs(random_.sampleNormal(0, angle_stddev));
   Vector3 bbox_direction = (bias_bbox.getCenter() - pos).normalized();
   // Compute viewing direction (i.e. pose z axis)
-  // TODO
-//  Pose::Vector3 viewing_direction = bbox_direction;
   Pose::Vector3 viewing_direction = AngleAxis(angle1, Vector3::UnitZ()) * bbox_direction;
   viewing_direction = AngleAxis(angle2, viewing_direction.cross(Vector3::UnitZ())) * viewing_direction;
-//
+
+  // TODO: Remove old code
 //  FloatType angle_deviation = std::abs(random_.sampleNormal(0, angle_stddev));
 //  FloatType spherical_angle = random_.sampleUniform(0, 2 * M_PI);
 //  Pose::Vector3 viewing_direction;
@@ -329,6 +270,7 @@ ViewpointPlanner::Pose::Quaternion ViewpointPlanner::sampleBiasedOrientation(con
 //      viewing_direction(0) * std::cos(angle_deviation),
 //      std::sin(angle_deviation) * std::cos(spherical_angle),
 //      std::sin(angle_deviation) * std::sin(spherical_angle);
+
   // Now rotate the viewing direction according to (pose -> bbox) transformation
   // Compute pose x (right) and y (down) axis from viewing direction (pose z axis)
   Pose::Vector3 z_axis(0, 0, 1);
@@ -341,13 +283,20 @@ ViewpointPlanner::Pose::Quaternion ViewpointPlanner::sampleBiasedOrientation(con
   else {
     pose_x_axis = pose_z_axis.cross(z_axis);
   }
-  std::cout << "viewing_direction=" << viewing_direction << std::endl;
+//  std::cout << "viewing_direction=" << viewing_direction << std::endl;
   Pose::Vector3 pose_y_axis = pose_z_axis.cross(pose_x_axis);
   Pose::Matrix3x3 rotation;
   rotation.col(0) = pose_x_axis.normalized();
   rotation.col(1) = pose_y_axis.normalized();
   rotation.col(2) = pose_z_axis.normalized();
   return Pose::Quaternion(rotation);
+}
+
+bool ViewpointPlanner::isValidObjectPosition(const Vector3& position, const Vector3& object_extent) {
+  BoundingBoxType object_bbox = BoundingBoxType::createFromCenterAndExtent(position, object_extent);
+  std::vector<ViewpointPlannerData::OccupiedTreeType::BBoxIntersectionResult> results =
+      data_->occupied_bvh_.intersects(object_bbox);
+  return results.empty();
 }
 
 std::pair<bool, ViewpointPlanner::Vector3> ViewpointPlanner::samplePosition(std::size_t max_trials /*= (std::size_t)-1*/) const {
@@ -728,63 +677,122 @@ std::pair<bool, ViewpointPlanner::Pose>
 ViewpointPlanner::sampleSurroundingPose(const Pose& pose) const {
   // Sample position from sphere around pose
   Vector3 sampled_pos;
-  random_.sampleSphericalShell(options_.pose_sample_min_radius, options_.pose_sample_max_radius, &sampled_pos);
-  sampled_pos += pose.getWorldPosition();
-  // TODO
+  bool found_position = false;
+  for (size_t i = 0; i < options_.viewpoint_sample_count; ++i) {
+    random_.sampleSphericalShell(options_.pose_sample_min_radius, options_.pose_sample_max_radius, &sampled_pos);
+    sampled_pos += pose.getWorldPosition();
+    BoundingBoxType object_bbox = BoundingBoxType::createFromCenterAndExtent(sampled_pos, drone_extent_);
+    std::vector<ViewpointPlannerData::OccupiedTreeType::BBoxIntersectionResult> results =
+        data_->occupied_bvh_.intersects(object_bbox);
+    if (results.empty()) {
+      found_position = true;
+      break;
+    }
+  }
+  if (!found_position) {
+    return std::make_pair(false, Pose());
+  }
   Pose::Quaternion sampled_orientation = sampleBiasedOrientation(sampled_pos, data_->roi_bbox_);
-//  Pose::Quaternion sampled_orientation = Pose::Quaternion::Identity();
   Pose sampled_pose = Pose::createFromImageToWorldTransformation(sampled_pos, sampled_orientation);
   return std::make_pair(true, sampled_pose);
 }
 
-bool ViewpointPlanner::generateNextViewpoint() {
-  std::unique_lock<std::mutex> lock(mutex_);
-
-  // TODO
-  const std::size_t num_samples = options_.num_sampled_poses;
+bool ViewpointPlanner::generateNextViewpointEntry() {
   const bool verbose = true;
 
 //  if (verbose) {
 //    std::cout << "observed_voxel_set_.size()=" << observed_voxel_set_.size() << std::endl;
 //  }
 
-  // Sample viewpoints and add them to the viewpoint graph
-  std::size_t successful_samples = 0;
-  for (std::size_t i = 0; i < num_samples; ++i) {
+  // Sample viewpoint and add it to the viewpoint graph
+
+//  if (verbose) {
+//    std::cout << "Trying to sample viewpoint" << std::endl;
+//  }
+  std::pair<bool, Pose> sampling_result = sampleSurroundingPoseFromEntries(viewpoint_graph_.cbegin(), viewpoint_graph_.cend());
+  if (!sampling_result.first) {
 //    if (verbose) {
-//      std::cout << "Trying to sample pose: #" << i << std::endl;
+//      std::cout << "Failed to sample pose." << i << std::endl;
 //    }
-    std::pair<bool, Pose> sampling_result = sampleSurroundingPoseFromEntries(viewpoint_graph_.cbegin(), viewpoint_graph_.cend());
-    if (!sampling_result.first) {
-//      if (verbose) {
-//        std::cout << "Failed to sample pose." << i << std::endl;
-//      }
-      continue;
-    }
-    ++successful_samples;
-    const Pose& pose = sampling_result.second;
-    if (verbose) {
-      std::cout << "  Pose: " << pose << std::endl;
-    }
-    std::pair<VoxelWithInformationSet, FloatType> raycast_result =
-        getRaycastHitVoxelsWithInformationScoreBVH(pose);
-    VoxelWithInformationSet& voxel_set = raycast_result.first;
-    FloatType total_information = raycast_result.second;
-    if (verbose) {
-      std::cout << "pose=" << pose << ", voxel_set=" << voxel_set.size() << ", total_information=" << total_information << std::endl;
-    }
-//    ViewpointNode viewpoint_node(Viewpoint();
-    ViewpointEntryIndex viewpoint_index = viewpoint_entries_.size();
-    viewpoint_entries_.emplace_back(Viewpoint(&virtual_camera_, pose), total_information, std::move(voxel_set));
-    viewpoint_graph_.addNode(viewpoint_index);
-  }
-
-  // TODO: We don't want to add all sampled viewpoints (i.e. reject viewpoints to close to existing ones)
-
-  // Sampling failed (num of trials should be increased if this happens)
-  if (successful_samples == 0) {
     return false;
   }
+
+  const Pose& pose = sampling_result.second;
+
+  // Check distance to other viewpoints and discard if too close
+  std::size_t dist_knn = options_.viewpoint_discard_dist_knn;
+  FloatType dist_thres_square = options_.viewpoint_discard_dist_thres_square;
+  std::size_t dist_count_thres = options_.viewpoint_discard_dist_count_thres;
+  static std::vector<ViewpointANN::IndexType> knn_indices;
+  static std::vector<ViewpointANN::DistanceType> knn_distances;
+  knn_indices.resize(dist_knn);
+  knn_distances.resize(dist_knn);
+  viewpoint_ann_.knnSearch(pose.getWorldPosition(), dist_knn, &knn_indices, &knn_distances);
+  std::size_t too_close_count = 0;
+  for (ViewpointANN::IndexType viewpoint_index : knn_indices) {
+    const ViewpointEntry& other_viewpoint = viewpoint_entries_[viewpoint_index];
+    FloatType dist_square = (pose.getWorldPosition() - other_viewpoint.viewpoint.pose().getWorldPosition()).squaredNorm();
+//    std::cout << "dist_square=" << dist_square << std::endl;
+    if (dist_square < dist_thres_square) {
+      ++too_close_count;
+//      if (verbose) {
+//        std::cout << "dist_square=" << dist_square << std::endl;
+//      }
+      if (too_close_count > dist_count_thres) {
+        break;
+      }
+    }
+  }
+//  if (verbose) {
+//    std::cout << "too_close_count=" << too_close_count << std::endl;
+//  }
+  if (too_close_count > dist_count_thres) {
+//    if (verbose) {
+//      std::cout << "too_close_count > dist_count_thres" << std::endl;
+//    }
+    return false;
+  }
+
+  // Compute observed voxels and information and discard if too few voxels or too little information
+  std::pair<VoxelWithInformationSet, FloatType> raycast_result =
+      getRaycastHitVoxelsWithInformationScoreBVH(pose);
+  VoxelWithInformationSet& voxel_set = raycast_result.first;
+  FloatType total_information = raycast_result.second;
+//    if (verbose) {
+//      std::cout << "voxel_set.size()=" << voxel_set.size() << std::endl;
+//    }
+  if (voxel_set.size() < options_.viewpoint_min_voxel_count) {
+    if (verbose) {
+      std::cout << "voxel_set.size() < options_.viewpoint_min_voxel_count" << std::endl;
+    }
+    return false;
+  }
+//  if (verbose) {
+//    std::cout << "total_information=" << total_information << std::endl;
+//  }
+  if (total_information < options_.viewpoint_min_information) {
+    if (verbose) {
+      std::cout << "total_information < options_.viewpoint_min_information" << std::endl;
+    }
+    return false;
+  }
+
+//  if (verbose) {
+//    std::cout << "pose=" << pose << ", voxel_set=" << voxel_set.size() << ", total_information=" << total_information << std::endl;
+//  }
+
+  std::unique_lock<std::mutex> lock(mutex_);
+  ViewpointEntryIndex viewpoint_index = viewpoint_entries_.size();
+  viewpoint_entries_.emplace_back(Viewpoint(&virtual_camera_, pose), total_information, std::move(voxel_set));
+  viewpoint_ann_.addPoint(pose.getWorldPosition());
+  viewpoint_graph_.addNode(viewpoint_index);
+  lock.unlock();
+
+  return true;
+}
+
+bool ViewpointPlanner::findNextViewpointPathEntry() {
+  const bool verbose = true;
 
   // Now run through the viewpoint graph and select the best next viewpoint
   ViewpointPathEntry best_path_entry((ViewpointEntryIndex)-1, std::numeric_limits<FloatType>::lowest());
@@ -816,8 +824,10 @@ bool ViewpointPlanner::generateNextViewpoint() {
         ", total_voxels=" << best_viewpoint_entry.voxel_set.size() <<
         ", new_voxels=" << difference_set.size() << std::endl;
   }
+  std::unique_lock<std::mutex> lock(mutex_);
   viewpoint_path_.push_back(best_path_entry);
   observed_voxel_set_.insert(best_viewpoint_entry.voxel_set.cbegin(), best_viewpoint_entry.voxel_set.cend());
+  lock.unlock();
 //  if (verbose) {
 //    std::cout << "new information: " <<  best_path_entry.information <<
 //        ", information: " << best_viewpoint_entry.total_information << std::endl;
@@ -834,6 +844,7 @@ bool ViewpointPlanner::generateNextViewpoint() {
     std::cout << "  viewpoint_index: " << path_entry.viewpoint_index << ", pose[" << i << "]: " << viewpoint_entry.viewpoint.pose()
         << ", information: " << path_entry.information << std::endl;
   }
+
   return true;
 }
 

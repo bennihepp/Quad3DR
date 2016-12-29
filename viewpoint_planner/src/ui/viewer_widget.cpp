@@ -77,8 +77,10 @@ ViewerWidget::ViewerWidget(const QGLFormat& format, ViewpointPlanner* planner, V
     connect(settings_panel_, SIGNAL(renderTreeDepthChanged(size_t)), this, SLOT(setRenderTreeDepth(size_t)));
     connect(settings_panel_, SIGNAL(renderObservationThresholdChanged(size_t)), this, SLOT(setRenderObservationThreshold(size_t)));
 
-    connect(planner_panel_, SIGNAL(pauseContinuePlanning()), this, SLOT(pauseContinuePlanning()));
-    connect(planner_panel_, SIGNAL(updateViewpoints()), this, SLOT(updateViewpoints()));
+    connect(planner_panel_, SIGNAL(pauseContinueViewpointGraph()), this, SLOT(pauseContinueViewpointGraph()));
+    connect(planner_panel_, SIGNAL(pauseContinueViewpointPath()), this, SLOT(pauseContinueViewpointPath()));
+    connect(planner_panel_, SIGNAL(resetViewpoints()), this, SLOT(resetViewpoints()));
+    connect(planner_panel_, SIGNAL(resetViewpointPath()), this, SLOT(resetViewpointPath()));
     connect(planner_panel, SIGNAL(drawViewpointGraphChanged(bool)), this, SLOT(setDrawViewpointGraph(bool)));
     connect(planner_panel, SIGNAL(viewpointGraphSelectionChanged(size_t)), this, SLOT(setViewpointGraphSelectionIndex(size_t)));
     connect(planner_panel, SIGNAL(drawViewpointPathChanged(bool)), this, SLOT(setDrawViewpointPath(bool)));
@@ -107,17 +109,12 @@ ViewerWidget::ViewerWidget(const QGLFormat& format, ViewpointPlanner* planner, V
     octree_drawer_.setMinWeight(settings_panel_->getMinWeight());
     octree_drawer_.setMaxWeight(settings_panel_->getMaxWeight());
 
-    // Timer for getting camera pose updates
-//    process_timer_ = new QTimer(this);
-//    process_timer_->setSingleShot(true);
-//    connect(process_timer_, SIGNAL(timeout()), this, SLOT(onTimeout()));
-//    connect(this, SIGNAL(timeoutHandlerFinished()), this, SLOT(onTimeoutHandlerFinished()));
     connect(this, SIGNAL(viewpointsChanged()), this, SLOT(updateViewpoints()));
-//    emit timeoutHandlerFinished();
+    connect(this, SIGNAL(plannerThreadPaused()), this, SLOT(onPlannerThreadPaused()));
 
-//    planner_thread_.signalPause();
+    planner_thread_.setOperation(ViewpointPlannerThread::Operation::VIEWPOINT_GRAPH);
     planner_thread_.start();
-//    pauseContinuePlanning();
+    continuePlannerThread();
 }
 
 ViewerWidget::~ViewerWidget() {
@@ -139,7 +136,7 @@ void ViewerWidget::init() {
     // Make camera the default manipulated frame.
     setManipulatedFrame(camera()->frame());
     // invert mousewheel (more like Blender)
-    camera()->frame()->setWheelSensitivity(-1.0);
+    camera()->frame()->setWheelSensitivity(-0.5);
 
     // TODO
     camera()->setSceneCenter(qglviewer::Vec(0, 0, 0));
@@ -166,6 +163,9 @@ void ViewerWidget::init() {
     }
 
     std::cout << "zNear: " << camera()->zNear() << ", zFar: " << camera()->zFar() << std::endl;
+    // TODO: Hack, make this dependent on the scene
+    camera()->setZNearCoefficient(0.01);
+    camera()->setZClippingCoefficient(1);
 }
 
 void ViewerWidget::initAxesDrawer() {
@@ -249,35 +249,6 @@ void ViewerWidget::showOctree(const ViewpointPlanner::OccupancyMapType* octree) 
     setSceneBoundingBox(qglviewer::Vec(minX, minY, minZ), qglviewer::Vec(maxX, maxY, maxZ));
 }
 
-void ViewerWidget::showViewpointPath() {
-  if (!initialized_) {
-      return;
-  }
-
-  // Fill viewpoint path dropbox in planner panel
-  std::vector<std::pair<std::string, size_t>> viewpoint_path_gui_entries;
-  for (size_t i = 0; i < viewpoint_path_copy_.size(); ++i) {
-    ViewpointPlanner::FloatType information = viewpoint_path_copy_[i].second;
-    std::string name = std::to_string(i) + " - " + std::to_string(information);
-    viewpoint_path_gui_entries.push_back(std::make_pair(name, i));
-  }
-  planner_panel_->initializeViewpointPath(viewpoint_path_gui_entries);
-
-  // Make a copy of the path poses so that we can later on access
-  // viewpoints select by the user
-  std::vector<Pose> viewpoint_path_poses;
-  for (const auto& entry : viewpoint_path_copy_) {
-    const Pose& pose = entry.first;
-    viewpoint_path_poses.push_back(pose);
-  }
-  viewpoint_path_drawer_.setCamera(sparse_recon_->getCameras().cbegin()->second);
-  viewpoint_path_drawer_.setViewpoints(viewpoint_path_poses);
-
-  planner_panel_->setViewpointPathSize(viewpoint_path_copy_.size());
-
-  update();
-}
-
 void ViewerWidget::showViewpointGraph() {
   if (!initialized_) {
       return;
@@ -286,7 +257,7 @@ void ViewerWidget::showViewpointGraph() {
   // Fill viewpoint graph dropbox in planner panel
   std::vector<std::pair<std::string, size_t>> viewpoint_graph_gui_entries;
   for (size_t i = 0; i < viewpoint_graph_copy_.size(); ++i) {
-    ViewpointPlanner::FloatType total_information = viewpoint_graph_copy_[i].second;
+    ViewpointPlanner::FloatType total_information = std::get<2>(viewpoint_graph_copy_[i]);
     std::string name = std::to_string(i) + " - " + std::to_string(total_information);
     viewpoint_graph_gui_entries.push_back(std::make_pair(name, i));
   }
@@ -296,13 +267,42 @@ void ViewerWidget::showViewpointGraph() {
   // viewpoints select by the user
   std::vector<Pose> viewpoint_graph_poses;
   for (const auto& entry : viewpoint_graph_copy_) {
-    const Pose& pose = entry.first;
+    const Pose& pose = std::get<1>(entry);
     viewpoint_graph_poses.push_back(pose);
   }
   viewpoint_graph_drawer_.setCamera(sparse_recon_->getCameras().cbegin()->second);
   viewpoint_graph_drawer_.setViewpoints(viewpoint_graph_poses);
 
   planner_panel_->setViewpointGraphSize(viewpoint_graph_copy_.size());
+
+  update();
+}
+
+void ViewerWidget::showViewpointPath() {
+  if (!initialized_) {
+      return;
+  }
+
+  // Fill viewpoint path dropbox in planner panel
+  std::vector<std::pair<std::string, size_t>> viewpoint_path_gui_entries;
+  for (size_t i = 0; i < viewpoint_path_copy_.size(); ++i) {
+    ViewpointPlanner::FloatType information = std::get<2>(viewpoint_path_copy_[i]);
+    std::string name = std::to_string(i) + " - " + std::to_string(information);
+    viewpoint_path_gui_entries.push_back(std::make_pair(name, i));
+  }
+  planner_panel_->initializeViewpointPath(viewpoint_path_gui_entries);
+
+  // Make a copy of the path poses so that we can later on access
+  // viewpoints select by the user
+  std::vector<Pose> viewpoint_path_poses;
+  for (const auto& entry : viewpoint_path_copy_) {
+    const Pose& pose = std::get<1>(entry);
+    viewpoint_path_poses.push_back(pose);
+  }
+  viewpoint_path_drawer_.setCamera(sparse_recon_->getCameras().cbegin()->second);
+  viewpoint_path_drawer_.setViewpoints(viewpoint_path_poses);
+
+  planner_panel_->setViewpointPathSize(viewpoint_path_copy_.size());
 
   update();
 }
@@ -341,7 +341,7 @@ void ViewerWidget::setDrawRaycast(bool draw_raycast) {
 void ViewerWidget::captureRaycast()
 {
   Pose camera_pose = getCameraPose();
-  std::cout << "raycast pose: " << camera_pose << std::endl;
+//  std::cout << "raycast pose: " << camera_pose << std::endl;
 //  std::vector<std::pair<ViewpointPlanner::ConstTreeNavigatorType, FloatType>> raycast_results = planner_->getRaycastHitVoxels(camera_pose);
   std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results = planner_->getRaycastHitVoxelsBVH(camera_pose);
   std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, FloatType>> tmp;
@@ -416,8 +416,8 @@ void ViewerWidget::setCameraPose(const Pose& pose) {
   AngleAxis rotate_x_pi = AngleAxis(M_PI, Vector3::UnitX());
   camera()->setOrientation(eigenToQglviewer(pose.quaternion() * rotate_x_pi));
   update();
-  std::cout << "set pose: " << pose << std::endl;
-  std::cout << "get pose: " << getCameraPose() << std::endl;
+//  std::cout << "set pose: " << pose << std::endl;
+//  std::cout << "get pose: " << getCameraPose() << std::endl;
 }
 
 void ViewerWidget::setOccupancyBinThreshold(double occupancy_threshold)
@@ -508,14 +508,22 @@ void ViewerWidget::setImagePoseIndex(ImageId image_id) {
 }
 
 void ViewerWidget::setViewpointPathSelectionIndex(size_t index) {
-  const Pose& pose = viewpoint_path_copy_[index].first;
-  setCameraPose(pose);
+  //  const Pose& pose = std::get<1>(viewpoint_path_copy_[index]);
+  const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = std::get<0>(viewpoint_path_copy_[index]);
+  std::unique_lock<std::mutex> lock = planner_->acquireLock();
+  const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[viewpoint_index];
+  setCameraPose(viewpoint_entry.viewpoint.pose());
+  octree_drawer_.updateRaycastVoxels(viewpoint_entry.voxel_set);
   update();
 }
 
 void ViewerWidget::setViewpointGraphSelectionIndex(size_t index) {
-  const Pose& pose = viewpoint_graph_copy_[index].first;
-  setCameraPose(pose);
+//  const Pose& pose = std::get<1>(viewpoint_graph_copy_[index]);
+  const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = std::get<0>(viewpoint_graph_copy_[index]);
+  std::unique_lock<std::mutex> lock = planner_->acquireLock();
+  const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[viewpoint_index];
+  setCameraPose(viewpoint_entry.viewpoint.pose());
+  octree_drawer_.updateRaycastVoxels(viewpoint_entry.voxel_set);
   update();
 }
 
@@ -578,150 +586,212 @@ void ViewerWidget::setSceneBoundingBox(const qglviewer::Vec& min, const qglviewe
     qglviewer::Vec min_vec(-50, -50, -20);
     qglviewer::Vec max_vec(50, 50, 50);
     QGLViewer::setSceneBoundingBox(min_vec, max_vec);
+//    QGLViewer::setSceneBoundingBox(min, max);
 }
 
-void ViewerWidget::draw()
-{
-//    glEnable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glEnable(GL_VERTEX_PROGRAM_POINT_SIZE);
+void ViewerWidget::draw() {
+    glEnable(GL_DEPTH_TEST);
+//  glDisable(GL_DEPTH_TEST);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glEnable(GL_VERTEX_PROGRAM_POINT_SIZE);
 
-    glEnable(GL_LIGHTING);
-    glDisable(GL_CULL_FACE);
+  glEnable(GL_LIGHTING);
+  glDisable(GL_CULL_FACE);
 //    glEnable(GL_CULL_FACE);
 //    glCullFace(GL_BACK);
 
 //    camera()->fitBoundingBox(qglviewer::Vec(-10, -10, -10), qglviewer::Vec(10, 10, 10));
 //    camera()->setSceneCenter(qglviewer::Vec(0, 0, 0));
-    QMatrix4x4 pvm_matrix;
-    camera()->getModelViewProjectionMatrix(pvm_matrix.data());
-    QMatrix4x4 view_matrix;
-    camera()->getModelViewMatrix(view_matrix.data());
-    QMatrix4x4 model_matrix; // Identity
-    model_matrix.setToIdentity();
+  QMatrix4x4 pvm_matrix;
+  camera()->getModelViewProjectionMatrix(pvm_matrix.data());
+  QMatrix4x4 view_matrix;
+  camera()->getModelViewMatrix(view_matrix.data());
+  QMatrix4x4 model_matrix; // Identity
+  model_matrix.setToIdentity();
 
-    // draw drawable objects:
-    octree_drawer_.draw(pvm_matrix, view_matrix, model_matrix);
-    sparce_recon_drawer_.draw(pvm_matrix, width(), height());
-    viewpoint_path_drawer_.draw(pvm_matrix, width(), height());
-    viewpoint_graph_drawer_.draw(pvm_matrix, width(), height());
+  // draw drawable objects:
+  octree_drawer_.draw(pvm_matrix, view_matrix, model_matrix);
+  sparce_recon_drawer_.draw(pvm_matrix, width(), height());
+  // Draw path before graph so that the graph is hidden
+  viewpoint_path_drawer_.draw(pvm_matrix, width(), height());
+  viewpoint_graph_drawer_.draw(pvm_matrix, width(), height());
 
-    if (display_axes_) {
-      axes_drawer_.draw(pvm_matrix, width(), height(), 5.0f);
-    }
+  if (display_axes_) {
+    axes_drawer_.draw(pvm_matrix, width(), height(), 5.0f);
+  }
 }
 
-void ViewerWidget::drawWithNames()
-{
-}
+void ViewerWidget::drawWithNames() {}
 
-void ViewerWidget::postDraw()
-{
-}
+void ViewerWidget::postDraw() {}
 
-void ViewerWidget::postSelection(const QPoint&)
-{
-}
+void ViewerWidget::postSelection(const QPoint&) {}
 
-void ViewerWidget::wheelEvent(QWheelEvent* event)
-{
-    if (event->modifiers() & Qt::ControlModifier) {
-        sparce_recon_drawer_.changePointSize(event->delta());
-        event->accept();
-        updateGL();
-    } else if (event->modifiers() & Qt::AltModifier) {
-        sparce_recon_drawer_.changeCameraSize(event->delta());
-        viewpoint_path_drawer_.changeCameraSize(event->delta());
-        viewpoint_graph_drawer_.changeCameraSize(event->delta());
-        event->accept();
-        updateGL();
-    } else if (event->modifiers() & Qt::ShiftModifier) {
+void ViewerWidget::wheelEvent(QWheelEvent* event) {
+  if (event->modifiers() & Qt::ControlModifier) {
+    sparce_recon_drawer_.changePointSize(event->delta());
+    event->accept();
+    updateGL();
+  } else if (event->modifiers() & Qt::AltModifier) {
+    sparce_recon_drawer_.changeCameraSize(event->delta());
+    viewpoint_graph_drawer_.changeCameraSize(event->delta());
+    viewpoint_path_drawer_.changeCameraSize(event->delta());
+    event->accept();
+    updateGL();
+  } else if (event->modifiers() & Qt::ShiftModifier) {
 //      ChangeNearPlane(event->delta());
-        QGLViewer::wheelEvent(event);
-    } else {
+    QGLViewer::wheelEvent(event);
+  } else {
 //      ChangeFocusDistance(event->delta());
-        QGLViewer::wheelEvent(event);
-    }
+    QGLViewer::wheelEvent(event);
+  }
 }
 
-void ViewerWidget::pauseContinuePlanning() {
+void ViewerWidget::pausePlannerThread() {
+  if (planner_thread_.isRunning()) {
+    planner_panel_->setPauseContinueViewpointGraphEnabled(false);
+    planner_panel_->setPauseContinueViewpointPathEnabled(false);
+    planner_thread_.signalPause();
+  }
+//  else {
+//    planner_panel_->setPauseContinueViewpointGraphEnabled(true);
+//    planner_panel_->setPauseContinueViewpointGraphText("Continue");
+//    planner_panel_->setPauseContinueViewpointPathEnabled(true);
+//    planner_panel_->setPauseContinueViewpointPathText("Continue");
+//  }
+}
+
+void ViewerWidget::continuePlannerThread() {
+  if (planner_thread_.operation() == ViewpointPlannerThread::Operation::VIEWPOINT_GRAPH) {
+    planner_panel_->setPauseContinueViewpointGraphEnabled(true);
+    planner_panel_->setPauseContinueViewpointGraphText("Pause");
+    planner_panel_->setPauseContinueViewpointPathEnabled(false);
+    planner_panel_->setResetViewpointsEnabled(false);
+    planner_panel_->setResetViewpointPathEnabled(false);
+  }
+  else if (planner_thread_.operation() == ViewpointPlannerThread::Operation::VIEWPOINT_PATH) {
+    planner_panel_->setPauseContinueViewpointPathEnabled(true);
+    planner_panel_->setPauseContinueViewpointPathText("Pause");
+    planner_panel_->setPauseContinueViewpointGraphEnabled(false);
+    planner_panel_->setResetViewpointsEnabled(false);
+    planner_panel_->setResetViewpointPathEnabled(false);
+  }
+  planner_thread_.signalContinue();
+}
+
+void ViewerWidget::onPlannerThreadPaused() {
+  planner_panel_->setPauseContinueViewpointGraphEnabled(true);
+  planner_panel_->setPauseContinueViewpointGraphText("Continue");
+  planner_panel_->setPauseContinueViewpointPathEnabled(true);
+  planner_panel_->setPauseContinueViewpointPathText("Continue");
+  planner_panel_->setResetViewpointsEnabled(true);
+  planner_panel_->setResetViewpointPathEnabled(true);
+}
+
+void ViewerWidget::pauseContinueViewpointGraph() {
+  if (planner_thread_.operation() != ViewpointPlannerThread::Operation::VIEWPOINT_GRAPH) {
+    planner_thread_.setOperation(ViewpointPlannerThread::Operation::VIEWPOINT_GRAPH);
+  }
   if (planner_thread_.isPaused()) {
-    planner_thread_.signalContinue();
-    planner_panel_->setPauseContinueText("Pause");
+    continuePlannerThread();
   }
   else {
-    planner_thread_.signalPause();
-    planner_panel_->setPauseContinueText("Continue");
+    pausePlannerThread();
   }
+}
+
+void ViewerWidget::pauseContinueViewpointPath() {
+  if (planner_thread_.operation() != ViewpointPlannerThread::Operation::VIEWPOINT_PATH) {
+    planner_thread_.setOperation(ViewpointPlannerThread::Operation::VIEWPOINT_PATH);
+  }
+  if (planner_thread_.isPaused()) {
+    continuePlannerThread();
+  }
+  else {
+    pausePlannerThread();
+  }
+}
+
+void ViewerWidget::resetViewpoints() {
+  // TODO: Call asynchronously
+  planner_->reset();
+  planner_thread_.updateViewpoints();
+  showViewpointGraph();
+  showViewpointPath();
+}
+
+void ViewerWidget::resetViewpointPath() {
+  // TODO: Call asynchronously
+  planner_->resetViewpointPath();
+  planner_thread_.updateViewpoints();
+  showViewpointGraph();
+  showViewpointPath();
 }
 
 void ViewerWidget::signalViewpointsChanged() {
   emit viewpointsChanged();
 }
 
-void ViewerWidget::onTimeoutHandlerFinished() {
-//  process_timer_->start(100);
-}
-
-void ViewerWidget::onTimeout() {
-//  if (worker_thread_.joinable()) {
-//    worker_thread_.join();
-//  }
-//  worker_thread_ = std::thread([this]() {
-////    Pose camera_pose = getCameraPose();
-////    CameraId camera_id = planner_->getReconstruction()->getCameras().cbegin()->first;
-////    std::cout << "pose_matrix image to world: " << camera_pose.getTransformationImageToWorld() << std::endl;
-////    std::cout << "translation: " << camera_pose.inverse().translation();
-////    std::unordered_set<Point3DId> proj_points = planner_->computeProjectedMapPoints(camera_id, camera_pose);
-////    std::unordered_set<Point3DId> filtered_points = planner_->computeFilteredMapPoints(camera_id, camera_pose);
-////    std::unordered_set<Point3DId> visible_points = planner_->computeVisibleMapPoints(camera_id, camera_pose);
-////
-////    std::cout << "  projected points: " << proj_points.size() << std::endl;
-////    std::cout << "  filtered points: " << filtered_points.size() << std::endl;
-////    std::cout << "  non-occluded points: " << visible_points.size() << std::endl;
-////    std::cout << "  filtered and non-occluded: " << ait::computeSetIntersectionSize(filtered_points, visible_points) << std::endl;
-//
-////    double information_score = planner_->computeInformationScore(camera_pose);
-////    std::cout << "  information score: " << information_score << std::endl;
-////    double information_score_bvh = planner_->computeInformationScoreBVH(camera_pose);
-////    std::cout << "  information score BVH: " << information_score_bvh << std::endl;
-//
-//    std::cout << "Running generateNextViewpoint()" << std::endl;
-//    bool result = planner_->generateNextViewpoint();
-//    std::cout << "Result -> " << result << std::endl;
-//
-//    emit this->viewpointGraphChanged();
-//  });
+void ViewerWidget::signalPlannerThreadPaused() {
+  emit plannerThreadPaused();
 }
 
 void ViewerWidget::updateViewpoints() {
   showViewpointGraph();
   showViewpointPath();
-//  emit this->onTimeoutHandlerFinished();
 }
 
 ViewpointPlannerThread::ViewpointPlannerThread(ViewpointPlanner* planner, ViewerWidget* viewer_widget)
-: ait::PausableThread(), planner_(planner), viewer_widget_(viewer_widget) {}
+: ait::PausableThread(), planner_(planner), viewer_widget_(viewer_widget), operation_(Operation::NOP) {
+  setPausedCallback([viewer_widget]() {
+    viewer_widget->signalPlannerThreadPaused();
+  });
+}
 
 ViewpointPlannerThread::Result ViewpointPlannerThread::runIteration() {
-  std::cout << "Running generateNextViewpoint()" << std::endl;
-  bool result = planner_->generateNextViewpoint();
-  std::cout << "Result -> " << result << std::endl;
+  if (operation_ == VIEWPOINT_GRAPH) {
+    std::cout << "Running iterations of generateNextViewpoint()" << std::endl;
+    for (std::size_t i = 0; i < 10; ++i) {
+      bool result = planner_->generateNextViewpointEntry();
+      std::cout << "Result[" << i << "] -> " << result << std::endl;
+    }
+    updateViewpointsInternal();
+    viewer_widget_->signalViewpointsChanged();
+    return Result::CONTINUE;
+  }
+  else if (operation_ == VIEWPOINT_PATH) {
+    std::cout << "Running iterations of findNextViewpointPathEntry()" << std::endl;
+    bool result = planner_->findNextViewpointPathEntry();
+    std::cout << "Result -> " << result << std::endl;
+    updateViewpointsInternal();
+    viewer_widget_->signalViewpointsChanged();
+    return Result::CONTINUE;
+  }
+  else {
+    std::cout << "Giving back stop result" << std::endl;
+    return Result::STOP;
+  }
+}
+
+void ViewpointPlannerThread::updateViewpoints() {
+  AIT_ASSERT(!this->isRunning() || this->isPaused());
+  updateViewpointsInternal();
+}
+
+void ViewpointPlannerThread::updateViewpointsInternal() {
   // Copy viewpoint graph and path to local copy for visualization
   viewer_widget_->viewpoint_graph_copy_.clear();
   for (ViewpointPlanner::ViewpointEntryIndex viewpoint_index : planner_->getViewpointGraph()) {
     const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[viewpoint_index];
-    viewer_widget_->viewpoint_graph_copy_.push_back(std::make_pair(
-        viewpoint_entry.viewpoint.pose(), viewpoint_entry.total_information));
+    viewer_widget_->viewpoint_graph_copy_.push_back(std::make_tuple(
+        viewpoint_index, viewpoint_entry.viewpoint.pose(), viewpoint_entry.total_information));
   }
   viewer_widget_->viewpoint_path_copy_.clear();
   for (const ViewpointPlanner::ViewpointPathEntry& path_entry : planner_->getViewpointPath()) {
     const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[path_entry.viewpoint_index];
-    viewer_widget_->viewpoint_path_copy_.push_back(std::make_pair(
-        viewpoint_entry.viewpoint.pose(), path_entry.information));
-    std::cout << "showing viewpoint entry " << path_entry.viewpoint_index << " with pose " << viewpoint_entry.viewpoint.pose() << std::endl;
+    viewer_widget_->viewpoint_path_copy_.push_back(std::make_tuple(
+        path_entry.viewpoint_index, viewpoint_entry.viewpoint.pose(), path_entry.information));
+//    std::cout << "showing viewpoint entry " << path_entry.viewpoint_index << " with pose " << viewpoint_entry.viewpoint.pose() << std::endl;
   }
-  viewer_widget_->signalViewpointsChanged();
-  return Result::CONTINUE;
 }
