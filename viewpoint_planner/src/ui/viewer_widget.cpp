@@ -603,9 +603,15 @@ void ViewerWidget::setViewpointPathBranchSelectionIndex(std::size_t index) {
   std::unique_lock<std::mutex> lock(mutex_);
   viewpoint_path_branch_index_ = index;
   std::cout << "Selected viewpoint path " << index << std::endl;
-  std::cout << "  accumulated information=" << planner_->getViewpointPaths()[index].acc_information << std::endl;
-  std::cout << "  accumulated motion distance=" << planner_->getViewpointPaths()[index].acc_motion_distance << std::endl;
-  std::cout << "  accumulated objective=" << planner_->getViewpointPaths()[index].acc_objective << std::endl;
+  const ViewpointPlanner::ViewpointPath& viewpoint_path = planner_->getViewpointPaths()[index];
+  for (std::size_t i = 0; i < viewpoint_path.entries.size(); ++i) {
+    std::cout << "  [" << i << "] information=" << viewpoint_path.entries[i].local_information
+        << ", motion distance=" << viewpoint_path.entries[i].local_motion_distance
+        << ", objective=" << viewpoint_path.entries[i].local_objective << std::endl;
+  }
+  std::cout << "  accumulated information=" << viewpoint_path.acc_information << std::endl;
+  std::cout << "  accumulated motion distance=" << viewpoint_path.acc_motion_distance << std::endl;
+  std::cout << "  accumulated objective=" << viewpoint_path.acc_objective << std::endl;
   lock.unlock();
   planner_thread_.updateViewpoints();
   showViewpointPath();
@@ -926,6 +932,7 @@ ViewpointPlannerThread::ViewpointPlannerThread(ViewpointPlanner* planner, Viewer
 }
 
 ViewpointPlannerThread::Result ViewpointPlannerThread::runIteration() {
+  std::lock_guard<std::mutex> lock(mutex_);
   if (operation_ == VIEWPOINT_GRAPH) {
     std::cout << "Running iterations of generateNextViewpoint()" << std::endl;
     for (std::size_t i = 0; i < 10; ++i) {
@@ -957,7 +964,10 @@ ViewpointPlannerThread::Result ViewpointPlannerThread::runIteration() {
 
 void ViewpointPlannerThread::updateViewpoints() {
   AIT_ASSERT(!this->isRunning() || this->isPaused());
-  updateViewpointsInternal();
+  std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+  if (lock) {
+    updateViewpointsInternal();
+  }
 }
 
 void ViewpointPlannerThread::updateViewpointsInternal() {

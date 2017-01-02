@@ -80,6 +80,7 @@ protected:
   void updateViewpointsInternal();
 
 private:
+  std::mutex mutex_;
   ViewpointPlanner* planner_;
   ViewerWidget* viewer_widget_;
   Operation operation_;

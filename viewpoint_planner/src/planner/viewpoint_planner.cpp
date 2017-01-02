@@ -613,6 +613,7 @@ bool ViewpointPlanner::generateNextViewpointEntry() {
 }
 
 void ViewpointPlanner::computeViewpointMotions() {
+  std::cout << "Computing motions on viewpoint graph" << std::endl;
   for (ViewpointEntryIndex from_index : viewpoint_graph_) {
     if (from_index < num_real_viewpoints_) {
       continue;
@@ -630,6 +631,7 @@ void ViewpointPlanner::computeViewpointMotions() {
     lock.unlock();
   }
 
+  std::cout << "Densifying edges on viewpoint graph" << std::endl;
   // Densify viewpoint motions
   std::stack<std::tuple<ViewpointEntryIndex, FloatType, std::size_t>> node_stack;
   for (const ViewpointEntryIndex index : viewpoint_graph_) {
@@ -656,6 +658,7 @@ void ViewpointPlanner::computeViewpointMotions() {
   for (const auto& tuple : new_edges) {
     viewpoint_graph_.addEdge(std::get<0>(tuple), std::get<1>(tuple), std::get<2>(tuple));
   }
+  std::cout << "Done" << std::endl;
 }
 
 ViewpointPlanner::ViewpointEntryIndex ViewpointPlanner::addViewpointEntryWithoutLock(ViewpointEntry&& viewpoint_entry) {
