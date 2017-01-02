@@ -39,6 +39,9 @@ struct NodeObject : ait::Serializable {
 
 class ViewpointPlanner;
 
+template <typename FloatT>
+class MotionPlanner;
+
 class ViewpointPlannerData {
 public:
   using FloatType = float;
@@ -105,8 +108,15 @@ public:
 
   ViewpointPlannerData(const Options* options);
 
+  const OccupiedTreeType& getOccupancyBVHTree() const {
+    return occupied_bvh_;
+  }
+
 private:
   friend class ViewpointPlanner;
+
+  template <typename FloatT>
+  friend class MotionPlanner;
 
   void readDenseReconstruction(const std::string& path);
   bool readAndAugmentOctree(

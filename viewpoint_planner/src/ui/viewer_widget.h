@@ -50,10 +50,23 @@ public:
   enum Operation {
     NOP,
     VIEWPOINT_GRAPH,
+    VIEWPOINT_MOTIONS,
     VIEWPOINT_PATH,
   };
 
   ViewpointPlannerThread(ViewpointPlanner* planner, ViewerWidget* viewer_widget);
+
+  void setAlpha(double alpha) {
+    alpha_ = alpha;
+  }
+
+  void setBeta(double beta) {
+    beta_ = beta;
+  }
+
+  void setViewpointPathBranchIndex(std::size_t viewpoint_path_branch_index) {
+    viewpoint_path_branch_index_ = viewpoint_path_branch_index;
+  }
 
   void setOperation(Operation operation) {
     operation_ = operation;
@@ -74,6 +87,9 @@ private:
   ViewpointPlanner* planner_;
   ViewerWidget* viewer_widget_;
   Operation operation_;
+  double alpha_;
+  double beta_;
+  std::size_t viewpoint_path_branch_index_;
 };
 
 class ViewerWidget : public QGLViewer
@@ -132,13 +148,15 @@ public slots:
   void setDrawSingleBin(bool draw_single_bin);
   void setDrawOctree(bool draw_octree);
   void setDrawCameras(bool draw_cameras);
-  void setDrawViewpointPath(bool draw_viewpoint_path);
   void setDrawViewpointGraph(bool draw_viewpoint_graph);
+  void setDrawViewpointMotions(bool draw_viewpoint_motions);
+  void setDrawViewpointPath(bool draw_viewpoint_path);
   void setDrawSparsePoints(bool draw_sparse_points);
   void setUseDroneCamera(bool use_drone_camera);
   void setImagePoseIndex(ImageId image_id);
-  void setViewpointPathSelectionIndex(size_t index);
-  void setViewpointGraphSelectionIndex(size_t index);
+  void setViewpointPathBranchSelectionIndex(std::size_t index);
+  void setViewpointPathSelectionIndex(std::size_t index);
+  void setViewpointGraphSelectionIndex(std::size_t index);
   void setMinOccupancy(double min_occupancy);
   void setMaxOccupancy(double max_occupancy);
   void setMinObservations(uint32_t min_observations);
@@ -147,19 +165,29 @@ public slots:
   void setMaxVoxelSize(double max_voxel_size);
   void setMinWeight(double min_weight);
   void setMaxWeight(double max_weight);
-  void setRenderTreeDepth(size_t render_tree_depth);
-  void setRenderObservationThreshold(size_t render_observation_threshold);
+  void setRenderTreeDepth(std::size_t render_tree_depth);
+  void setRenderObservationThreshold(std::size_t render_observation_threshold);
 
   // Planner panel slots
   void pauseContinueViewpointGraph();
+  void pauseContinueViewpointMotions();
   void pauseContinueViewpointPath();
+  void pauseContinueOperation(ViewpointPlannerThread::Operation operation);
   void resetViewpoints();
+  void resetViewpointMotions();
   void resetViewpointPath();
+  void onSaveViewpointGraph(const std::string& filename);
+  void onLoadViewpointGraph(const std::string& filename);
   void continuePlannerThread();
   void pausePlannerThread();
 
   void signalViewpointsChanged();
   void signalPlannerThreadPaused();
+  void setUseFixedColors(bool use_fixed_colors);
+  void setAlphaParameter(double alpha);
+  void setBetaParameter(double beta);
+  void setMinInformationFilter(double min_information_filter);
+  void setViewpointPathLineWidth(double line_width);
 
 protected slots:
   void updateViewpoints();
@@ -188,6 +216,8 @@ protected:
 private:
     friend class ViewpointPlannerThread;
 
+    std::mutex mutex_;
+
     ViewpointPlanner* planner_;
     bool initialized_;
     ViewerSettingsPanel* settings_panel_;
@@ -199,9 +229,13 @@ private:
     LineDrawer axes_drawer_;
     OcTreeDrawer octree_drawer_;
     SparseReconstructionDrawer sparce_recon_drawer_;
+    FloatType aspect_ratio_;
+
     ViewpointDrawer<FloatType> viewpoint_graph_drawer_;
     ViewpointDrawer<FloatType> viewpoint_path_drawer_;
-    FloatType aspect_ratio_;
+    LineDrawer viewpoint_path_line_drawer_;
+    FloatType viewpoint_path_line_width_;
+    FloatType min_information_filter_;
 
 //    QTimer* process_timer_;
     ViewpointPlannerThread planner_thread_;

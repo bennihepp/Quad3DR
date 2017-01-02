@@ -50,62 +50,76 @@
       </widget>
      </item>
      <item row="3" column="0">
-      <widget class="QLabel" name="label_5">
+      <widget class="QLabel" name="label_7">
        <property name="text">
-        <string>Viewpoint path</string>
+        <string>Viewpoint motions</string>
        </property>
       </widget>
      </item>
      <item row="3" column="1">
-      <widget class="QPushButton" name="pauseContinueViewpointPath">
+      <widget class="QPushButton" name="pauseContinueViewpointMotions">
        <property name="text">
         <string>Continue</string>
        </property>
       </widget>
      </item>
      <item row="4" column="0">
+      <widget class="QLabel" name="label_5">
+       <property name="text">
+        <string>Viewpoint path</string>
+       </property>
+      </widget>
+     </item>
+     <item row="4" column="1">
+      <widget class="QPushButton" name="pauseContinueViewpointPath">
+       <property name="text">
+        <string>Continue</string>
+       </property>
+      </widget>
+     </item>
+     <item row="5" column="0">
       <widget class="QPushButton" name="resetViewpoints">
        <property name="text">
         <string>Reset viewpoints</string>
        </property>
       </widget>
      </item>
-     <item row="4" column="1">
+     <item row="5" column="1">
       <widget class="QPushButton" name="resetViewpointPath">
        <property name="text">
         <string>Reset path</string>
        </property>
       </widget>
      </item>
-     <item row="7" column="0">
+     <item row="9" column="0">
       <widget class="QLabel" name="label_3">
        <property name="text">
         <string>ViewpointPathSize</string>
        </property>
       </widget>
      </item>
-     <item row="7" column="1">
+     <item row="9" column="1">
       <widget class="QLabel" name="viewpointPathSize">
        <property name="text">
         <string/>
        </property>
       </widget>
      </item>
-     <item row="8" column="0">
+     <item row="11" column="0">
       <widget class="QLabel" name="label">
        <property name="text">
         <string>ViewpointGraphSize</string>
        </property>
       </widget>
      </item>
-     <item row="8" column="1">
+     <item row="11" column="1">
       <widget class="QLabel" name="viewpointGraphSize">
        <property name="text">
         <string/>
        </property>
       </widget>
      </item>
-     <item row="9" column="0">
+     <item row="12" column="0">
       <widget class="QCheckBox" name="drawViewpointGraph">
        <property name="text">
         <string>DrawViewpointGraph</string>
@@ -115,7 +129,7 @@
        </property>
       </widget>
      </item>
-     <item row="10" column="0">
+     <item row="15" column="0">
       <widget class="QCheckBox" name="drawViewpointPath">
        <property name="text">
         <string>DrawViewpointPath</string>
@@ -125,25 +139,184 @@
        </property>
       </widget>
      </item>
-     <item row="11" column="0">
+     <item row="16" column="0">
       <widget class="QLabel" name="label_2">
        <property name="text">
         <string>Graph viewpoints</string>
        </property>
       </widget>
      </item>
-     <item row="11" column="1">
+     <item row="16" column="1">
       <widget class="QComboBox" name="viewpointGraphSelection"/>
      </item>
-     <item row="12" column="0">
+     <item row="18" column="0">
       <widget class="QLabel" name="label_4">
        <property name="text">
         <string>Path viewpoints</string>
        </property>
       </widget>
      </item>
-     <item row="12" column="1">
+     <item row="18" column="1">
       <widget class="QComboBox" name="viewpointPathSelection"/>
+     </item>
+     <item row="7" column="0">
+      <widget class="QPushButton" name="saveViewpointGraph">
+       <property name="text">
+        <string>Save viewpoint graph</string>
+       </property>
+      </widget>
+     </item>
+     <item row="10" column="0">
+      <widget class="QLabel" name="label_8">
+       <property name="text">
+        <string>MotionsComputed</string>
+       </property>
+      </widget>
+     </item>
+     <item row="10" column="1">
+      <widget class="QLabel" name="viewpointMotionsComputed">
+       <property name="text">
+        <string/>
+       </property>
+      </widget>
+     </item>
+     <item row="14" column="0">
+      <widget class="QCheckBox" name="drawViewpointMotions">
+       <property name="text">
+        <string>DrawMotions</string>
+       </property>
+       <property name="checked">
+        <bool>true</bool>
+       </property>
+      </widget>
+     </item>
+     <item row="21" column="0">
+      <widget class="QLabel" name="label_9">
+       <property name="text">
+        <string>Alpha</string>
+       </property>
+      </widget>
+     </item>
+     <item row="22" column="0">
+      <widget class="QLabel" name="label_10">
+       <property name="text">
+        <string>Beta</string>
+       </property>
+      </widget>
+     </item>
+     <item row="24" column="0">
+      <widget class="QLabel" name="label_11">
+       <property name="text">
+        <string>MinInformation</string>
+       </property>
+      </widget>
+     </item>
+     <item row="23" column="0">
+      <widget class="QLabel" name="label_12">
+       <property name="font">
+        <font>
+         <weight>75</weight>
+         <bold>true</bold>
+        </font>
+       </property>
+       <property name="text">
+        <string>Display filters</string>
+       </property>
+      </widget>
+     </item>
+     <item row="21" column="1">
+      <widget class="QDoubleSpinBox" name="alphaParameter">
+       <property name="maximum">
+        <double>9999999.000000000000000</double>
+       </property>
+       <property name="singleStep">
+        <double>0.100000000000000</double>
+       </property>
+      </widget>
+     </item>
+     <item row="22" column="1">
+      <widget class="QDoubleSpinBox" name="betaParameter">
+       <property name="maximum">
+        <double>9999999.000000000000000</double>
+       </property>
+       <property name="singleStep">
+        <double>0.100000000000000</double>
+       </property>
+      </widget>
+     </item>
+     <item row="24" column="1">
+      <widget class="QDoubleSpinBox" name="minInformationFilter">
+       <property name="maximum">
+        <double>9999999999.000000000000000</double>
+       </property>
+       <property name="singleStep">
+        <double>0.100000000000000</double>
+       </property>
+      </widget>
+     </item>
+     <item row="20" column="0">
+      <widget class="QLabel" name="label_13">
+       <property name="font">
+        <font>
+         <weight>75</weight>
+         <bold>true</bold>
+        </font>
+       </property>
+       <property name="text">
+        <string>Objective parameters</string>
+       </property>
+      </widget>
+     </item>
+     <item row="19" column="0">
+      <widget class="QCheckBox" name="useFixedColors">
+       <property name="text">
+        <string>UseFixedColors</string>
+       </property>
+       <property name="checked">
+        <bool>true</bool>
+       </property>
+      </widget>
+     </item>
+     <item row="25" column="0">
+      <widget class="QLabel" name="label_14">
+       <property name="text">
+        <string>PathLineWidth</string>
+       </property>
+      </widget>
+     </item>
+     <item row="25" column="1">
+      <widget class="QDoubleSpinBox" name="viewpointPathLineWidth">
+       <property name="singleStep">
+        <double>0.100000000000000</double>
+       </property>
+       <property name="value">
+        <double>5.000000000000000</double>
+       </property>
+      </widget>
+     </item>
+     <item row="7" column="1">
+      <widget class="QPushButton" name="loadViewpointGraph">
+       <property name="text">
+        <string>Load viewpoint graph</string>
+       </property>
+      </widget>
+     </item>
+     <item row="17" column="0">
+      <widget class="QLabel" name="label_15">
+       <property name="text">
+        <string>Viewpoint paths</string>
+       </property>
+      </widget>
+     </item>
+     <item row="17" column="1">
+      <widget class="QComboBox" name="viewpointPathBranchSelection"/>
+     </item>
+     <item row="6" column="0">
+      <widget class="QPushButton" name="resetViewpointMotions">
+       <property name="text">
+        <string>Reset motions</string>
+       </property>
+      </widget>
      </item>
     </layout>
    </widget>

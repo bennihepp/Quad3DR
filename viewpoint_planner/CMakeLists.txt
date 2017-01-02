@@ -37,6 +37,7 @@ include_directories(
   ${OCTOMAP_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIR}
+  ${OMPL_INCLUDE_DIRS}
 )
 
 add_executable(occupancy_map_from_sens
@@ -102,10 +103,13 @@ set(VIEWPOINT_PLANNER_SOURCES_COMMON
   src/octree/occupancy_node.h
   src/octree/occupancy_node.cpp
   # Planner
+  src/planner/viewpoint.h
+  src/planner/viewpoint.cpp
   src/planner/viewpoint_planner.h
   src/planner/viewpoint_planner.cpp
   src/planner/viewpoint_planner_data.h
   src/planner/viewpoint_planner_data.cpp
+  src/planner/motion_planner.h
   # Reconstruction
   src/reconstruction/sparse_reconstruction.h
   src/reconstruction/sparse_reconstruction.cpp
@@ -123,6 +127,7 @@ target_link_libraries(viewpoint_planner_cmdline
   ${OCTOVIS_LIBRARIES}
   ${Boost_LIBRARIES}
   ${OpenCV_LIBRARIES}
+  ${OMPL_LIBRARIES}
 )
 
 QT5_WRAP_UI(viewpoint_planner_gui_UIS_H 
@@ -161,6 +166,7 @@ target_link_libraries(viewpoint_planner_gui
   ${Boost_LIBRARIES}
   ${OpenCV_LIBRARIES}
   ${OPENGL_LIBRARIES}
+  ${OMPL_LIBRARIES}
 )
 #target_link_libraries(viewpoint_planner_gui Qt4::QtCore Qt4::QtXml Qt4::QtGui Qt4::QtOpenGL)
 target_link_libraries(viewpoint_planner_gui Qt5::Core Qt5::Xml Qt5::Gui Qt5::OpenGL)

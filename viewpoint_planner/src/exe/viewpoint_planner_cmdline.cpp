@@ -62,6 +62,8 @@ public:
 
     bool runIteration() {
       bool result = planner_ptr_->generateNextViewpointEntry();
+      std::cout << "Graph size: " << planner_ptr_->getViewpointGraph().size();
+      std::cout << "Path size: " << planner_ptr_->getBestViewpointPath().entries.size();
       return result;
     }
 
@@ -144,11 +146,13 @@ int main(int argc, char** argv)
     ViewpointPlannerCmdline planner_cmdline(config_options);
 
     std::signal(SIGINT, signalIntHandler);
-    bool result;
+    bool stop;
     do {
-      result = planner_cmdline.runIteration();
+      bool result = planner_cmdline.runIteration();
+      std::cout << "Result -> " << result << std::endl;
+      stop = false;
     }
-    while (result && !ctrl_pressed);
+    while (!stop && !ctrl_pressed);
 
     return 0;
 }

@@ -37,6 +37,7 @@
 #include <manipulatedCameraFrame.h>
 #include <ait/utilities.h>
 #include <ait/pose.h>
+#include <ait/color.h>
 
 using namespace std;
 
@@ -46,6 +47,8 @@ ViewerWidget::ViewerWidget(const QGLFormat& format, ViewpointPlanner* planner, V
       settings_panel_(settings_panel), planner_panel_(planner_panel),
       octree_(nullptr), sparse_recon_(nullptr),
       display_axes_(true), aspect_ratio_(-1),
+      viewpoint_path_line_width_(5),
+      min_information_filter_(0),
       planner_thread_(planner, this) {
     QSizePolicy policy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     policy.setHeightForWidth(true);
@@ -74,17 +77,28 @@ ViewerWidget::ViewerWidget(const QGLFormat& format, ViewpointPlanner* planner, V
     connect(settings_panel_, SIGNAL(maxVoxelSizeChanged(double)), this, SLOT(setMaxVoxelSize(double)));
     connect(settings_panel_, SIGNAL(minWeightChanged(double)), this, SLOT(setMinWeight(double)));
     connect(settings_panel_, SIGNAL(maxWeightChanged(double)), this, SLOT(setMaxWeight(double)));
-    connect(settings_panel_, SIGNAL(renderTreeDepthChanged(size_t)), this, SLOT(setRenderTreeDepth(size_t)));
-    connect(settings_panel_, SIGNAL(renderObservationThresholdChanged(size_t)), this, SLOT(setRenderObservationThreshold(size_t)));
+    connect(settings_panel_, SIGNAL(renderTreeDepthChanged(std::size_t)), this, SLOT(setRenderTreeDepth(std::size_t)));
+    connect(settings_panel_, SIGNAL(renderObservationThresholdChanged(std::size_t)), this, SLOT(setRenderObservationThreshold(std::size_t)));
 
     connect(planner_panel_, SIGNAL(pauseContinueViewpointGraph()), this, SLOT(pauseContinueViewpointGraph()));
+    connect(planner_panel_, SIGNAL(pauseContinueViewpointMotions()), this, SLOT(pauseContinueViewpointMotions()));
     connect(planner_panel_, SIGNAL(pauseContinueViewpointPath()), this, SLOT(pauseContinueViewpointPath()));
     connect(planner_panel_, SIGNAL(resetViewpoints()), this, SLOT(resetViewpoints()));
+    connect(planner_panel_, SIGNAL(resetViewpointMotions()), this, SLOT(resetViewpointMotions()));
     connect(planner_panel_, SIGNAL(resetViewpointPath()), this, SLOT(resetViewpointPath()));
+    connect(planner_panel_, SIGNAL(saveViewpointGraph(const std::string&)), this, SLOT(onSaveViewpointGraph(const std::string&)));
+    connect(planner_panel_, SIGNAL(loadViewpointGraph(const std::string&)), this, SLOT(onLoadViewpointGraph(const std::string&)));
     connect(planner_panel, SIGNAL(drawViewpointGraphChanged(bool)), this, SLOT(setDrawViewpointGraph(bool)));
-    connect(planner_panel, SIGNAL(viewpointGraphSelectionChanged(size_t)), this, SLOT(setViewpointGraphSelectionIndex(size_t)));
+    connect(planner_panel, SIGNAL(viewpointGraphSelectionChanged(std::size_t)), this, SLOT(setViewpointGraphSelectionIndex(std::size_t)));
+    connect(planner_panel, SIGNAL(drawViewpointMotionsChanged(bool)), this, SLOT(setDrawViewpointMotions(bool)));
     connect(planner_panel, SIGNAL(drawViewpointPathChanged(bool)), this, SLOT(setDrawViewpointPath(bool)));
-    connect(planner_panel, SIGNAL(viewpointPathSelectionChanged(size_t)), this, SLOT(setViewpointPathSelectionIndex(size_t)));
+    connect(planner_panel, SIGNAL(viewpointPathBranchSelectionChanged(std::size_t)), this, SLOT(setViewpointPathBranchSelectionIndex(std::size_t)));
+    connect(planner_panel, SIGNAL(viewpointPathSelectionChanged(std::size_t)), this, SLOT(setViewpointPathSelectionIndex(std::size_t)));
+    connect(planner_panel, SIGNAL(useFixedColorsChanged(bool)), this, SLOT(setUseFixedColors(bool)));
+    connect(planner_panel, SIGNAL(alphaParameterChanged(double)), this, SLOT(setAlphaParameter(double)));
+    connect(planner_panel, SIGNAL(betaParameterChanged(double)), this, SLOT(setBetaParameter(double)));
+    connect(planner_panel, SIGNAL(minInformationFilterChanged(double)), this, SLOT(setMinInformationFilter(double)));
+    connect(planner_panel, SIGNAL(viewpointPathLineWidthChanged(double)), this, SLOT(setViewpointPathLineWidth(double)));
 
     // Fill occupancy dropbox in settings panel
     FloatType selected_occupancy_bin_threshold = octree_drawer_.getOccupancyBinThreshold();
@@ -112,6 +126,8 @@ ViewerWidget::ViewerWidget(const QGLFormat& format, ViewpointPlanner* planner, V
     connect(this, SIGNAL(viewpointsChanged()), this, SLOT(updateViewpoints()));
     connect(this, SIGNAL(plannerThreadPaused()), this, SLOT(onPlannerThreadPaused()));
 
+    planner_thread_.setAlpha(planner_panel_->getAlphaParameter());
+    planner_thread_.setBeta(planner_panel_->getBetaParameter());
     planner_thread_.setOperation(ViewpointPlannerThread::Operation::VIEWPOINT_GRAPH);
     planner_thread_.start();
     continuePlannerThread();
@@ -151,10 +167,9 @@ void ViewerWidget::init() {
     initAxesDrawer();
 
     sparce_recon_drawer_.init();
-    viewpoint_path_drawer_.setColor(Vector4(0.0f, 0.1f, 0.8f, 0.6f));
     viewpoint_path_drawer_.init();
-    viewpoint_graph_drawer_.setColor(Vector4(0.7f, 0.8f, 0.0f, 0.6f));
     viewpoint_graph_drawer_.init();
+    viewpoint_path_line_drawer_.init();
     if (octree_ != nullptr) {
         showOctree(octree_);
     }
@@ -254,10 +269,14 @@ void ViewerWidget::showViewpointGraph() {
       return;
   }
 
+  std::unique_lock<std::mutex> lock(mutex_);
   // Fill viewpoint graph dropbox in planner panel
   std::vector<std::pair<std::string, size_t>> viewpoint_graph_gui_entries;
   for (size_t i = 0; i < viewpoint_graph_copy_.size(); ++i) {
     ViewpointPlanner::FloatType total_information = std::get<2>(viewpoint_graph_copy_[i]);
+    if (total_information < min_information_filter_) {
+      continue;
+    }
     std::string name = std::to_string(i) + " - " + std::to_string(total_information);
     viewpoint_graph_gui_entries.push_back(std::make_pair(name, i));
   }
@@ -265,23 +284,59 @@ void ViewerWidget::showViewpointGraph() {
 
   // Make a copy of the graph poses so that we can later on access
   // viewpoints select by the user
-  std::vector<Pose> viewpoint_graph_poses;
+  std::vector<Pose> poses;
+  ait::MinMaxTracker<FloatType> min_max;
   for (const auto& entry : viewpoint_graph_copy_) {
+    FloatType total_information = std::get<2>(entry);
+    if (total_information < min_information_filter_) {
+      continue;
+    }
     const Pose& pose = std::get<1>(entry);
-    viewpoint_graph_poses.push_back(pose);
+    poses.push_back(pose);
+    min_max.update(total_information);
   }
   viewpoint_graph_drawer_.setCamera(sparse_recon_->getCameras().cbegin()->second);
-  viewpoint_graph_drawer_.setViewpoints(viewpoint_graph_poses);
+
+  if (planner_panel_->isUseFixedColorsChecked()) {
+    typename ViewpointDrawer<FloatType>::Color4 color(0.7f, 0.8f, 0.0f, 0.6f);
+    viewpoint_graph_drawer_.setViewpoints(poses, color);
+  }
+  else {
+    ait::ColorMapHot<FloatType> cmap;
+    std::vector<typename ViewpointDrawer<FloatType>::Color4> colors;
+    for (const auto& entry : viewpoint_graph_copy_) {
+      FloatType total_information = std::get<2>(entry);
+      if (total_information < min_information_filter_) {
+        continue;
+      }
+      FloatType value = min_max.normalize(total_information);
+      typename ViewpointDrawer<FloatType>::Color4 color = cmap.map(value, 0.6f);
+      colors.push_back(color);
+    }
+    viewpoint_graph_drawer_.setViewpoints(poses, colors);
+  }
 
   planner_panel_->setViewpointGraphSize(viewpoint_graph_copy_.size());
+  lock.unlock();
 
   update();
-}
 
+}
 void ViewerWidget::showViewpointPath() {
   if (!initialized_) {
       return;
   }
+
+  std::unique_lock<std::mutex> lock(mutex_);
+
+  // Fill viewpoint path branch dropbox in planner panel
+  std::vector<std::pair<std::string, size_t>> viewpoint_path_branch_gui_entries;
+  for (size_t i = 0; i < planner_->getViewpointPaths().size(); ++i) {
+    ViewpointPlanner::FloatType objective = planner_->getViewpointPaths()[i].acc_objective;
+    std::string name = std::to_string(i) + " - " + std::to_string(objective);
+    viewpoint_path_branch_gui_entries.push_back(std::make_pair(name, i));
+  }
+  planner_panel_->initializeViewpointPathBranch(viewpoint_path_branch_gui_entries);
 
   // Fill viewpoint path dropbox in planner panel
   std::vector<std::pair<std::string, size_t>> viewpoint_path_gui_entries;
@@ -292,17 +347,47 @@ void ViewerWidget::showViewpointPath() {
   }
   planner_panel_->initializeViewpointPath(viewpoint_path_gui_entries);
 
-  // Make a copy of the path poses so that we can later on access
-  // viewpoints select by the user
-  std::vector<Pose> viewpoint_path_poses;
+  // Generate OGL data for viewpoint drawer
+  std::vector<Pose> poses;
+  ait::MinMaxTracker<FloatType> min_max;
   for (const auto& entry : viewpoint_path_copy_) {
     const Pose& pose = std::get<1>(entry);
-    viewpoint_path_poses.push_back(pose);
+    poses.push_back(pose);
+    min_max.update(std::get<2>(entry));
   }
   viewpoint_path_drawer_.setCamera(sparse_recon_->getCameras().cbegin()->second);
-  viewpoint_path_drawer_.setViewpoints(viewpoint_path_poses);
+
+  if (planner_panel_->isUseFixedColorsChecked()) {
+    typename ViewpointDrawer<FloatType>::Color4 color(0.0f, 0.1f, 0.8f, 0.6f);
+    viewpoint_path_drawer_.setViewpoints(poses, color);
+  }
+  else {
+    ait::ColorMapHot<FloatType> cmap;
+    std::vector<typename ViewpointDrawer<FloatType>::Color4> colors;
+    for (const auto& entry : viewpoint_path_copy_) {
+      FloatType information = std::get<2>(entry);
+      FloatType value = min_max.normalize(information);
+      colors.push_back(cmap.map(value, 0.6f));
+    }
+    viewpoint_path_drawer_.setViewpoints(poses, colors);
+  }
+
+  // Draw motion path
+  std::vector<OGLLineData> lines;
+  if (viewpoint_path_copy_.size() > 1) {
+    OGLColorData line_color(0.0f, 0.1f, 0.8f, 1.0f);
+    for (auto it = viewpoint_path_copy_.cbegin() + 1; it != viewpoint_path_copy_.cend(); ++it) {
+      const Vector3 from_pos = std::get<1>(*(it-1)).getWorldPosition();
+      const Vector3 to_pos = std::get<1>(*it).getWorldPosition();
+      OGLVertexData vertex1(from_pos(0), from_pos(1), from_pos(2));
+      OGLVertexData vertex2(to_pos(0), to_pos(1), to_pos(2));
+      lines.emplace_back(OGLVertexDataRGBA(vertex1, line_color), OGLVertexDataRGBA(vertex2, line_color));
+    }
+  }
+  viewpoint_path_line_drawer_.upload(lines);
 
   planner_panel_->setViewpointPathSize(viewpoint_path_copy_.size());
+  lock.unlock();
 
   update();
 }
@@ -467,13 +552,18 @@ void ViewerWidget::setDrawCameras(bool draw_cameras) {
     update();
 }
 
-void ViewerWidget::setDrawViewpointPath(bool draw_viewpoint_path) {
-  viewpoint_path_drawer_.setDrawCameras(draw_viewpoint_path);
+void ViewerWidget::setDrawViewpointGraph(bool draw_viewpoint_graph) {
+  viewpoint_graph_drawer_.setDrawCameras(draw_viewpoint_graph);
   update();
 }
 
-void ViewerWidget::setDrawViewpointGraph(bool draw_viewpoint_graph) {
-  viewpoint_graph_drawer_.setDrawCameras(draw_viewpoint_graph);
+void ViewerWidget::setDrawViewpointMotions(bool draw_viewpoint_motions) {
+  viewpoint_path_line_drawer_.setDrawLines(draw_viewpoint_motions);
+  update();
+}
+
+void ViewerWidget::setDrawViewpointPath(bool draw_viewpoint_path) {
+  viewpoint_path_drawer_.setDrawCameras(draw_viewpoint_path);
   update();
 }
 
@@ -507,20 +597,36 @@ void ViewerWidget::setImagePoseIndex(ImageId image_id) {
     update();
 }
 
-void ViewerWidget::setViewpointPathSelectionIndex(size_t index) {
+void ViewerWidget::setViewpointPathBranchSelectionIndex(std::size_t index) {
+  std::unique_lock<std::mutex> lock(mutex_);
+  planner_thread_.setViewpointPathBranchIndex(index);
+  std::cout << "Selected viewpoint path " << index << std::endl;
+  std::cout << "  accumulated information=" << planner_->getViewpointPaths()[index].acc_information << std::endl;
+  std::cout << "  accumulated motion distance=" << planner_->getViewpointPaths()[index].acc_motion_distance << std::endl;
+  std::cout << "  accumulated objective=" << planner_->getViewpointPaths()[index].acc_objective << std::endl;
+  lock.unlock();
+  planner_thread_.updateViewpoints();
+  showViewpointPath();
+  // showViewpointPath updates the combo box and resets the selection so we set the selection again
+  planner_panel_->setViewpointPathBranchSelection(index);
+}
+
+void ViewerWidget::setViewpointPathSelectionIndex(std::size_t index) {
+  std::lock_guard<std::mutex> lock(mutex_);
   //  const Pose& pose = std::get<1>(viewpoint_path_copy_[index]);
   const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = std::get<0>(viewpoint_path_copy_[index]);
-  std::unique_lock<std::mutex> lock = planner_->acquireLock();
+  std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
   const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[viewpoint_index];
   setCameraPose(viewpoint_entry.viewpoint.pose());
   octree_drawer_.updateRaycastVoxels(viewpoint_entry.voxel_set);
   update();
 }
 
-void ViewerWidget::setViewpointGraphSelectionIndex(size_t index) {
+void ViewerWidget::setViewpointGraphSelectionIndex(std::size_t index) {
+  std::lock_guard<std::mutex> lock(mutex_);
 //  const Pose& pose = std::get<1>(viewpoint_graph_copy_[index]);
   const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = std::get<0>(viewpoint_graph_copy_[index]);
-  std::unique_lock<std::mutex> lock = planner_->acquireLock();
+  std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
   const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[viewpoint_index];
   setCameraPose(viewpoint_entry.viewpoint.pose());
   octree_drawer_.updateRaycastVoxels(viewpoint_entry.voxel_set);
@@ -567,14 +673,14 @@ void ViewerWidget::setMaxWeight(double max_weight) {
   update();
 }
 
-void ViewerWidget::setRenderTreeDepth(size_t render_tree_depth)
+void ViewerWidget::setRenderTreeDepth(std::size_t render_tree_depth)
 {
 //    std::cout << "Setting render tree depth to " << render_tree_depth << std::endl;
     octree_drawer_.setRenderTreeDepth(render_tree_depth);
     update();
 }
 
-void ViewerWidget::setRenderObservationThreshold(size_t render_observation_threshold)
+void ViewerWidget::setRenderObservationThreshold(std::size_t render_observation_threshold)
 {
 //    std::cout << "Setting render observation threshold to " << observation_threshold << std::endl;
     octree_drawer_.setRenderObservationThreshold(render_observation_threshold);
@@ -615,6 +721,7 @@ void ViewerWidget::draw() {
   sparce_recon_drawer_.draw(pvm_matrix, width(), height());
   // Draw path before graph so that the graph is hidden
   viewpoint_path_drawer_.draw(pvm_matrix, width(), height());
+  viewpoint_path_line_drawer_.draw(pvm_matrix, width(), height(), viewpoint_path_line_width_);
   viewpoint_graph_drawer_.draw(pvm_matrix, width(), height());
 
   if (display_axes_) {
@@ -651,6 +758,7 @@ void ViewerWidget::wheelEvent(QWheelEvent* event) {
 void ViewerWidget::pausePlannerThread() {
   if (planner_thread_.isRunning()) {
     planner_panel_->setPauseContinueViewpointGraphEnabled(false);
+    planner_panel_->setPauseContinueViewpointMotionsEnabled(false);
     planner_panel_->setPauseContinueViewpointPathEnabled(false);
     planner_thread_.signalPause();
   }
@@ -663,19 +771,25 @@ void ViewerWidget::pausePlannerThread() {
 }
 
 void ViewerWidget::continuePlannerThread() {
+  if (planner_thread_.operation() != ViewpointPlannerThread::Operation::NOP) {
+    planner_panel_->setPauseContinueViewpointGraphEnabled(false);
+    planner_panel_->setPauseContinueViewpointMotionsEnabled(false);
+    planner_panel_->setPauseContinueViewpointPathEnabled(false);
+    planner_panel_->setResetViewpointsEnabled(false);
+    planner_panel_->setResetViewpointMotionsEnabled(false);
+    planner_panel_->setResetViewpointPathEnabled(false);
+  }
   if (planner_thread_.operation() == ViewpointPlannerThread::Operation::VIEWPOINT_GRAPH) {
     planner_panel_->setPauseContinueViewpointGraphEnabled(true);
     planner_panel_->setPauseContinueViewpointGraphText("Pause");
-    planner_panel_->setPauseContinueViewpointPathEnabled(false);
-    planner_panel_->setResetViewpointsEnabled(false);
-    planner_panel_->setResetViewpointPathEnabled(false);
+  }
+  else if (planner_thread_.operation() == ViewpointPlannerThread::Operation::VIEWPOINT_MOTIONS) {
+    planner_panel_->setPauseContinueViewpointMotionsEnabled(true);
+    planner_panel_->setPauseContinueViewpointMotionsText("Pause");
   }
   else if (planner_thread_.operation() == ViewpointPlannerThread::Operation::VIEWPOINT_PATH) {
     planner_panel_->setPauseContinueViewpointPathEnabled(true);
     planner_panel_->setPauseContinueViewpointPathText("Pause");
-    planner_panel_->setPauseContinueViewpointGraphEnabled(false);
-    planner_panel_->setResetViewpointsEnabled(false);
-    planner_panel_->setResetViewpointPathEnabled(false);
   }
   planner_thread_.signalContinue();
 }
@@ -684,26 +798,29 @@ void ViewerWidget::onPlannerThreadPaused() {
   planner_panel_->setPauseContinueViewpointGraphEnabled(true);
   planner_panel_->setPauseContinueViewpointGraphText("Continue");
   planner_panel_->setPauseContinueViewpointPathEnabled(true);
+  planner_panel_->setPauseContinueViewpointMotionsText("Continue");
+  planner_panel_->setPauseContinueViewpointMotionsEnabled(true);
   planner_panel_->setPauseContinueViewpointPathText("Continue");
   planner_panel_->setResetViewpointsEnabled(true);
+  planner_panel_->setResetViewpointMotionsEnabled(true);
   planner_panel_->setResetViewpointPathEnabled(true);
 }
 
 void ViewerWidget::pauseContinueViewpointGraph() {
-  if (planner_thread_.operation() != ViewpointPlannerThread::Operation::VIEWPOINT_GRAPH) {
-    planner_thread_.setOperation(ViewpointPlannerThread::Operation::VIEWPOINT_GRAPH);
-  }
-  if (planner_thread_.isPaused()) {
-    continuePlannerThread();
-  }
-  else {
-    pausePlannerThread();
-  }
+  pauseContinueOperation(ViewpointPlannerThread::Operation::VIEWPOINT_GRAPH);
+}
+
+void ViewerWidget::pauseContinueViewpointMotions() {
+  pauseContinueOperation(ViewpointPlannerThread::Operation::VIEWPOINT_MOTIONS);
 }
 
 void ViewerWidget::pauseContinueViewpointPath() {
-  if (planner_thread_.operation() != ViewpointPlannerThread::Operation::VIEWPOINT_PATH) {
-    planner_thread_.setOperation(ViewpointPlannerThread::Operation::VIEWPOINT_PATH);
+  pauseContinueOperation(ViewpointPlannerThread::Operation::VIEWPOINT_PATH);
+}
+
+void ViewerWidget::pauseContinueOperation(ViewpointPlannerThread::Operation operation) {
+  if (planner_thread_.operation() != operation) {
+    planner_thread_.setOperation(operation);
   }
   if (planner_thread_.isPaused()) {
     continuePlannerThread();
@@ -714,16 +831,32 @@ void ViewerWidget::pauseContinueViewpointPath() {
 }
 
 void ViewerWidget::resetViewpoints() {
-  // TODO: Call asynchronously
+  // TODO: Call asynchronously?
   planner_->reset();
   planner_thread_.updateViewpoints();
   showViewpointGraph();
   showViewpointPath();
 }
 
+void ViewerWidget::resetViewpointMotions() {
+  // TODO: Call asynchronously?
+  planner_->resetViewpointMotions();
+}
+
 void ViewerWidget::resetViewpointPath() {
-  // TODO: Call asynchronously
-  planner_->resetViewpointPath();
+  // TODO: Call asynchronously?
+  planner_->resetViewpointPaths();
+  planner_thread_.updateViewpoints();
+  showViewpointGraph();
+  showViewpointPath();
+}
+
+void ViewerWidget::onSaveViewpointGraph(const std::string& filename) {
+  planner_->saveViewpointGraph(filename);
+}
+
+void ViewerWidget::onLoadViewpointGraph(const std::string& filename) {
+  planner_->loadViewpointGraph(filename);
   planner_thread_.updateViewpoints();
   showViewpointGraph();
   showViewpointPath();
@@ -737,13 +870,39 @@ void ViewerWidget::signalPlannerThreadPaused() {
   emit plannerThreadPaused();
 }
 
+void ViewerWidget::setUseFixedColors(bool use_fixed_colors) {
+  showViewpointGraph();
+  showViewpointPath();
+}
+
+void ViewerWidget::setAlphaParameter(double alpha) {
+  planner_thread_.setAlpha(alpha);
+}
+
+void ViewerWidget::setBetaParameter(double beta) {
+  planner_thread_.setBeta(beta);
+}
+
+void ViewerWidget::setMinInformationFilter(double min_information_filter) {
+  min_information_filter_ = (FloatType)min_information_filter;
+  showViewpointGraph();
+  showViewpointPath();
+}
+
+void ViewerWidget::setViewpointPathLineWidth(double line_width) {
+  viewpoint_path_line_width_ = (FloatType)line_width;
+  update();
+}
+
 void ViewerWidget::updateViewpoints() {
   showViewpointGraph();
   showViewpointPath();
 }
 
 ViewpointPlannerThread::ViewpointPlannerThread(ViewpointPlanner* planner, ViewerWidget* viewer_widget)
-: ait::PausableThread(), planner_(planner), viewer_widget_(viewer_widget), operation_(Operation::NOP) {
+: ait::PausableThread(), planner_(planner), viewer_widget_(viewer_widget),
+  operation_(Operation::NOP),
+  alpha_(0), beta_(0), viewpoint_path_branch_index_(0) {
   setPausedCallback([viewer_widget]() {
     viewer_widget->signalPlannerThreadPaused();
   });
@@ -760,9 +919,14 @@ ViewpointPlannerThread::Result ViewpointPlannerThread::runIteration() {
     viewer_widget_->signalViewpointsChanged();
     return Result::CONTINUE;
   }
+  else if (operation_ == VIEWPOINT_MOTIONS) {
+    planner_->computeViewpointMotions();
+    return Result::PAUSE;
+  }
   else if (operation_ == VIEWPOINT_PATH) {
     std::cout << "Running iterations of findNextViewpointPathEntry()" << std::endl;
-    bool result = planner_->findNextViewpointPathEntry();
+    // TODO: set parameter from widget
+    bool result = planner_->findNextViewpointPathEntries(alpha_, beta_);
     std::cout << "Result -> " << result << std::endl;
     updateViewpointsInternal();
     viewer_widget_->signalViewpointsChanged();
@@ -780,6 +944,7 @@ void ViewpointPlannerThread::updateViewpoints() {
 }
 
 void ViewpointPlannerThread::updateViewpointsInternal() {
+  std::lock_guard<std::mutex> lock(viewer_widget_->mutex_);
   // Copy viewpoint graph and path to local copy for visualization
   viewer_widget_->viewpoint_graph_copy_.clear();
   for (ViewpointPlanner::ViewpointEntryIndex viewpoint_index : planner_->getViewpointGraph()) {
@@ -788,10 +953,9 @@ void ViewpointPlannerThread::updateViewpointsInternal() {
         viewpoint_index, viewpoint_entry.viewpoint.pose(), viewpoint_entry.total_information));
   }
   viewer_widget_->viewpoint_path_copy_.clear();
-  for (const ViewpointPlanner::ViewpointPathEntry& path_entry : planner_->getViewpointPath()) {
+  for (const ViewpointPlanner::ViewpointPathEntry& path_entry : planner_->getViewpointPaths()[viewpoint_path_branch_index_].entries) {
     const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[path_entry.viewpoint_index];
     viewer_widget_->viewpoint_path_copy_.push_back(std::make_tuple(
-        path_entry.viewpoint_index, viewpoint_entry.viewpoint.pose(), path_entry.information));
-//    std::cout << "showing viewpoint entry " << path_entry.viewpoint_index << " with pose " << viewpoint_entry.viewpoint.pose() << std::endl;
+        path_entry.viewpoint_index, viewpoint_entry.viewpoint.pose(), path_entry.local_information));
   }
 }
