@@ -5,13 +5,15 @@
 //  Author: Benjamin Hepp
 //  Created on: Dec 24, 2016
 //==================================================
-
 #pragma once
 
 #include <vector>
 #include <unordered_map>
 #include <type_traits>
 #include <boost/iterator_adaptors.hpp>
+#include <boost/serialization/access.hpp>
+#include <boost/serialization/vector.hpp>
+#include <boost/serialization/unordered_map.hpp>
 #include <ait/common.h>
 #include <ait/eigen.h>
 
@@ -20,16 +22,25 @@ class Graph {
 public:
   using Node = NodeT;
   using WeightType = WeightT;
-  using Index = size_t;
+  using Index = std::size_t;
 
   struct NodeContainer {
-    using EdgeMap = std::unordered_map<Index, WeightT>;
+    using EdgeMap = std::unordered_map<Index, WeightType>;
     Node node;
     EdgeMap edges;
+
+  private:
+    // Boost serialization
+    friend class boost::serialization::access;
+
+    template <typename Archive>
+    void serialize(Archive& ar, const unsigned int version) {
+      ar & node;
+      ar & edges;
+    }
   };
+
   using NodeVector = std::vector<NodeContainer>;
-//  using IndicesVector = std::vector<Index>;
-//  using NodeMap = std::unordered_map<Index, NodeContainer>;
 
   template <typename ValueT, typename BaseIteratorT>
   class _Iterator : public boost::iterator_adaptor<
@@ -49,6 +60,7 @@ public:
 
   private:
     friend class boost::iterator_core_access;
+
     void increment() {
       ++this->base_reference();
     }
@@ -72,9 +84,6 @@ public:
       NodeContainer container;
       container.node = *it;
       nodes_.push_back(std::move(container));
-//      node_indices_.push_back(running_index_);
-//      node_map_.emplace(std::make_pair(running_index_, std::move(container)));
-//      ++running_index_;
     }
   }
 
@@ -109,18 +118,12 @@ public:
 
   void clear() {
     nodes_.clear();
-//    running_index_ = 0;
-//    node_indices_.clear();
-//    node_map_.clear();
   }
 
   void addNode(const Node& node) {
     NodeContainer container;
     container.node = node;
     nodes_.push_back(std::move(container));
-//    node_indices_.push_back(running_index_);
-//      node_map_.emplace(std::make_pair(running_index_, std::move(container)));
-//    ++running_index_;
   }
 
   void addNode(Node&& node) {
@@ -129,56 +132,61 @@ public:
     nodes_.push_back(std::move(container));
   }
 
-  Index numOfNodes() const {
+  void addEdge(Index idx1, Index idx2, WeightType weight) {
+    AIT_ASSERT_DBG(idx1 < size());
+    AIT_ASSERT_DBG(idx2 < size());
+    nodes_[idx1].edges.insert(std::make_pair(idx2, weight));
+  }
+
+  Index size() const {
     return nodes_.size();
   }
 
-//  Index numOfEdges() const {
-//    return edges_.size();
-//  }
-
   const Node& getNode(Index index) const {
-    AIT_ASSERT_DBG(index < numOfNodes());
+    AIT_ASSERT_DBG(index < size());
     return nodes_[index].node;
   }
-//  const EdgeType& getEdge(Index node_idx1, Index node_idx_2) const;
-//  const EdgeType& getEdge(Index edge_idx) const;
-//  Index getEdgeIndex(Index node_idx1, Index node_idx_2) const {
-//    return
-//  }
-
   bool isConnected(Index node_idx1, Index node_idx2) const {
-    AIT_ASSERT_DBG(node_idx1 < numOfNodes());
-    AIT_ASSERT_DBG(node_idx2 < numOfNodes());
+    AIT_ASSERT_DBG(node_idx1 < size());
+    AIT_ASSERT_DBG(node_idx2 < size());
     return nodes_[node_idx1].edges.count(node_idx2) > 0;
   }
 
-//  WeightT getWeight(Index edge_idx) const {
-//    return weights_(node_idx1, node_idx2);
-//  }
+  // TODO: Make extra structure with clean iterator?
+  typename NodeContainer::EdgeMap& getEdges(Index node_idx) {
+    AIT_ASSERT_DBG(node_idx < size());
+    return nodes_[node_idx].edges;
+  }
 
-  WeightT getWeight(Index node_idx1, Index node_idx2) const {
-    AIT_ASSERT_DBG(node_idx1 < numOfNodes());
-    AIT_ASSERT_DBG(node_idx2 < numOfNodes());
-    typename Node::EdgeMap::const_iterator it = nodes_[node_idx1].edges.find(node_idx2);
-    if (it != nodes_[node_idx1].cend()) {
+  // TODO: Make extra structure with clean iterator?
+  const typename NodeContainer::EdgeMap& getEdges(Index node_idx) const {
+    AIT_ASSERT_DBG(node_idx < size());
+//    std::cout << "nodes_[node_idx].node=" << nodes_[node_idx].node << std::endl;
+//    std::cout << "nodes_[node_idx].edges.size()=" << nodes_[node_idx].edges.size() << std::endl;
+    return nodes_[node_idx].edges;
+  }
+
+  WeightType getWeight(Index node_idx1, Index node_idx2) const {
+    AIT_ASSERT_DBG(node_idx1 < size());
+    AIT_ASSERT_DBG(node_idx2 < size());
+    const NodeContainer& node_container1 = nodes_[node_idx1];
+    typename NodeContainer::EdgeMap::const_iterator it = node_container1.edges.find(node_idx2);
+    if (it != node_container1.edges.cend()) {
       return it->second;
     }
     else {
-      return WeightT { 0 };
+      return WeightType { -1 };
     }
-  }
-
-  void setWeight(Index node_idx1, Index node_idx2, WeightT weight) {
-    AIT_ASSERT_DBG(node_idx1 < numOfNodes());
-    AIT_ASSERT_DBG(node_idx2 < numOfNodes());
-    nodes_[node_idx2].edges[node_idx1] = weight;
-    nodes_[node_idx1].edges[node_idx2] = weight;
   }
 
 private:
   NodeVector nodes_;
-//  Index running_index_;
-//  IndicesVector node_indices_;
-//  NodeMap node_map_;
+
+  // Boost serialization
+  friend class boost::serialization::access;
+
+  template <typename Archive>
+  void serialize(Archive& ar, const unsigned int version) {
+    ar & nodes_;
+  }
 };
