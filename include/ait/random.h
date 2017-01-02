@@ -112,6 +112,28 @@ public:
     vec->normalize();
   }
 
+  /// Sample from a discrete distribution with given cumulative probabilities (sorted in ascending order)
+  template <typename Iterator>
+  Iterator sampleDiscrete(Iterator first, Iterator last) {
+    FloatType u = sampleUniform();
+    Iterator it = std::upper_bound(first, last, u);
+    if (it == last) {
+      return last - 1;
+    }
+    return it;
+  }
+
+  /// Sample from a discrete distribution with given cumulative probabilities (sorted in ascending order)
+  template <typename Iterator, typename Compare>
+  Iterator sampleDiscrete(Iterator first, Iterator last, Compare comp) {
+    FloatType u = sampleUniform();
+    Iterator it = std::upper_bound(first, last, u, comp);
+    if (it == last) {
+      return last - 1;
+    }
+    return it;
+  }
+
 private:
   mutable RandomNumberGenerator rng_;
 

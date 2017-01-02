@@ -10,6 +10,8 @@
 #include <iostream>
 #include <ait/eigen.h>
 #include <ait/eigen_utils.h>
+#include <ait/eigen_serialization.h>
+#include <boost/serialization/access.hpp>
 
 namespace ait {
 
@@ -78,7 +80,7 @@ struct Pose {
     return pos_distance + rotation_factor * angular_distance;
   }
 
-  Vector3 getWorldPosition() const {
+  const Vector3& getWorldPosition() const {
     return translation_;
 //    return - (quaternion_.inverse() * translation_);
   }
@@ -111,6 +113,15 @@ struct Pose {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
 private:
+  // Boost serialization
+  friend class boost::serialization::access;
+
+  template <typename Archive>
+  void serialize(Archive& ar, const unsigned int version) {
+    ar & translation_;
+    ar & quaternion_;
+  }
+
   Vector3 translation_;
   Quaternion quaternion_;
 };

@@ -39,14 +39,16 @@
 #endif
 
 // Assertion macros
-#define AIT_ASSERT_STR(b, s) { if (!(b)) { ait::assertMessage(std::string(FUNCTION_LINE_STRING) + ": " + std::string(s)); } }
-#define AIT_ASSERT(b) { if (!(b)) { ait::assertMessage(FUNCTION_LINE_STRING); } }
-#if defined(DEBUG) || defined(_DEBUG)
-#define AIT_ASSERT_DBG_STR(b, s) { if (!(b)) { ait::assertMessage(std::string(FUNCTION_LINE_STRING) + ": " + std::string(s)); } }
-#define AIT_ASSERT_DBG(b) { if (!(b)) { ait::assertMessage(FUNCTION_LINE_STRING); } }
-#else
-#define AIT_ASSERT_DBG_STR(b, s)
-#define AIT_ASSERT_DBG(b)
+#if !AIT_NO_ASSERT
+  #define AIT_ASSERT_STR(b, s) { if (!(b)) { ait::assertMessage(std::string(FUNCTION_LINE_STRING) + ": " + std::string(s)); } }
+  #define AIT_ASSERT(b) { if (!(b)) { ait::assertMessage(FUNCTION_LINE_STRING); } }
+  #if defined(DEBUG) || defined(_DEBUG)
+    #define AIT_ASSERT_DBG_STR(b, s) { if (!(b)) { ait::assertMessage(std::string(FUNCTION_LINE_STRING) + ": " + std::string(s)); } }
+    #define AIT_ASSERT_DBG(b) { if (!(b)) { ait::assertMessage(FUNCTION_LINE_STRING); } }
+  #else
+    #define AIT_ASSERT_DBG_STR(b, s)
+    #define AIT_ASSERT_DBG(b)
+  #endif
 #endif
 
 // Safe delete and free macros

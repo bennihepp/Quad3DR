@@ -18,8 +18,29 @@ namespace ait {
     using Mat3f = Eigen::Matrix<float, 3, 3>;
     using Mat3d = Eigen::Matrix<double, 3, 3>;
 
-    template <typename FloatType>
-    bool isApproxEqual(FloatType a, FloatType b, FloatType tolerance) {
+    template <typename FloatType1, typename FloatType2, typename FloatType3>
+    bool isApproxEqual(FloatType1 a, FloatType2 b, FloatType3 tolerance) {
       return std::abs(a - b) <= tolerance;
     }
+
+    template <typename FloatType1, typename FloatType2, typename FloatType3>
+    bool isApproxGreater(FloatType1 a, FloatType2 b, FloatType3 tolerance) {
+      return a + tolerance > b;
+    }
+
+    template <typename FloatType1, typename FloatType2, typename FloatType3>
+    bool isApproxGreaterEqual(FloatType1 a, FloatType2 b, FloatType3 tolerance) {
+      return a + tolerance >= b;
+    }
+
+    template <typename FloatType1, typename FloatType2, typename FloatType3>
+    bool isApproxSmaller(FloatType1 a, FloatType2 b, FloatType3 tolerance) {
+      return a - tolerance < b;
+    }
+
+    template <typename FloatType1, typename FloatType2, typename FloatType3>
+    bool isApproxSmallerEqual(FloatType1 a, FloatType2 b, FloatType3 tolerance) {
+      return a - tolerance <= b;
+    }
+
 }

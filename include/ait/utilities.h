@@ -20,9 +20,49 @@
 
 namespace ait {
 
+/// Normalize value between 0 and 1 based on min and max
+template <typename T>
+T normalize(const T& value, const T& min, const T& max) {
+  return (value - min) / (max - min);
+}
+
+/// Class to track min and max values of data
+template <typename T>
+class MinMaxTracker {
+public:
+  MinMaxTracker()
+  : min_(std::numeric_limits<T>::max()),
+    max_(std::numeric_limits<T>::lowest()) {}
+
+  void update(const T& value) {
+    min_ = std::min(value, min_);
+    max_ = std::max(value, max_);
+  }
+
+  const T& minimum() const {
+    return min_;
+  }
+
+  const T& maximum() const {
+    return max_;
+  }
+
+  T range() const {
+    return max_ - min_;
+  }
+
+  T normalize(const T& value) const {
+    return (value - minimum()) / range();
+  }
+
+private:
+  T min_;
+  T max_;
+};
+
 /// Clamp a value between min and max
 template <typename T>
-T clamp(const T& value, const T& min, const T& max) {
+T clamp(const T& value, const T& min = 0, const T& max = 1) {
     return std::max(std::min(value, max), min);
 }
 

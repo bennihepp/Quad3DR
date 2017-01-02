@@ -13,6 +13,18 @@
 namespace ait
 {
 
+template <typename Derived>
+typename Derived::PlainObject clamp(
+    const Eigen::MatrixBase<Derived>& matrix,
+const typename Derived::Scalar min = 0,
+const typename Derived::Scalar max = 1) {
+  typename Derived::PlainObject min_matrix = typename Derived::PlainObject::Constant(min);
+  typename Derived::PlainObject max_matrix = typename Derived::PlainObject::Constant(max);
+  typename Derived::PlainObject clamped_matrix = matrix.array().min(min_matrix.array());
+  clamped_matrix = clamped_matrix.array().max(max_matrix.array());
+  return clamped_matrix;
+}
+
 template <typename Derived1, typename Derived2>
 inline std::tuple<typename Derived1::Scalar, typename Derived1::PlainObject> computeDistanceAndDirection(
     const Eigen::MatrixBase<Derived1>& from, const Eigen::MatrixBase<Derived2>& to) {

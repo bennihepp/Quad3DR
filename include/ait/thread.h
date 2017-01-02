@@ -143,12 +143,17 @@ public:
   enum Result {
     CONTINUE,
     STOP,
+    PAUSE,
   };
 
   PausableThread(bool start_paused = false)
-  : paused_(start_paused) {}
+  : paused_(start_paused), verbose_(false) {}
 
   ~PausableThread() override {}
+
+  void setVerbose(bool verbose) {
+    verbose_ = verbose;
+  }
 
   void setPausedCallback(std::function<void()> paused_callback) {
     paused_callback_ = paused_callback;
@@ -188,10 +193,18 @@ protected:
       waitIfPaused();
       // Stop could have been signaled while waiting for condition
       if (shouldStop()) {
-        std::cout << "Stopping thread" << std::endl;
+        if (verbose_) {
+          std::cout << "Stopping thread" << std::endl;
+        }
         break;
       }
-      result = runIteration();
+      Result iteration_result = runIteration();
+      if (iteration_result == PAUSE) {
+        paused_ = true;
+      }
+      else {
+        result = iteration_result;
+      }
     }
   }
 
@@ -208,10 +221,13 @@ protected:
       if (paused_callback_) {
         paused_callback_();
       }
-      std::cout << "Pausing thread and waiting for condition" << std::endl;
+      if (verbose_) {
+        std::cout << "Pausing thread and waiting for condition" << std::endl;
+      }
       waitForContinue();
-      std::cout << "Thread was woken up" << std::endl;
-      std::cout << "shouldStop()=" << shouldStop() << std::endl;
+      if (verbose_) {
+        std::cout << "Thread was woken up" << std::endl;
+      }
     }
   }
 
@@ -227,6 +243,7 @@ private:
   std::condition_variable pause_cond_;
   std::atomic<bool> paused_;
   std::function<void()> paused_callback_;
+  bool verbose_;
 };
 
 }
