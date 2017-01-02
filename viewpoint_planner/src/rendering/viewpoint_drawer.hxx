@@ -16,24 +16,11 @@
 
 template <typename FloatType>
 ViewpointDrawer<FloatType>::ViewpointDrawer()
-: camera_size_(0.5f), draw_cameras_(true) {
-  // Default red color
-  color_ = Vector4(0.0f, 0.1f, 0.8f, 0.6f);
-}
+: camera_size_(0.5f), draw_cameras_(true) {}
 
 template <typename FloatType>
 ViewpointDrawer<FloatType>::~ViewpointDrawer() {
   clear();
-}
-
-template <typename FloatType>
-void ViewpointDrawer<FloatType>::setColor(const Vector4& color) {
-  color_ = color;
-}
-
-template <typename FloatType>
-void ViewpointDrawer<FloatType>::setColor(FloatType r, FloatType g, FloatType b, FloatType a) {
-  color_ << r, g, b, a;
 }
 
 template <typename FloatType>
@@ -44,7 +31,40 @@ void ViewpointDrawer<FloatType>::setCamera(const reconstruction::PinholeCamera& 
 template <typename FloatType>
 void ViewpointDrawer<FloatType>::setViewpoints(const std::vector<ait::Pose<FloatType>>& poses) {
   poses_ = poses;
+  setColor(1, 0, 0, 0);
   upload();
+}
+
+template <typename FloatType>
+void ViewpointDrawer<FloatType>::setViewpoints(const std::vector<ait::Pose<FloatType>>& poses, const Color4& color) {
+  poses_ = poses;
+  setColor(color);
+  upload();
+}
+
+template <typename FloatType>
+void ViewpointDrawer<FloatType>::setViewpoints(const std::vector<ait::Pose<FloatType>>& poses, const std::vector<Color4>& colors) {
+  poses_ = poses;
+  setColors(colors);
+  upload();
+}
+
+template <typename FloatType>
+void ViewpointDrawer<FloatType>::setColor(FloatType r, FloatType g, FloatType b, FloatType a) {
+  Color4 color;
+  color << r, g, b, a;
+  setColor(color);
+}
+
+template <typename FloatType>
+void ViewpointDrawer<FloatType>::setColor(const Color4& color) {
+  colors_.resize(poses_.size(), color);
+}
+
+template <typename FloatType>
+void ViewpointDrawer<FloatType>::setColors(const std::vector<Color4>& colors) {
+  AIT_ASSERT(colors.size() == poses_.size());
+  colors_ = colors;
 }
 
 template <typename FloatType>
@@ -72,6 +92,8 @@ template <typename FloatType>
 void ViewpointDrawer<FloatType>::clear() {
   camera_triangle_drawer_.clear();
   camera_line_drawer_.clear();
+  poses_.clear();
+  colors_.clear();
 }
 
 template <typename FloatType>
@@ -99,16 +121,18 @@ void ViewpointDrawer<FloatType>::uploadCameraData() {
   if (!camera_.isValid()) {
     return;
   }
-  std::cout << "intrinsics: " << camera_.intrinsics() << std::endl;
+//  std::cout << "intrinsics: " << camera_.intrinsics() << std::endl;
   std::vector<OGLTriangleData> triangle_data;
   triangle_data.reserve(2 * poses_.size());
   std::vector<OGLLineData> line_data;
   line_data.reserve(8 * poses_.size());
 
-  for (const ait::Pose<FloatType>& pose : poses_) {
+  for (auto it = poses_.cbegin(); it != poses_.cend(); ++it) {
+    const Pose& pose = *it;
+    const Color4& color = colors_[it - poses_.cbegin()];
     std::array<OGLLineData, 8> lines;
     std::array<OGLTriangleData, 2> triangles;
-    generateImageModel(camera_, pose, camera_size_, color_, lines, triangles);
+    generateImageModel(camera_, pose, camera_size_, color, lines, triangles);
 
     for (const OGLLineData& line : lines) {
       line_data.push_back(line);
@@ -125,7 +149,7 @@ void ViewpointDrawer<FloatType>::uploadCameraData() {
 template <typename FloatType>
 void ViewpointDrawer<FloatType>::generateImageModel(
     const reconstruction::PinholeCamera& camera, const ait::Pose<FloatType>& pose,
-    const FloatType camera_size, const Vector4& color,
+    const FloatType camera_size, const Color4& color,
     std::array<OGLLineData, 8>& lines, std::array<OGLTriangleData, 2>& triangles) {
   // Generate camera frustum in OpenGL coordinates
   const FloatType image_width = camera_size * camera.width() / 1024.0f;
@@ -158,10 +182,10 @@ void ViewpointDrawer<FloatType>::generateImageModel(
 //        std::cout << "br=" << br << std::endl;
 //        std::cout << "bl=" << bl << std::endl;
 
-  const FloatType r = color(0);
-  const FloatType g = color(1);
-  const FloatType b = color(2);
-  const FloatType a = color(3);
+  const FloatType r = color.r();
+  const FloatType g = color.g();
+  const FloatType b = color.b();
+  const FloatType a = color.a();
 
   // Lines from sensor corners to projection center
   lines[0].vertex1 = OGLVertexDataRGBA(pc(0), pc(1), pc(2), 0.8f * r, g, b, 1);
