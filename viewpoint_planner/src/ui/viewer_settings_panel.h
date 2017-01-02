@@ -15,8 +15,7 @@
 
 #define _TREE_MAX_DEPTH 20
 
-class ViewerSettingsPanel : public QWidget
-{
+class ViewerSettingsPanel : public QWidget {
     Q_OBJECT
 
     using ImageId = reconstruction::ImageId;
@@ -56,8 +55,8 @@ public:
 
     void selectOccupancyBinThreshold(double occupancy_threshold) {
       double min_dist = std::numeric_limits<double>::infinity();
-      size_t min_index = 0;
-      for (size_t i = 0; i < static_cast<size_t>(ui.occupancyBinThreshold->count()); ++i) {
+      std::size_t min_index = 0;
+      for (std::size_t i = 0; i < static_cast<std::size_t>(ui.occupancyBinThreshold->count()); ++i) {
         double oc = ui.occupancyBinThreshold->itemData(i).toDouble();
         double dist = std::abs(occupancy_threshold - oc);
         if (dist < min_dist) {
@@ -88,7 +87,7 @@ public:
     }
 
     void selectColorFlags(const uint32_t color_flags) {
-      for (size_t i = 0; i < static_cast<size_t>(ui.colorFlags->count()); ++i) {
+      for (std::size_t i = 0; i < static_cast<std::size_t>(ui.colorFlags->count()); ++i) {
         uint32_t entry_flags = ui.colorFlags->itemData(i).toUInt();
         if (color_flags == entry_flags) {
           ui.colorFlags->setCurrentIndex(i);
@@ -128,19 +127,19 @@ public:
       ui.maxOccupancy->setValue(max_occupancy);
     }
 
-    size_t getMinObservations() const {
-      return static_cast<size_t>(ui.minObservations->value());
+    std::size_t getMinObservations() const {
+      return static_cast<std::size_t>(ui.minObservations->value());
     }
 
-    void setMinObservations(size_t min_observations) {
+    void setMinObservations(std::size_t min_observations) {
       ui.minObservations->setValue(static_cast<int>(min_observations));
     }
 
-    size_t getMaxObservations() const {
-      return static_cast<size_t>(ui.maxObservations->value());
+    std::size_t getMaxObservations() const {
+      return static_cast<std::size_t>(ui.maxObservations->value());
     }
 
-    void setMaxObservations(size_t max_observations) {
+    void setMaxObservations(std::size_t max_observations) {
       ui.maxObservations->setValue(static_cast<int>(max_observations));
     }
 
@@ -176,19 +175,19 @@ public:
       ui.maxWeight->setValue(max_weight);
     }
 
-    size_t getRenderTreeDepth() const {
+    std::size_t getRenderTreeDepth() const {
       return ui.renderTreeDepth->value();
     }
 
-    void setRenderTreeDepth(size_t tree_depth) {
+    void setRenderTreeDepth(std::size_t tree_depth) {
       ui.renderTreeDepth->setValue(tree_depth);
     }
 
-    size_t getRenderObservationThreshold() const {
+    std::size_t getRenderObservationThreshold() const {
       return ui.renderObservationThreshold->value();
     }
 
-    void setRenderObservationThreshold(size_t observation_threshold) {
+    void setRenderObservationThreshold(std::size_t observation_threshold) {
       ui.renderObservationThreshold->setValue(observation_threshold);
     }
 
@@ -300,11 +299,11 @@ protected slots:
     }
 
     void setRenderTreeDepthInternal(int render_tree_depth) {
-        emit renderTreeDepthChanged(static_cast<size_t>(render_tree_depth));
+        emit renderTreeDepthChanged(static_cast<std::size_t>(render_tree_depth));
     }
 
     void setRenderObservationThresholdInternal(int observation_threshold) {
-      emit renderObservationThresholdChanged(static_cast<size_t>(observation_threshold));
+      emit renderObservationThresholdChanged(static_cast<std::size_t>(observation_threshold));
     }
 
 signals:
@@ -330,8 +329,8 @@ signals:
   void maxVoxelSizeChanged(double max_voxel_size);
   void minWeightChanged(double min_weight);
   void maxWeightChanged(double max_weight);
-  void renderTreeDepthChanged(size_t render_tree_depth);
-  void renderObservationThresholdChanged(size_t render_tree_depth);
+  void renderTreeDepthChanged(std::size_t render_tree_depth);
+  void renderObservationThresholdChanged(std::size_t render_tree_depth);
 
 
 private:
