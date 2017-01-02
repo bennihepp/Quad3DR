@@ -64,10 +64,6 @@ public:
     beta_ = beta;
   }
 
-  void setViewpointPathBranchIndex(std::size_t viewpoint_path_branch_index) {
-    viewpoint_path_branch_index_ = viewpoint_path_branch_index;
-  }
-
   void setOperation(Operation operation) {
     operation_ = operation;
   }
@@ -241,5 +237,6 @@ private:
     ViewpointPlannerThread planner_thread_;
     std::vector<std::tuple<ViewpointPlanner::ViewpointEntryIndex, Pose, FloatType>> viewpoint_graph_copy_;
     std::vector<std::tuple<ViewpointPlanner::ViewpointEntryIndex, Pose, FloatType>> viewpoint_path_copy_;
+    std::size_t viewpoint_path_branch_index_;
 
 };

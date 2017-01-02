@@ -30,7 +30,7 @@
      <rect>
       <x>0</x>
       <y>30</y>
-      <width>361</width>
+      <width>369</width>
       <height>891</height>
      </rect>
     </property>
@@ -190,28 +190,28 @@
        </property>
       </widget>
      </item>
-     <item row="21" column="0">
+     <item row="22" column="0">
       <widget class="QLabel" name="label_9">
        <property name="text">
         <string>Alpha</string>
        </property>
       </widget>
      </item>
-     <item row="22" column="0">
+     <item row="23" column="0">
       <widget class="QLabel" name="label_10">
        <property name="text">
         <string>Beta</string>
        </property>
       </widget>
      </item>
-     <item row="24" column="0">
+     <item row="25" column="0">
       <widget class="QLabel" name="label_11">
        <property name="text">
         <string>MinInformation</string>
        </property>
       </widget>
      </item>
-     <item row="23" column="0">
+     <item row="24" column="0">
       <widget class="QLabel" name="label_12">
        <property name="font">
         <font>
@@ -224,18 +224,11 @@
        </property>
       </widget>
      </item>
-     <item row="21" column="1">
-      <widget class="QDoubleSpinBox" name="alphaParameter">
-       <property name="maximum">
-        <double>9999999.000000000000000</double>
-       </property>
-       <property name="singleStep">
-        <double>0.100000000000000</double>
-       </property>
-      </widget>
-     </item>
      <item row="22" column="1">
-      <widget class="QDoubleSpinBox" name="betaParameter">
+      <widget class="QDoubleSpinBox" name="alphaParameter">
+       <property name="minimum">
+        <double>-9999999.000000000000000</double>
+       </property>
        <property name="maximum">
         <double>9999999.000000000000000</double>
        </property>
@@ -244,7 +237,20 @@
        </property>
       </widget>
      </item>
-     <item row="24" column="1">
+     <item row="23" column="1">
+      <widget class="QDoubleSpinBox" name="betaParameter">
+       <property name="minimum">
+        <double>-9999999.000000000000000</double>
+       </property>
+       <property name="maximum">
+        <double>9999999.000000000000000</double>
+       </property>
+       <property name="singleStep">
+        <double>0.100000000000000</double>
+       </property>
+      </widget>
+     </item>
+     <item row="25" column="1">
       <widget class="QDoubleSpinBox" name="minInformationFilter">
        <property name="maximum">
         <double>9999999999.000000000000000</double>
@@ -254,7 +260,7 @@
        </property>
       </widget>
      </item>
-     <item row="20" column="0">
+     <item row="21" column="0">
       <widget class="QLabel" name="label_13">
        <property name="font">
         <font>
@@ -277,14 +283,14 @@
        </property>
       </widget>
      </item>
-     <item row="25" column="0">
+     <item row="26" column="0">
       <widget class="QLabel" name="label_14">
        <property name="text">
         <string>PathLineWidth</string>
        </property>
       </widget>
      </item>
-     <item row="25" column="1">
+     <item row="26" column="1">
       <widget class="QDoubleSpinBox" name="viewpointPathLineWidth">
        <property name="singleStep">
         <double>0.100000000000000</double>
@@ -315,6 +321,13 @@
       <widget class="QPushButton" name="resetViewpointMotions">
        <property name="text">
         <string>Reset motions</string>
+       </property>
+      </widget>
+     </item>
+     <item row="20" column="0">
+      <widget class="QCheckBox" name="showIncrementalVoxelSet">
+       <property name="text">
+        <string>ShowIncrementalVoxels</string>
        </property>
       </widget>
      </item>

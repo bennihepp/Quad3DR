@@ -138,6 +138,10 @@ public:
     return ui.useFixedColors->isChecked();
   }
 
+  bool isShowIncrementalVoxelSetChecked() const {
+    return ui.showIncrementalVoxelSet->isChecked();
+  }
+
   double getAlphaParameter() const {
     return ui.alphaParameter->value();
   }

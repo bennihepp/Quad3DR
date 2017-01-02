@@ -49,7 +49,8 @@ ViewerWidget::ViewerWidget(const QGLFormat& format, ViewpointPlanner* planner, V
       display_axes_(true), aspect_ratio_(-1),
       viewpoint_path_line_width_(5),
       min_information_filter_(0),
-      planner_thread_(planner, this) {
+      planner_thread_(planner, this),
+      viewpoint_path_branch_index_(0) {
     QSizePolicy policy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     policy.setHeightForWidth(true);
     setSizePolicy(policy);
@@ -288,9 +289,10 @@ void ViewerWidget::showViewpointGraph() {
   ait::MinMaxTracker<FloatType> min_max;
   for (const auto& entry : viewpoint_graph_copy_) {
     FloatType total_information = std::get<2>(entry);
-    if (total_information < min_information_filter_) {
-      continue;
-    }
+    // TODO: Consider filtered viewpoints in min-max computation
+//    if (total_information < min_information_filter_) {
+//      continue;
+//    }
     const Pose& pose = std::get<1>(entry);
     poses.push_back(pose);
     min_max.update(total_information);
@@ -599,7 +601,7 @@ void ViewerWidget::setImagePoseIndex(ImageId image_id) {
 
 void ViewerWidget::setViewpointPathBranchSelectionIndex(std::size_t index) {
   std::unique_lock<std::mutex> lock(mutex_);
-  planner_thread_.setViewpointPathBranchIndex(index);
+  viewpoint_path_branch_index_ = index;
   std::cout << "Selected viewpoint path " << index << std::endl;
   std::cout << "  accumulated information=" << planner_->getViewpointPaths()[index].acc_information << std::endl;
   std::cout << "  accumulated motion distance=" << planner_->getViewpointPaths()[index].acc_motion_distance << std::endl;
@@ -611,6 +613,8 @@ void ViewerWidget::setViewpointPathBranchSelectionIndex(std::size_t index) {
   planner_panel_->setViewpointPathBranchSelection(index);
 }
 
+#pragma GCC push_options
+#pragma GCC optimize ("O0")
 void ViewerWidget::setViewpointPathSelectionIndex(std::size_t index) {
   std::lock_guard<std::mutex> lock(mutex_);
   //  const Pose& pose = std::get<1>(viewpoint_path_copy_[index]);
@@ -618,9 +622,25 @@ void ViewerWidget::setViewpointPathSelectionIndex(std::size_t index) {
   std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
   const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[viewpoint_index];
   setCameraPose(viewpoint_entry.viewpoint.pose());
-  octree_drawer_.updateRaycastVoxels(viewpoint_entry.voxel_set);
+  if (planner_panel_->isShowIncrementalVoxelSetChecked()) {
+    const ViewpointPlanner::ViewpointPath& viewpoint_path = planner_->getViewpointPaths()[viewpoint_path_branch_index_];
+    ViewpointPlanner::ViewpointEntryIndex viewpoint_index = viewpoint_path.entries[index].viewpoint_index;
+    ViewpointPlanner::VoxelWithInformationSet voxel_set = planner_->getViewpointEntries()[viewpoint_index].voxel_set;
+    for (std::size_t i = 0; i < index; ++i) {
+      ViewpointPlanner::ViewpointEntryIndex other_viewpoint_index = viewpoint_path.entries[i].viewpoint_index;
+      const ViewpointPlanner::VoxelWithInformationSet& other_voxel_set = planner_->getViewpointEntries()[other_viewpoint_index].voxel_set;
+      for (const ViewpointPlanner::VoxelWithInformation& voxel_with_information : other_voxel_set) {
+        voxel_set.erase(voxel_with_information);
+      }
+    }
+    octree_drawer_.updateRaycastVoxels(voxel_set);
+  }
+  else {
+    octree_drawer_.updateRaycastVoxels(viewpoint_entry.voxel_set);
+  }
   update();
 }
+#pragma GCC pop_options
 
 void ViewerWidget::setViewpointGraphSelectionIndex(std::size_t index) {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -953,7 +973,8 @@ void ViewpointPlannerThread::updateViewpointsInternal() {
         viewpoint_index, viewpoint_entry.viewpoint.pose(), viewpoint_entry.total_information));
   }
   viewer_widget_->viewpoint_path_copy_.clear();
-  for (const ViewpointPlanner::ViewpointPathEntry& path_entry : planner_->getViewpointPaths()[viewpoint_path_branch_index_].entries) {
+  const std::size_t path_index = viewer_widget_->viewpoint_path_branch_index_;
+  for (const ViewpointPlanner::ViewpointPathEntry& path_entry : planner_->getViewpointPaths()[path_index].entries) {
     const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[path_entry.viewpoint_index];
     viewer_widget_->viewpoint_path_copy_.push_back(std::make_tuple(
         path_entry.viewpoint_index, viewpoint_entry.viewpoint.pose(), path_entry.local_information));
