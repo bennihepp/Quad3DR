@@ -633,28 +633,34 @@ void ViewpointPlanner::computeViewpointMotions() {
 
   std::cout << "Densifying edges on viewpoint graph" << std::endl;
   // Densify viewpoint motions
-  std::stack<std::tuple<ViewpointEntryIndex, FloatType, std::size_t>> node_stack;
-  for (const ViewpointEntryIndex index : viewpoint_graph_) {
-    node_stack.push(std::make_tuple(index, 0, 0));
-  }
   std::vector<std::tuple<ViewpointEntryIndex, ViewpointEntryIndex, FloatType>> new_edges;
-  while (!node_stack.empty()) {
-    ViewpointEntryIndex index = std::get<0>(node_stack.top());
-    FloatType acc_motion_distance = std::get<1>(node_stack.top());
-    std::size_t depth = std::get<2>(node_stack.top());
-    node_stack.pop();
-    if (depth >= options_.viewpoint_motion_densification_max_depth) {
-      continue;
-    }
-    for (const auto& edge : viewpoint_graph_.getEdges(index)) {
-      ViewpointEntryIndex other_index = edge.first;
-      FloatType motion_distance = edge.second;
-      node_stack.push(std::make_tuple(other_index, acc_motion_distance + motion_distance, depth + 1));
-      if (depth >= 2) {
-        new_edges.push_back(std::make_tuple(index, other_index, acc_motion_distance + motion_distance));
+  for (const ViewpointEntryIndex index : viewpoint_graph_) {
+    std::stack<std::tuple<ViewpointEntryIndex, FloatType, std::size_t>> node_stack;
+    std::unordered_set<ViewpointEntryIndex> visited_set;
+    node_stack.push(std::make_tuple(index, 0, 0));
+    while (!node_stack.empty()) {
+      ViewpointEntryIndex index = std::get<0>(node_stack.top());
+      FloatType acc_motion_distance = std::get<1>(node_stack.top());
+      std::size_t depth = std::get<2>(node_stack.top());
+      node_stack.pop();
+      if (visited_set.count(index) > 0) {
+        continue;
+      }
+      visited_set.emplace(index);
+      if (depth >= options_.viewpoint_motion_densification_max_depth) {
+        continue;
+      }
+      for (const auto& edge : viewpoint_graph_.getEdges(index)) {
+        ViewpointEntryIndex other_index = edge.first;
+        FloatType motion_distance = edge.second;
+        node_stack.push(std::make_tuple(other_index, acc_motion_distance + motion_distance, depth + 1));
+        if (depth >= 2) {
+          new_edges.push_back(std::make_tuple(index, other_index, acc_motion_distance + motion_distance));
+        }
       }
     }
   }
+  std::cout << "Adding " << new_edges.size() << " edges to the viewpoint graph" << std::endl;
   for (const auto& tuple : new_edges) {
     viewpoint_graph_.addEdge(std::get<0>(tuple), std::get<1>(tuple), std::get<2>(tuple));
   }
