@@ -10,6 +10,7 @@
 #include <iostream>
 #include <algorithm>
 #include <utility>
+#include <boost/iterator_adaptors.hpp>
 #include <ait/common.h>
 #include <ait/eigen.h>
 #include <ait/utilities.h>
@@ -390,6 +391,52 @@ public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   };
 
+  template <typename ValueT>
+  class _Iterator : public boost::iterator_facade<
+    _Iterator<ValueT>,
+    ValueT,
+    boost::forward_traversal_tag> {
+  public:
+    _Iterator() {}
+
+    _Iterator(ValueT* node) {
+      node_stack_.push(node);
+    }
+
+    // Construct from convertible iterator (i.e. const to non-const)
+    template <typename OtherIteratorT,
+        typename std::enable_if<std::is_convertible<_Iterator, OtherIteratorT>::value, int>::type = 0>
+    _Iterator(OtherIteratorT other_it)
+    : node_stack_(other_it.node_stack_) {}
+
+  private:
+    friend class boost::iterator_core_access;
+
+    void increment() {
+      ValueT* node = node_stack_.top();
+      node_stack_.pop();
+      if (node->hasLeftChild()) {
+        node_stack_.push(node->getLeftChild());
+      }
+      if (node->hasRightChild()) {
+        node_stack_.push(node->getRightChild());
+      }
+    }
+
+    bool equal(const _Iterator& other_it) const {
+      return node_stack_ == other_it.node_stack_;
+    }
+
+    ValueT& dereference() const {
+      return *node_stack_.top();
+    }
+
+    std::stack<ValueT*> node_stack_;
+  };
+
+  using Iterator = _Iterator<NodeType>;
+  using ConstIterator = _Iterator<const NodeType>;
+
   Tree()
   : root_(nullptr), stored_as_vector_(false), owns_objects_(false), depth_(0), num_nodes_(0), num_leaf_nodes_(0) {}
 
@@ -400,6 +447,30 @@ public:
 
   ~Tree() {
     clear();
+  }
+
+  Iterator begin() {
+    return Iterator(getRoot());
+  }
+
+  ConstIterator begin() const {
+    return ConstIterator(getRoot());
+  }
+
+  ConstIterator cbegin() {
+    return ConstIterator(getRoot());
+  }
+
+  Iterator end() {
+    return Iterator();
+  }
+
+  ConstIterator end() const {
+    return ConstIterator();
+  }
+
+  ConstIterator cend() {
+    return ConstIterator();
   }
 
   void clear() {
@@ -457,6 +528,7 @@ public:
     printInfo();
   }
 
+  // Cannot be const because BBoxIntersectionResult contains a non-const pointer to a node
   std::pair<bool, IntersectionResult> intersects(const Ray& ray, FloatType min_range = 0, FloatType max_range = -1) {
     IntersectionData data;
     data.ray.origin = ray.origin;
@@ -474,6 +546,7 @@ public:
     return std::make_pair(does_intersect, result);
   }
 
+  // Cannot be const because BBoxIntersectionResult contains a non-const pointer to a node
   std::vector<BBoxIntersectionResult> intersects(const BoundingBoxType& bbox) {
     std::vector<BBoxIntersectionResult> results;
     intersectsRecursive(bbox, getRoot(), 0, &results);
