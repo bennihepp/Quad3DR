@@ -613,8 +613,6 @@ void ViewerWidget::setViewpointPathBranchSelectionIndex(std::size_t index) {
   planner_panel_->setViewpointPathBranchSelection(index);
 }
 
-#pragma GCC push_options
-#pragma GCC optimize ("O0")
 void ViewerWidget::setViewpointPathSelectionIndex(std::size_t index) {
   std::lock_guard<std::mutex> lock(mutex_);
   //  const Pose& pose = std::get<1>(viewpoint_path_copy_[index]);
@@ -640,7 +638,6 @@ void ViewerWidget::setViewpointPathSelectionIndex(std::size_t index) {
   }
   update();
 }
-#pragma GCC pop_options
 
 void ViewerWidget::setViewpointGraphSelectionIndex(std::size_t index) {
   std::lock_guard<std::mutex> lock(mutex_);
