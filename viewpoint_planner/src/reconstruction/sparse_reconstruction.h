@@ -9,6 +9,7 @@
 
 #include <unordered_map>
 #include <ait/eigen.h>
+#include <ait/eigen_serialization.h>
 #include <ait/pose.h>
 
 // Representations for a sparse reconstruction from Colmap.
@@ -83,6 +84,16 @@ public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
 private:
+  // Boost serialization
+  friend class boost::serialization::access;
+
+  template <typename Archive>
+  void serialize(Archive& ar, const unsigned int version) {
+    ar & width_;
+    ar & height_;
+    ar & intrinsics_;
+  }
+
   size_t width_;
   size_t height_;
   CameraMatrix intrinsics_;
