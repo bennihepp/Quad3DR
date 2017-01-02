@@ -6,6 +6,7 @@
  */
 #pragma once
 
+#include <algorithm>
 #include <flann/flann.hpp>
 #include <ait/common.h>
 #include <ait/eigen.h>
@@ -93,7 +94,7 @@ public:
       return;
     }
     FlannElementType* point_ptr = addPointInternal(point);
-    FlannMatrix flann_point(point_ptr, 1, point.cols());
+    FlannMatrix flann_point(point_ptr, 1, dimension);
     index_.addPoints(flann_point, (float)rebuild_threshold);
   }
 
@@ -165,6 +166,70 @@ public:
     return knnSearch(points, knn);
   }
 
+  void radiusSearch(const Point& point, FloatType radius, std::size_t max_results,
+      std::vector<IndexType>* indices, std::vector<DistanceType>* distances) {
+    // FLANN is not supposed to modify the values
+    Point& point_nonconst = const_cast<Point&>(point);
+    FlannMatrix flann_query(point_nonconst.data(), 1, point_nonconst.rows());
+    indices->resize(max_results);
+    distances->resize(max_results);
+    FlannIndexMatrix flann_indices(indices->data(), 1, max_results);
+    FlannMatrix flann_distances(distances->data(), 1, max_results);
+    int count = index_.radiusSearch(flann_query, flann_indices, flann_distances, static_cast<float>(radius), search_params_);
+    indices->resize(count);
+    distances->resize(count);
+  }
+
+  /// Only for testing against knnSearch
+  void knnSearchExact(const Point& point, std::size_t knn, std::vector<IndexType>* indices, std::vector<DistanceType>* distances) {
+    using std::swap;
+    knn = std::min(knn, numPointsInternal());
+    indices->resize(knn);
+    distances->resize(knn);
+    for (std::size_t i = 0; i < knn; ++i) {
+      (*indices)[i] = static_cast<IndexType>(-1);
+      (*distances)[i] = std::numeric_limits<DistanceType>::max();
+    }
+    for (std::size_t i = 0; i < init_points_.size(); i += dimension) {
+      const FlannElementType* flann_point = &init_points_[i];
+      FloatType dist_square = 0;
+      for (std::size_t col = 0; col < dimension; ++col) {
+        FloatType d = point(col) - static_cast<FloatType>(flann_point[col]);
+        dist_square += d * d;
+      }
+      if (dist_square < (*distances)[distances->size() - 1]) {
+        (*distances)[distances->size() - 1] = dist_square;
+        (*indices)[distances->size() - 1] = i / 3;
+      }
+      // Fix ordering of nearest neighbors
+      for (std::size_t j = distances->size() - 1; j > 0; --j) {
+        if ((*distances)[j - 1] > (*distances)[j]) {
+          swap((*distances)[j - 1], (*distances)[j]);
+          swap((*indices)[j - 1], (*indices)[j]);
+        }
+      }
+    }
+    for (std::size_t i = 0; i < points_.size(); ++i) {
+      const FlannElementType* flann_point = points_[i];
+      FloatType dist_square = 0;
+      for (std::size_t col = 0; col < dimension; ++col) {
+        FloatType d = point(col) - static_cast<FloatType>(flann_point[col]);
+        dist_square += d * d;
+      }
+      if (dist_square < (*distances)[distances->size() - 1]) {
+        (*distances)[distances->size() - 1] = dist_square;
+        (*indices)[distances->size() - 1] = init_points_.size() / dimension + i;
+      }
+      // Fix ordering of nearest neighbors
+      for (std::size_t j = distances->size() - 1; j > 0; --j) {
+        if ((*distances)[j - 1] > (*distances)[j]) {
+          swap((*distances)[j - 1], (*distances)[j]);
+          swap((*indices)[j - 1], (*indices)[j]);
+        }
+      }
+    }
+  }
+
 private:
   FlannElementType* addPointInternal(const Point& point) {
     FlannElementType* point_ptr = new FlannElementType[dimension];
@@ -176,7 +241,7 @@ private:
   }
 
   std::size_t numPointsInternal() const {
-    return points_.size() / dimension;
+    return init_points_.size() / dimension + points_.size();
   }
 
   bool initialized_;
@@ -184,6 +249,7 @@ private:
   NormT norm_;
   flann::Index<NormT> index_;
   flann::SearchParams search_params_;
+  // TODO: Reorganize with better data structures (i.e. using Eigen vectors)
   // Need two arrays here because points for initialization need to be dense
   std::vector<FlannElementType> init_points_;
   std::vector<FlannElementType*> points_;
