@@ -830,8 +830,6 @@ bool ViewpointPlanner::findNextViewpointPathEntry(ViewpointPath* viewpoint_path,
   return true;
 }
 
-#pragma GCC push_options
-#pragma GCC optimize ("O0")
 bool ViewpointPlanner::findNextViewpointPathEntries(const FloatType alpha, const FloatType beta) {
   if (viewpoint_paths_.front().entries.empty()) {
     // Initially find the best viewpoints as starting points for the viewpoint paths
@@ -900,7 +898,6 @@ bool ViewpointPlanner::findNextViewpointPathEntries(const FloatType alpha, const
     return true;
   }
 }
-#pragma GCC pop_options
 
 bool ViewpointPlanner::findNextViewpointPathEntries() {
   return findNextViewpointPathEntries(options_.objective_parameter_alpha, options_.objective_parameter_beta);
