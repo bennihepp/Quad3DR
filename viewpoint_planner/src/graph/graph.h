@@ -26,6 +26,7 @@ public:
 
   struct NodeContainer {
     using EdgeMap = std::unordered_map<Index, WeightType>;
+
     Node node;
     EdgeMap edges;
 
@@ -116,6 +117,14 @@ public:
     return ConstIterator(nodes_.cend());
   }
 
+  bool empty() const {
+    return nodes_.empty();
+  }
+
+  Index size() const {
+    return nodes_.size();
+  }
+
   void clear() {
     nodes_.clear();
   }
@@ -136,10 +145,6 @@ public:
     AIT_ASSERT_DBG(idx1 < size());
     AIT_ASSERT_DBG(idx2 < size());
     nodes_[idx1].edges.insert(std::make_pair(idx2, weight));
-  }
-
-  Index size() const {
-    return nodes_.size();
   }
 
   const Node& getNode(Index index) const {

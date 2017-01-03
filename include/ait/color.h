@@ -334,9 +334,9 @@ class ColorMap {
 public:
   virtual ~ColorMap() {}
 
-  virtual Color3<FloatType> map(FloatType value) = 0;
+  virtual Color3<FloatType> map(FloatType value) const = 0;
 
-  virtual Color4<FloatType> map(FloatType value, FloatType a) {
+  virtual Color4<FloatType> map(FloatType value, FloatType a) const {
     return Color4<FloatType>::createFromColor3(this->map(value), a);
   }
 
@@ -361,14 +361,14 @@ public:
 
   ~ColorMapJet() override {}
 
-  Color3<FloatType> map(FloatType value) override {
+  Color3<FloatType> map(FloatType value) const override {
     FloatType r = ait::clamp(std::min(4 * value - (FloatType)1.5, -4 * value + (FloatType)4.5));
     FloatType g = ait::clamp(std::min(4 * value - (FloatType)0.5, -4 * value + (FloatType)3.5));
     FloatType b = ait::clamp(std::min(4 * value + (FloatType)0.5, -4 * value + (FloatType)2.5));
     return Color3<FloatType>(r, g, b);
   }
 
-  Color4<FloatType> map(FloatType value, FloatType a) override {
+  Color4<FloatType> map(FloatType value, FloatType a) const override {
     return Base::map(value, a);
   }
 
@@ -381,7 +381,7 @@ public:
 
   ~ColorMapHot() override {}
 
-  Color3<FloatType> map(FloatType value) override {
+  Color3<FloatType> map(FloatType value) const override {
     Color3<FloatType> rgb;
     rgb.r() = ait::clamp(2 * value);
     rgb.g() =  ait::clamp(2 * std::max(value - (FloatType)0.5, (FloatType)0));
@@ -389,7 +389,7 @@ public:
     return rgb;
   }
 
-  Color4<FloatType> map(FloatType value, FloatType a) override {
+  Color4<FloatType> map(FloatType value, FloatType a) const override {
     return Base::map(value, a);
   }
 
@@ -402,11 +402,11 @@ public:
 
   ~ColorMapHSV() override {}
 
-  Color3<FloatType> map(FloatType value) override {
+  Color3<FloatType> map(FloatType value) const override {
     return Color3<FloatType>::createFromColorHSV(Color3HSV<FloatType>(value, 1, 1));
   }
 
-  Color4<FloatType> map(FloatType value, FloatType a) override {
+  Color4<FloatType> map(FloatType value, FloatType a) const override {
     return Base::map(value, a);
   }
 

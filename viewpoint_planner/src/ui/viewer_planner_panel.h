@@ -102,10 +102,28 @@ public:
     ui.viewpointPathBranchSelection->blockSignals(false);
   }
 
-  void setViewpointPathBranchSelection(std::size_t index) {
-    ui.viewpointPathBranchSelection->blockSignals(true);
-    ui.viewpointPathBranchSelection->setCurrentIndex(static_cast<int>(index));
-    ui.viewpointPathBranchSelection->blockSignals(false);
+  std::size_t getViewpointGraphSelection() {
+    return static_cast<std::size_t>(ui.viewpointGraphSelection->currentIndex());
+  }
+
+  void setViewpointGraphSelection(const std::size_t index) {
+    selectItemByUserData(ui.viewpointGraphSelection, index);
+  }
+
+  std::size_t getViewpointPathBranchSelection() {
+    return static_cast<std::size_t>(ui.viewpointPathBranchSelection->currentIndex());
+  }
+
+  void setViewpointPathBranchSelection(const std::size_t index) {
+    selectItemByUserData(ui.viewpointPathBranchSelection, index);
+  }
+
+  std::size_t getViewpointPathSelection() {
+    return static_cast<std::size_t>(ui.viewpointPathSelection->currentIndex());
+  }
+
+  void setViewpointPathSelection(const std::size_t index) {
+    selectItemByUserData(ui.viewpointPathSelection, index);
   }
 
   void initializeViewpointPath(const std::vector<std::pair<std::string, size_t>>& entries) {
@@ -140,6 +158,14 @@ public:
 
   bool isShowIncrementalVoxelSetChecked() const {
     return ui.showIncrementalVoxelSet->isChecked();
+  }
+
+  bool isInspectViewpointGraphMotionsChecked() const {
+    return ui.inspectViewpointGraphMotions->isChecked();
+  }
+
+  bool isUpdateCameraOnSelectionChecked() const {
+    return ui.updateCameraOnSelection->isChecked();
   }
 
   double getAlphaParameter() const {
@@ -271,5 +297,21 @@ signals:
   void viewpointPathLineWidthChanged(double line_width);
 
 private:
+  void selectItemByUserData(QComboBox* combo_box, const std::size_t item_user_data) {
+    combo_box->blockSignals(true);
+    for (int i = 0; i < combo_box->count(); ++i) {
+      bool ok;
+      int user_data = combo_box->itemData(i).toInt(&ok);
+      if (!ok) {
+        throw AIT_EXCEPTION("Unable to convert combo box user data user data to int");
+      }
+      if (static_cast<std::size_t>(user_data) == item_user_data) {
+        combo_box->setCurrentIndex(i);
+        break;
+      }
+    }
+    combo_box->blockSignals(false);
+  }
+
     Ui::ViewerPlannerPanelClass ui;
 };

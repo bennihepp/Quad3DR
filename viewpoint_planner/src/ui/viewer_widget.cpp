@@ -47,7 +47,7 @@ ViewerWidget::ViewerWidget(const QGLFormat& format, ViewpointPlanner* planner, V
       settings_panel_(settings_panel), planner_panel_(planner_panel),
       octree_(nullptr), sparse_recon_(nullptr),
       display_axes_(true), aspect_ratio_(-1),
-      viewpoint_path_line_width_(5),
+      viewpoint_motion_line_width_(5),
       min_information_filter_(0),
       planner_thread_(planner, this),
       viewpoint_path_branch_index_(0) {
@@ -170,7 +170,7 @@ void ViewerWidget::init() {
     sparce_recon_drawer_.init();
     viewpoint_path_drawer_.init();
     viewpoint_graph_drawer_.init();
-    viewpoint_path_line_drawer_.init();
+    viewpoint_motion_line_drawer_.init();
     if (octree_ != nullptr) {
         showOctree(octree_);
     }
@@ -265,12 +265,13 @@ void ViewerWidget::showOctree(const ViewpointPlanner::OccupancyMapType* octree) 
     setSceneBoundingBox(qglviewer::Vec(minX, minY, minZ), qglviewer::Vec(maxX, maxY, maxZ));
 }
 
-void ViewerWidget::showViewpointGraph() {
+void ViewerWidget::showViewpointGraph(const std::size_t selected_index /*= (std::size_t)-1*/) {
   if (!initialized_) {
       return;
   }
 
   std::unique_lock<std::mutex> lock(mutex_);
+
   // Fill viewpoint graph dropbox in planner panel
   std::vector<std::pair<std::string, size_t>> viewpoint_graph_gui_entries;
   for (size_t i = 0; i < viewpoint_graph_copy_.size(); ++i) {
@@ -283,48 +284,85 @@ void ViewerWidget::showViewpointGraph() {
   }
   planner_panel_->initializeViewpointGraph(viewpoint_graph_gui_entries);
 
-  // Make a copy of the graph poses so that we can later on access
-  // viewpoints select by the user
-  std::vector<Pose> poses;
+  // Compute min-max of information value
   ait::MinMaxTracker<FloatType> min_max;
   for (const auto& entry : viewpoint_graph_copy_) {
     FloatType total_information = std::get<2>(entry);
-    // TODO: Consider filtered viewpoints in min-max computation
-//    if (total_information < min_information_filter_) {
-//      continue;
-//    }
-    const Pose& pose = std::get<1>(entry);
-    poses.push_back(pose);
     min_max.update(total_information);
   }
-  viewpoint_graph_drawer_.setCamera(sparse_recon_->getCameras().cbegin()->second);
 
-  if (planner_panel_->isUseFixedColorsChecked()) {
-    typename ViewpointDrawer<FloatType>::Color4 color(0.7f, 0.8f, 0.0f, 0.6f);
-    viewpoint_graph_drawer_.setViewpoints(poses, color);
+  bool inspect_graph_motions = planner_panel_->isInspectViewpointGraphMotionsChecked();
+  bool valid_selection = selected_index != (std::size_t)-1;
+  bool use_fixed_colors = planner_panel_->isUseFixedColorsChecked();
+  if (inspect_graph_motions && valid_selection) {
+    std::cout << "Viewpoint " << selected_index << " has "
+        << planner_->getViewpointGraph().getEdges(selected_index).size() << " edges" << std::endl;
   }
-  else {
-    ait::ColorMapHot<FloatType> cmap;
-    std::vector<typename ViewpointDrawer<FloatType>::Color4> colors;
-    for (const auto& entry : viewpoint_graph_copy_) {
-      FloatType total_information = std::get<2>(entry);
-      if (total_information < min_information_filter_) {
+  // Make a copy of the graph poses so that we can later on access
+  // viewpoints select by the user
+  std::vector<Pose> poses;
+  std::vector<typename ViewpointDrawer<FloatType>::Color4> colors;
+  const ait::ColorMapHot<FloatType> cmap;
+  for (const auto& entry : viewpoint_graph_copy_) {
+    FloatType total_information = std::get<2>(entry);
+    if (inspect_graph_motions && valid_selection) {
+      ViewpointPlanner::ViewpointEntryIndex viewpoint_index = std::get<0>(entry);
+      if (viewpoint_index != selected_index && planner_->getViewpointGraph().getEdges(selected_index).count(viewpoint_index) == 0) {
         continue;
       }
-      FloatType value = min_max.normalize(total_information);
-      typename ViewpointDrawer<FloatType>::Color4 color = cmap.map(value, 0.6f);
-      colors.push_back(color);
     }
-    viewpoint_graph_drawer_.setViewpoints(poses, colors);
+    const Pose& pose = std::get<1>(entry);
+    typename ViewpointDrawer<FloatType>::Color4 color;
+    if (use_fixed_colors) {
+      color = typename ViewpointDrawer<FloatType>::Color4(0.7f, 0.8f, 0.0f, 0.6f);
+    }
+    else {
+      FloatType value = min_max.normalize(total_information);
+      color = cmap.map(value, 0.6f);
+    }
+    poses.push_back(pose);
+    colors.push_back(color);
   }
+  // Draw viewpoint camera frustums
+  viewpoint_graph_drawer_.setCamera(sparse_recon_->getCameras().cbegin()->second);
+  viewpoint_graph_drawer_.setViewpoints(poses, colors);
 
   planner_panel_->setViewpointGraphSize(viewpoint_graph_copy_.size());
   lock.unlock();
 
   update();
-
 }
-void ViewerWidget::showViewpointPath() {
+
+void ViewerWidget::showViewpointGraphMotions(const std::size_t selected_index) {
+  if (!initialized_) {
+      return;
+  }
+
+  std::unique_lock<std::mutex> lock(mutex_);
+
+  // Draw motion path
+  std::vector<OGLLineData> lines;
+  const OGLColorData line_color(0.7f, 0.1f, 0.0f, 1.0f);
+  const ViewpointPlanner::ViewpointEntryVector& viewpoint_entries = planner_->getViewpointEntries();
+  const ViewpointPlanner::ViewpointGraph& viewpoint_graph = planner_->getViewpointGraph();
+  for (const auto& edge : viewpoint_graph.getEdges(selected_index)) {
+    const Vector3 from_pos = viewpoint_entries[selected_index].viewpoint.pose().getWorldPosition();
+    const ViewpointPlanner::ViewpointEntryIndex to_viewpoint_index = edge.first;
+    const Vector3 to_pos = viewpoint_entries[to_viewpoint_index].viewpoint.pose().getWorldPosition();
+    const OGLVertexData vertex1(from_pos(0), from_pos(1), from_pos(2));
+    const OGLVertexData vertex2(to_pos(0), to_pos(1), to_pos(2));
+    lines.emplace_back(OGLVertexDataRGBA(vertex1, line_color), OGLVertexDataRGBA(vertex2, line_color));
+  }
+  std::cout << "Selected viewpoint " << selected_index << " has "
+      << viewpoint_graph.getEdges(selected_index).size() << " edges" << std::endl;
+  viewpoint_motion_line_drawer_.upload(lines);
+
+  lock.unlock();
+
+  update();
+}
+
+void ViewerWidget::showViewpointPath(const std::size_t selected_index /*= (std::size_t)-1*/) {
   if (!initialized_) {
       return;
   }
@@ -359,12 +397,13 @@ void ViewerWidget::showViewpointPath() {
   }
   viewpoint_path_drawer_.setCamera(sparse_recon_->getCameras().cbegin()->second);
 
+  // Draw viewpoint camera frustums
   if (planner_panel_->isUseFixedColorsChecked()) {
     typename ViewpointDrawer<FloatType>::Color4 color(0.0f, 0.1f, 0.8f, 0.6f);
     viewpoint_path_drawer_.setViewpoints(poses, color);
   }
   else {
-    ait::ColorMapHot<FloatType> cmap;
+    const ait::ColorMapHot<FloatType> cmap;
     std::vector<typename ViewpointDrawer<FloatType>::Color4> colors;
     for (const auto& entry : viewpoint_path_copy_) {
       FloatType information = std::get<2>(entry);
@@ -375,18 +414,36 @@ void ViewerWidget::showViewpointPath() {
   }
 
   // Draw motion path
+  bool inspect_graph_motions = planner_panel_->isInspectViewpointGraphMotionsChecked();
+  bool valid_selection = selected_index != (std::size_t)-1;
   std::vector<OGLLineData> lines;
-  if (viewpoint_path_copy_.size() > 1) {
-    OGLColorData line_color(0.0f, 0.1f, 0.8f, 1.0f);
-    for (auto it = viewpoint_path_copy_.cbegin() + 1; it != viewpoint_path_copy_.cend(); ++it) {
-      const Vector3 from_pos = std::get<1>(*(it-1)).getWorldPosition();
-      const Vector3 to_pos = std::get<1>(*it).getWorldPosition();
-      OGLVertexData vertex1(from_pos(0), from_pos(1), from_pos(2));
-      OGLVertexData vertex2(to_pos(0), to_pos(1), to_pos(2));
+  if (inspect_graph_motions && valid_selection) {
+    const OGLColorData line_color(0.7f, 0.1f, 0.0f, 1.0f);
+    const ViewpointPlanner::ViewpointPath viewpoint_path = planner_->getViewpointPaths()[viewpoint_path_branch_index_];
+    const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = viewpoint_path.entries[selected_index].viewpoint_index;
+    const ViewpointPlanner::ViewpointEntry viewpoint_entry = planner_->getViewpointEntries()[viewpoint_index];
+    std::cout << "Viewpoint " << viewpoint_index << " has "
+        << planner_->getViewpointGraph().getEdges(viewpoint_index).size() << " edges" << std::endl;
+    for (const auto& edge : planner_->getViewpointGraph().getEdges(viewpoint_index)) {
+      const ViewpointPlanner::ViewpointEntry other_viewpoint_entry = planner_->getViewpointEntries()[edge.first];
+      const Vector3 from_pos = viewpoint_entry.viewpoint.pose().getWorldPosition();
+      const Vector3 to_pos = other_viewpoint_entry.viewpoint.pose().getWorldPosition();
+      const OGLVertexData vertex1(from_pos(0), from_pos(1), from_pos(2));
+      const OGLVertexData vertex2(to_pos(0), to_pos(1), to_pos(2));
       lines.emplace_back(OGLVertexDataRGBA(vertex1, line_color), OGLVertexDataRGBA(vertex2, line_color));
     }
   }
-  viewpoint_path_line_drawer_.upload(lines);
+  else if (viewpoint_path_copy_.size() > 1) {
+    const OGLColorData line_color(0.0f, 0.1f, 0.8f, 1.0f);
+    for (auto it = viewpoint_path_copy_.cbegin() + 1; it != viewpoint_path_copy_.cend(); ++it) {
+      const Vector3 from_pos = std::get<1>(*(it-1)).getWorldPosition();
+      const Vector3 to_pos = std::get<1>(*it).getWorldPosition();
+      const OGLVertexData vertex1(from_pos(0), from_pos(1), from_pos(2));
+      const OGLVertexData vertex2(to_pos(0), to_pos(1), to_pos(2));
+      lines.emplace_back(OGLVertexDataRGBA(vertex1, line_color), OGLVertexDataRGBA(vertex2, line_color));
+    }
+  }
+  viewpoint_motion_line_drawer_.upload(lines);
 
   planner_panel_->setViewpointPathSize(viewpoint_path_copy_.size());
   lock.unlock();
@@ -560,7 +617,7 @@ void ViewerWidget::setDrawViewpointGraph(bool draw_viewpoint_graph) {
 }
 
 void ViewerWidget::setDrawViewpointMotions(bool draw_viewpoint_motions) {
-  viewpoint_path_line_drawer_.setDrawLines(draw_viewpoint_motions);
+  viewpoint_motion_line_drawer_.setDrawLines(draw_viewpoint_motions);
   update();
 }
 
@@ -599,6 +656,24 @@ void ViewerWidget::setImagePoseIndex(ImageId image_id) {
     update();
 }
 
+void ViewerWidget::setViewpointGraphSelectionIndex(const std::size_t index) {
+  std::cout << "index=" << index << std::endl;
+  std::unique_lock<std::mutex> lock(mutex_);
+//  const Pose& pose = std::get<1>(viewpoint_graph_copy_[index]);
+  const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = std::get<0>(viewpoint_graph_copy_[index]);
+  std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
+  const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[viewpoint_index];
+  if (planner_panel_->isUpdateCameraOnSelectionChecked()) {
+    setCameraPose(viewpoint_entry.viewpoint.pose());
+  }
+  octree_drawer_.updateRaycastVoxels(viewpoint_entry.voxel_set);
+  lock.unlock();
+  showViewpointGraph(index);
+  showViewpointGraphMotions(index);
+//  // Set previous selection for combo box
+  planner_panel_->setViewpointGraphSelection(index);
+}
+
 void ViewerWidget::setViewpointPathBranchSelectionIndex(std::size_t index) {
   std::unique_lock<std::mutex> lock(mutex_);
   viewpoint_path_branch_index_ = index;
@@ -614,18 +689,24 @@ void ViewerWidget::setViewpointPathBranchSelectionIndex(std::size_t index) {
   std::cout << "  accumulated objective=" << viewpoint_path.acc_objective << std::endl;
   lock.unlock();
   planner_thread_.updateViewpoints();
+  // Remember selected entry before updating combo box
+  const std::size_t path_selection_index = planner_panel_->getViewpointPathSelection();
   showViewpointPath();
-  // showViewpointPath updates the combo box and resets the selection so we set the selection again
+  // Set previous selection for combo box
   planner_panel_->setViewpointPathBranchSelection(index);
+  // Set previous selection for combo box
+  planner_panel_->setViewpointPathSelection(path_selection_index);
 }
 
 void ViewerWidget::setViewpointPathSelectionIndex(std::size_t index) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::unique_lock<std::mutex> lock(mutex_);
   //  const Pose& pose = std::get<1>(viewpoint_path_copy_[index]);
   const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = std::get<0>(viewpoint_path_copy_[index]);
   std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
   const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[viewpoint_index];
-  setCameraPose(viewpoint_entry.viewpoint.pose());
+  if (planner_panel_->isUpdateCameraOnSelectionChecked()) {
+    setCameraPose(viewpoint_entry.viewpoint.pose());
+  }
   if (planner_panel_->isShowIncrementalVoxelSetChecked()) {
     const ViewpointPlanner::ViewpointPath& viewpoint_path = planner_->getViewpointPaths()[viewpoint_path_branch_index_];
     ViewpointPlanner::ViewpointEntryIndex viewpoint_index = viewpoint_path.entries[index].viewpoint_index;
@@ -642,18 +723,13 @@ void ViewerWidget::setViewpointPathSelectionIndex(std::size_t index) {
   else {
     octree_drawer_.updateRaycastVoxels(viewpoint_entry.voxel_set);
   }
-  update();
-}
-
-void ViewerWidget::setViewpointGraphSelectionIndex(std::size_t index) {
-  std::lock_guard<std::mutex> lock(mutex_);
-//  const Pose& pose = std::get<1>(viewpoint_graph_copy_[index]);
-  const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = std::get<0>(viewpoint_graph_copy_[index]);
-  std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
-  const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[viewpoint_index];
-  setCameraPose(viewpoint_entry.viewpoint.pose());
-  octree_drawer_.updateRaycastVoxels(viewpoint_entry.voxel_set);
-  update();
+  lock.unlock();
+  // Remember selected entry before updating combo box
+  const std::size_t branch_selection_index = planner_panel_->getViewpointPathBranchSelection();
+  showViewpointPath(index);
+  // Set previous selection for combo box
+  planner_panel_->setViewpointPathSelection(index);
+  planner_panel_->setViewpointPathBranchSelection(branch_selection_index);
 }
 
 void ViewerWidget::setMinOccupancy(double min_occupancy) {
@@ -744,7 +820,7 @@ void ViewerWidget::draw() {
   sparce_recon_drawer_.draw(pvm_matrix, width(), height());
   // Draw path before graph so that the graph is hidden
   viewpoint_path_drawer_.draw(pvm_matrix, width(), height());
-  viewpoint_path_line_drawer_.draw(pvm_matrix, width(), height(), viewpoint_path_line_width_);
+  viewpoint_motion_line_drawer_.draw(pvm_matrix, width(), height(), viewpoint_motion_line_width_);
   viewpoint_graph_drawer_.draw(pvm_matrix, width(), height());
 
   if (display_axes_) {
@@ -913,7 +989,7 @@ void ViewerWidget::setMinInformationFilter(double min_information_filter) {
 }
 
 void ViewerWidget::setViewpointPathLineWidth(double line_width) {
-  viewpoint_path_line_width_ = (FloatType)line_width;
+  viewpoint_motion_line_width_ = (FloatType)line_width;
   update();
 }
 
@@ -963,7 +1039,7 @@ ViewpointPlannerThread::Result ViewpointPlannerThread::runIteration() {
 }
 
 void ViewpointPlannerThread::updateViewpoints() {
-  AIT_ASSERT(!this->isRunning() || this->isPaused());
+//  AIT_ASSERT(!this->isRunning() || this->isPaused());
   std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
   if (lock) {
     updateViewpointsInternal();

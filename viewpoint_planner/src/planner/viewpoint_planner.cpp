@@ -639,19 +639,19 @@ void ViewpointPlanner::computeViewpointMotions() {
     std::unordered_set<ViewpointEntryIndex> visited_set;
     node_stack.push(std::make_tuple(index, 0, 0));
     while (!node_stack.empty()) {
-      ViewpointEntryIndex index = std::get<0>(node_stack.top());
+      ViewpointEntryIndex stack_index = std::get<0>(node_stack.top());
       FloatType acc_motion_distance = std::get<1>(node_stack.top());
       std::size_t depth = std::get<2>(node_stack.top());
       node_stack.pop();
-      if (visited_set.count(index) > 0) {
-        continue;
-      }
-      visited_set.emplace(index);
       if (depth >= options_.viewpoint_motion_densification_max_depth) {
         continue;
       }
-      for (const auto& edge : viewpoint_graph_.getEdges(index)) {
+      for (const auto& edge : viewpoint_graph_.getEdges(stack_index)) {
         ViewpointEntryIndex other_index = edge.first;
+        if (visited_set.count(other_index) > 0) {
+          continue;
+        }
+        visited_set.emplace(other_index);
         FloatType motion_distance = edge.second;
         node_stack.push(std::make_tuple(other_index, acc_motion_distance + motion_distance, depth + 1));
         if (depth >= 2) {
@@ -662,8 +662,13 @@ void ViewpointPlanner::computeViewpointMotions() {
   }
   std::cout << "Adding " << new_edges.size() << " edges to the viewpoint graph" << std::endl;
   for (const auto& tuple : new_edges) {
+    // TODO: Add symmetric edges?
     viewpoint_graph_.addEdge(std::get<0>(tuple), std::get<1>(tuple), std::get<2>(tuple));
+    viewpoint_graph_.addEdge(std::get<1>(tuple), std::get<0>(tuple), std::get<2>(tuple));
   }
+//  for (const auto& index : viewpoint_graph_) {
+//    std::cout << "Node " << index << " has " << viewpoint_graph_.getEdges(index).size() << " edges" << std::endl;
+//  }
   std::cout << "Done" << std::endl;
 }
 
@@ -839,56 +844,75 @@ bool ViewpointPlanner::findNextViewpointPathEntry(ViewpointPath* viewpoint_path,
   return true;
 }
 
-bool ViewpointPlanner::findNextViewpointPathEntries(const FloatType alpha, const FloatType beta) {
-  if (viewpoint_paths_.front().entries.empty()) {
-    // Initially find the best viewpoints as starting points for the viewpoint paths
+#pragma GCC push_options
+#pragma GCC optimize("O0")
+void ViewpointPlanner::findInitialViewpointPathEntries(const FloatType alpha, const FloatType beta) {
+  if (viewpoint_paths_.size() > viewpoint_graph_.size()) {
+    // Make sure we don't expect too many viewpoints
+    viewpoint_paths_.resize(viewpoint_graph_.size());
+  }
 
-    if (viewpoint_paths_.size() > viewpoint_entries_.size()) {
-      // Make sure we don't expect too many viewpoints
-      viewpoint_paths_.resize(viewpoint_entries_.size());
+  std::vector<ViewpointPathEntry> best_path_entries;
+
+  // Find the overall best viewpoints with some min distance as starting points
+  std::vector<ViewpointEntryIndex> entries(viewpoint_graph_.cbegin(), viewpoint_graph_.cend());
+  for (std::size_t i = 0; i < viewpoint_paths_.size(); ++i) {
+    ViewpointPathEntry best_path_entry;
+    // Make sure there are viewpoint entries left (otherwise just take one that was already selected)
+    if (entries.empty()) {
+      best_path_entry = best_path_entries.back();
     }
-
-    std::vector<ViewpointPathEntry> best_path_entries(viewpoint_paths_.size());
-    // Find the overall best viewpoints as starting points
-    for (ViewpointEntryIndex viewpoint_index : viewpoint_graph_) {
-      const ViewpointEntry& viewpoint_entry = viewpoint_entries_[viewpoint_index];
-      FloatType new_information = viewpoint_entry.total_information;
-      FloatType new_objective = new_information - alpha;
-      if (new_objective > best_path_entries.back().local_objective) {
-        std::cout << "new_objective: " << new_objective << std::endl;
-        best_path_entries.back().viewpoint_index = viewpoint_index;
-        best_path_entries.back().local_information = new_information;
-        best_path_entries.back().local_motion_distance = 0;
-        best_path_entries.back().local_objective = new_objective;
-        best_path_entries.back().acc_information = new_information;
-        best_path_entries.back().acc_motion_distance = 0;
-        best_path_entries.back().acc_objective = new_objective;
-        if (viewpoint_paths_.size() > 1) {
-          for (auto it = best_path_entries.rbegin() + 1; it != best_path_entries.rend(); ++it) {
-            if (it->acc_objective < (it-1)->acc_objective) {
-              swap(*it, *(it-1));
-            }
-            else {
-              break;
-            }
-          }
+    else {
+      for (ViewpointEntryIndex viewpoint_index : entries) {
+        const ViewpointEntry& viewpoint_entry = viewpoint_entries_[viewpoint_index];
+        FloatType new_information = viewpoint_entry.total_information;
+        FloatType new_objective = new_information - alpha;
+        if (new_objective > best_path_entry.local_objective) {
+          best_path_entry.viewpoint_index = viewpoint_index;
+          best_path_entry.local_information = new_information;
+          best_path_entry.local_motion_distance = 0;
+          best_path_entry.local_objective = new_objective;
+          best_path_entry.acc_information = new_information;
+          best_path_entry.acc_motion_distance = 0;
+          best_path_entry.acc_objective = new_objective;
         }
       }
     }
+    std::cout << "objective: " << best_path_entry.acc_objective << std::endl;
+    best_path_entries.push_back(std::move(best_path_entry));
 
-    std::unique_lock<std::mutex> lock(mutex_);
-    for (auto it = viewpoint_paths_.begin(); it != viewpoint_paths_.end(); ++it) {
-      const ViewpointPathEntry& best_path_entry = best_path_entries[it - viewpoint_paths_.begin()];
-      const ViewpointEntry& best_viewpoint_entry = viewpoint_entries_[best_path_entry.viewpoint_index];
-      it->acc_information = best_path_entry.acc_information;
-      it->acc_motion_distance = best_path_entry.acc_motion_distance;
-      it->acc_objective = best_path_entry.acc_objective;
-      it->entries.emplace_back(std::move(best_path_entry));
-      it->observed_voxel_set.insert(best_viewpoint_entry.voxel_set.cbegin(), best_viewpoint_entry.voxel_set.cend());
-      std::cout << "acc_objective=" << it->acc_objective << std::endl;
+    // Remove all viewpoints that are too close to the found best one
+    const ViewpointEntry& viewpoint = viewpoint_entries_[best_path_entry.viewpoint_index];
+    for (auto it = entries.cbegin(); it != entries.cend();) {
+      const ViewpointEntry& other_viewpoint = viewpoint_entries_[*it];
+      const FloatType distance = (other_viewpoint.viewpoint.pose().getWorldPosition() - viewpoint.viewpoint.pose().getWorldPosition()).norm();
+      if (distance < options_.viewpoint_path_initial_distance) {
+        it = entries.erase(it);
+      }
+      else {
+        ++it;
+      }
     }
-    lock.unlock();
+  }
 
+  std::unique_lock<std::mutex> lock(mutex_);
+  for (auto it = viewpoint_paths_.begin(); it != viewpoint_paths_.end(); ++it) {
+    const ViewpointPathEntry& best_path_entry = best_path_entries[it - viewpoint_paths_.begin()];
+    const ViewpointEntry& best_viewpoint_entry = viewpoint_entries_[best_path_entry.viewpoint_index];
+    it->acc_information = best_path_entry.acc_information;
+    it->acc_motion_distance = best_path_entry.acc_motion_distance;
+    it->acc_objective = best_path_entry.acc_objective;
+    it->entries.emplace_back(std::move(best_path_entry));
+    it->observed_voxel_set.insert(best_viewpoint_entry.voxel_set.cbegin(), best_viewpoint_entry.voxel_set.cend());
+    std::cout << "acc_objective=" << it->acc_objective << std::endl;
+  }
+  lock.unlock();
+}
+#pragma GCC pop_options
+
+bool ViewpointPlanner::findNextViewpointPathEntries(const FloatType alpha, const FloatType beta) {
+  if (viewpoint_paths_.front().entries.empty()) {
+    findInitialViewpointPathEntries(alpha, beta);
     return true;
   }
 

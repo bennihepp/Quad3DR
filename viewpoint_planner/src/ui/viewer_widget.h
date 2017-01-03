@@ -121,8 +121,9 @@ public:
   virtual void setSceneBoundingBox(const qglviewer::Vec& min, const qglviewer::Vec& max);
 
   void showOctree(const ViewpointPlanner::OccupancyMapType* octree);
-  void showViewpointPath();
-  void showViewpointGraph();
+  void showViewpointGraph(const std::size_t selected_index = (std::size_t)-1);
+  void showViewpointGraphMotions(const std::size_t selected_index);
+  void showViewpointPath(const std::size_t selected_index = (std::size_t)-1);
   void showSparseReconstruction(const SparseReconstruction* sparse_recon);
   void resetView();
 
@@ -230,8 +231,8 @@ private:
 
     ViewpointDrawer<FloatType> viewpoint_graph_drawer_;
     ViewpointDrawer<FloatType> viewpoint_path_drawer_;
-    LineDrawer viewpoint_path_line_drawer_;
-    FloatType viewpoint_path_line_width_;
+    LineDrawer viewpoint_motion_line_drawer_;
+    FloatType viewpoint_motion_line_width_;
     FloatType min_information_filter_;
 
 //    QTimer* process_timer_;

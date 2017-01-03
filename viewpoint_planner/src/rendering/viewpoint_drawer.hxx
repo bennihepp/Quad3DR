@@ -58,6 +58,7 @@ void ViewpointDrawer<FloatType>::setColor(FloatType r, FloatType g, FloatType b,
 
 template <typename FloatType>
 void ViewpointDrawer<FloatType>::setColor(const Color4& color) {
+  colors_.clear();
   colors_.resize(poses_.size(), color);
 }
 

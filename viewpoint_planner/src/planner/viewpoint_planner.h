@@ -72,6 +72,7 @@ public:
       addOption<std::size_t>("viewpoint_motion_min_connections", &viewpoint_motion_min_connections);
       addOption<std::size_t>("viewpoint_motion_densification_max_depth", &viewpoint_motion_densification_max_depth);
       addOption<std::size_t>("viewpoint_path_branches", &viewpoint_path_branches);
+      addOption<FloatType>("viewpoint_path_initial_distance", &viewpoint_path_initial_distance);
       addOption<FloatType>("objective_parameter_alpha", &objective_parameter_alpha);
       addOption<FloatType>("objective_parameter_beta", &objective_parameter_beta);
       addOption<std::string>("viewpoint_graph_filename", &viewpoint_graph_filename);
@@ -125,6 +126,9 @@ public:
 
     // Number of viewpoint path branches to explore in parallel
     std::size_t viewpoint_path_branches = 10;
+    // Minimum distance between initial viewpoints on viewpoint path branches
+    FloatType viewpoint_path_initial_distance = 3;
+
     // Objective factor for reconstruction image
     FloatType objective_parameter_alpha = 0;
     // Objective factor for motion distance
@@ -456,6 +460,9 @@ private:
 
   /// Find the next best viewpoint to add to the viewpoint paths.
   bool findNextViewpointPathEntries(const FloatType alpha, const FloatType beta);
+
+  /// Find initial viewpoints on viewpoint paths
+  void findInitialViewpointPathEntries(const FloatType alpha, const FloatType beta);
 
   /// Find the next best viewpoint to add to the viewpoint paths and use parameters from options.
   bool findNextViewpointPathEntries();
