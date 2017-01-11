@@ -7,6 +7,9 @@
 
 #include "viewpoint_planner_data.h"
 #include <boost/filesystem.hpp>
+#include <boost/property_tree/json_parser.hpp>
+#include <ait/gps.h>
+#include <ait/geometry.h>
 
 const std::string NodeObject::kFileTag = "NodeObject";
 
@@ -19,17 +22,64 @@ ViewpointPlannerData::ViewpointPlannerData(const Options* options)
       Vector3(options->getValue<FloatType>("bvh_bbox_max_x"),
           options->getValue<FloatType>("bvh_bbox_max_y"),
           options->getValue<FloatType>("bvh_bbox_max_z")));
-  // Get ROI (for sampling and weight computation)
-  roi_bbox_ = BoundingBoxType(
-      Vector3(options->getValue<FloatType>("roi_bbox_min_x"),
-          options->getValue<FloatType>("roi_bbox_min_y"),
-          options->getValue<FloatType>("roi_bbox_min_z")),
-      Vector3(options->getValue<FloatType>("roi_bbox_max_x"),
-          options->getValue<FloatType>("roi_bbox_max_y"),
-          options->getValue<FloatType>("roi_bbox_max_z")));
 
   const std::string reconstruction_path = options->getValue<std::string>("dense_reconstruction_path");
+  readDenseReconstruction(reconstruction_path);
+
+  // Get ROI (for sampling and weight computation)
+  if (options_.regions_json_filename.empty()) {
+//    roi_bbox_ = BoundingBoxType(
+//        Vector3(options->getValue<FloatType>("roi_bbox_min_x"),
+//            options->getValue<FloatType>("roi_bbox_min_y"),
+//            options->getValue<FloatType>("roi_bbox_min_z")),
+//        Vector3(options->getValue<FloatType>("roi_bbox_max_x"),
+//            options->getValue<FloatType>("roi_bbox_max_y"),
+//            options->getValue<FloatType>("roi_bbox_max_z")));
+    const FloatType roi_min_x = options->getValue<FloatType>("roi_bbox_min_x");
+    const FloatType roi_min_y = options->getValue<FloatType>("roi_bbox_min_y");
+    const FloatType roi_min_z = options->getValue<FloatType>("roi_bbox_min_z");
+    const FloatType roi_max_x = options->getValue<FloatType>("roi_bbox_max_x");
+    const FloatType roi_max_y = options->getValue<FloatType>("roi_bbox_max_y");
+    const FloatType roi_max_z = options->getValue<FloatType>("roi_bbox_max_z");
+    std::vector<RegionType::Vector2> vertices;
+    vertices.push_back(RegionType::Vector2(roi_min_x, roi_min_y));
+    vertices.push_back(RegionType::Vector2(roi_min_x, roi_max_y));
+    vertices.push_back(RegionType::Vector2(roi_max_x, roi_max_y));
+    vertices.push_back(RegionType::Vector2(roi_max_x, roi_min_y));
+    roi_ = RegionType(vertices, roi_min_z, roi_max_z);
+    std::cout << "ROI bounding box: " << roi_.getBoundingBox() << std::endl;
+//    std::cout << roi_min_x << ", " << roi_min_y << std::endl;
+//    std::cout << roi_min_x << ", " << roi_max_y << std::endl;
+//    std::cout << roi_max_x << ", " << roi_max_y << std::endl;
+//    std::cout << roi_max_x << ", " << roi_min_y << std::endl;
+//    std::cout << roi_min_z << ", " << roi_max_z << std::endl;
+//    std::cout << roi_.isPointInside(Vector3(0, 0, 0)) << std::endl;
+//    std::cout << roi_.isPointInside(Vector3(50, 0, 0)) << std::endl;
+//    std::cout << roi_.isPointInside(Vector3(0, 50, 0)) << std::endl;
+//    std::cout << roi_.isPointInside(Vector3(0, 0, 50)) << std::endl;
+//    std::cout << roi_.isPointInside(Vector3(200, 0, 0)) << std::endl;
+//    std::cout << roi_.isPointInside(Vector3(200, 0, 0)) << std::endl;
+//    std::cout << roi_.isPointInside(Vector3(0, -200, 0)) << std::endl;
+//    std::cout << roi_.isPointInside(Vector3(0, 0, 150)) << std::endl;
+//    std::cout << roi_.distanceToPoint(Vector3(0, 0, 0)) << std::endl;
+//    std::cout << roi_.distanceToPoint(Vector3(200, 0, 0)) << std::endl;
+//    std::cout << roi_.distanceToPoint(Vector3(0, 0, -150)) << std::endl;
+//    std::cout << roi_.distanceToPoint(Vector3(150, 0, 150)) << std::endl;
+  }
+  else {
+    boost::property_tree::ptree pt;
+    boost::property_tree::read_json(options_.regions_json_filename, pt);
+    std::cout << "Region of interest" << std::endl;
+    roi_ = convertGpsRegionToEnuRegion(pt.get_child("regionOfInterest"));
+    std::cout << "ROI bounding box: " << roi_.getBoundingBox() << std::endl;
+    for (const boost::property_tree::ptree::value_type& v : pt.get_child("noFlyZones")) {
+      std::cout << "No-Fly-Zones" << std::endl;
+      no_fly_zones_.push_back(convertGpsRegionToEnuRegion(v.second));
+    }
+  }
+
   const std::string raw_octree_filename = options->getValue<std::string>("raw_octree_filename");
+  const std::string dense_points_filename = options->getValue<std::string>("dense_points_filename");
   const std::string mesh_filename = options->getValue<std::string>("poisson_mesh_filename");
   std::string octree_filename = options->getValue<std::string>("octree_filename");
   if (octree_filename.empty()) {
@@ -44,18 +94,75 @@ ViewpointPlannerData::ViewpointPlannerData(const Options* options)
     df_filename = mesh_filename + ".df";
   }
 
+  readDensePoints(dense_points_filename);
   readPoissonMesh(mesh_filename);
-  readDenseReconstruction(reconstruction_path);
   bool augmented_octree_generated = readAndAugmentOctree(octree_filename, raw_octree_filename);
   bool bvh_generated = readBVHTree(bvh_filename, octree_filename);
-  bool df_generated = readMeshDistanceField(df_filename, mesh_filename);
-  if (augmented_octree_generated || bvh_generated || df_generated) {
+  generateWeightGrid();
+  bool df_generated = false;
+  if (options_.use_distance_field) {
+    df_generated = readMeshDistanceField(df_filename, mesh_filename);
+  }
+  bool update_weights = augmented_octree_generated || bvh_generated || df_generated
+      || options_.force_weights_update;
+  if (!options_.regions_json_filename.empty()) {
+    if (getLastWriteTime(options_.regions_json_filename) > getLastWriteTime(bvh_filename)) {
+      update_weights = true;
+    }
+    else if (getLastWriteTime(options_.regions_json_filename) > getLastWriteTime(octree_filename)) {
+      update_weights = true;
+    }
+  }
+  if (update_weights) {
+    std::cout << "Updating weights" << std::endl;
     updateWeights();
     std::cout << "Writing updated augmented octree" << std::endl;
     octree_->write(octree_filename);
     std::cout << "Writing updated BVH tree" << std::endl;
     writeBVHTree(bvh_filename);
   }
+}
+
+ViewpointPlannerData::RegionType ViewpointPlannerData::convertGpsRegionToEnuRegion(const boost::property_tree::ptree& pt) const {
+  const bool verbose = true;
+
+  using GpsCoordinateType = reconstruction::SfmToGpsTransformation::GpsCoordinate;
+  using GpsConverter = ait::GpsConverter<typename GpsCoordinateType::FloatType>;
+  const GpsCoordinateType gps_reference = reconstruction_->sfmGpsTransformation().gps_reference;
+  std::cout << "GPS reference: " << gps_reference << std::endl;
+  const GpsConverter gps_converter = GpsConverter::createWGS84(gps_reference);
+  const FloatType lower_altitude = pt.get<FloatType>("lower_altitude");
+  const FloatType upper_altitude = pt.get<FloatType>("upper_altitude");
+  const FloatType ref_altitude = gps_reference.altitude();
+  std::vector<GpsCoordinateType> gps_coordinates;
+  for (const boost::property_tree::ptree::value_type& v : pt.get_child("latlong_vertices")) {
+    gps_coordinates.push_back(GpsCoordinateType(v.second.get<FloatType>("latitude"), v.second.get<FloatType>("longitude"), ref_altitude));
+  }
+  std::vector<RegionType::Vector2> vertices;
+  for (const GpsCoordinateType& gps : gps_coordinates) {
+    const Vector3 enu = gps_converter.convertGpsToEnu(gps);
+    if (verbose) {
+      std::cout << "GPS: " << gps << ", ENU: " << enu.transpose() << std::endl;
+    }
+    vertices.emplace_back(enu(0), enu(1));
+  }
+  if (verbose) {
+    std::cout << "Lower altitude: " << lower_altitude << ", upper_altitude: " << upper_altitude << std::endl;
+  }
+  const RegionType region(vertices, lower_altitude, upper_altitude);
+  return region;
+}
+
+bool ViewpointPlannerData::isValidObjectPosition(const Vector3& position, const Vector3& object_extent) const {
+  for (const RegionType& no_fly_zone : no_fly_zones_) {
+    if (no_fly_zone.isPointInside(position)) {
+      return false;
+    }
+  }
+  BoundingBoxType object_bbox = BoundingBoxType::createFromCenterAndExtent(position, object_extent);
+  std::vector<ViewpointPlannerData::OccupiedTreeType::ConstBBoxIntersectionResult> results =
+      occupied_bvh_.intersects(object_bbox);
+  return results.empty();
 }
 
 void ViewpointPlannerData::readDenseReconstruction(const std::string& path) {
@@ -114,6 +221,13 @@ ViewpointPlannerData::readRawOctree(const std::string& octree_filename, bool bin
   return std::move(raw_octree);
 }
 
+void ViewpointPlannerData::readDensePoints(const std::string& dense_points_filename) {
+  // Read reconstructed dense point cloud
+  dense_points_.reset(new ViewpointPlannerData::PointCloudType);
+  ViewpointPlannerData::PointCloudIOType::loadFromFile(dense_points_filename, *dense_points_.get());
+  std::cout << "Number of vertices in dense points: " << dense_points_->m_points.size() << std::endl;
+}
+
 void ViewpointPlannerData::readPoissonMesh(const std::string& mesh_filename) {
   // Read poisson reconstructed mesh
   poisson_mesh_.reset(new ViewpointPlannerData::MeshType);
@@ -158,7 +272,7 @@ bool ViewpointPlannerData::readMeshDistanceField(std::string df_filename, const 
     }
   }
   if (!read_cached_df) {
-    std::cout << "Generating distance field." << std::endl;
+    std::cout << "Generating weight grid and distance field." << std::endl;
     generateDistanceField();
     std::cout << "Done" << std::endl;
     ml::BinaryDataStreamFile file_stream(df_filename, true);
@@ -174,11 +288,13 @@ void ViewpointPlannerData::updateWeights() {
   }
 //  FloatType min_distance = std::numeric_limits<FloatType>::max();
   FloatType max_distance = std::numeric_limits<FloatType>::lowest();
-  for (int x = 0; x < grid_dim_(0); ++x) {
-    for (int y = 0; y < grid_dim_(1); ++y) {
-      for (int z = 0; z < grid_dim_(2); ++z) {
-//        min_distance = std::min(min_distance, distance_field_(x, y, z));
-        max_distance = std::max(max_distance, distance_field_(x, y, z));
+  if (options_.use_distance_field) {
+    for (int x = 0; x < grid_dim_(0); ++x) {
+      for (int y = 0; y < grid_dim_(1); ++y) {
+        for (int z = 0; z < grid_dim_(2); ++z) {
+//          min_distance = std::min(min_distance, distance_field_(x, y, z));
+          max_distance = std::max(max_distance, distance_field_(x, y, z));
+        }
       }
     }
   }
@@ -186,28 +302,47 @@ void ViewpointPlannerData::updateWeights() {
 //  std::cout << "max_distance: " << max_distance << std::endl;
 //  FloatType max_weight = std::numeric_limits<FloatType>::lowest();
 //  FloatType min_weight = std::numeric_limits<FloatType>::max();
+//  const BoundingBoxType roi_bbox = roi_.getBoundingBox();
   for (int ix = 0; ix < grid_dim_(0); ++ix) {
     for (int iy = 0; iy < grid_dim_(1); ++iy) {
       for (int iz = 0; iz < grid_dim_(2); ++iz) {
-        BoundingBoxType::Vector3 xyz = getGridPosition(ix, iy, iz);
+        const BoundingBoxType::Vector3 xyz = getGridPosition(ix, iy, iz);
 //        std::cout << "roi_distance=" << roi_distance << ", roi_weight=" << roi_weight << std::endl;
         FloatType roi_weight = 1;
-        if (roi_bbox_.isOutside(xyz)) {
-          FloatType roi_distance = roi_bbox_.distanceTo(xyz);
+//        if (roi_.isPointOutside(xyz) != roi_bbox.isOutside(xyz)) {
+//          AIT_PRINT_VAR(roi_.isPointOutside(xyz));
+//          AIT_PRINT_VAR(roi_bbox.isOutside(xyz));
+//          AIT_PRINT_VAR(xyz);
+//        }
+        if (roi_.isPointOutside(xyz)) {
+//        if (roi_bbox.isOutside(xyz)) {
+          FloatType roi_distance = roi_.distanceToPoint(xyz);
+//          FloatType roi_distance = roi_bbox.distanceTo(xyz);
           roi_distance = std::min(roi_distance, options_.roi_falloff_distance);
           roi_weight = (options_.roi_falloff_distance - roi_distance) / options_.roi_falloff_distance;
         }
-        FloatType distance = distance_field_(ix, iy, iz);
-        FloatType inv_distance = (max_distance - distance) / (FloatType)max_distance;
-        FloatType weight = roi_weight * inv_distance * inv_distance;
-        BoundingBoxType bbox(xyz, grid_increment_);
-        std::vector<OccupiedTreeType::BBoxIntersectionResult> results =
+        FloatType weight;
+        if (options_.use_distance_field) {
+          const FloatType distance = distance_field_(ix, iy, iz);
+          const FloatType inv_distance = (max_distance - distance) / (FloatType)max_distance;
+          if (options_.weight_falloff_quadratic) {
+            weight = roi_weight * inv_distance * inv_distance;
+          }
+          else {
+            weight = roi_weight * inv_distance;
+          }
+        }
+        else {
+          weight = roi_weight;
+        }
+        const BoundingBoxType bbox(xyz, grid_increment_);
+        const std::vector<OccupiedTreeType::BBoxIntersectionResult> results =
             occupied_bvh_.intersects(bbox);
         for (const OccupiedTreeType::BBoxIntersectionResult& result : results) {
           result.node->getObject()->weight = weight;
         }
-        octomap::point3d oct_min(bbox.getMinimum(0), bbox.getMinimum(1), bbox.getMinimum(2));
-        octomap::point3d oct_max(bbox.getMaximum(0), bbox.getMaximum(1), bbox.getMaximum(2));
+        const octomap::point3d oct_min(bbox.getMinimum(0), bbox.getMinimum(1), bbox.getMinimum(2));
+        const octomap::point3d oct_max(bbox.getMaximum(0), bbox.getMaximum(1), bbox.getMaximum(2));
         for (auto it = octree_->begin_leafs_bbx(oct_min, oct_max); it != octree_->end_leafs_bbx(); ++it) {
           it->setWeight(weight);
         }
@@ -410,10 +545,8 @@ void ViewpointPlannerData::readCachedBVHTree(const std::string& filename) {
   occupied_bvh_.read(filename);
 }
 
-void ViewpointPlannerData::generateDistanceField() {
-  ml::Grid3f seed_grid(options_.grid_dimension, options_.grid_dimension, options_.grid_dimension);
-  seed_grid.setValues(std::numeric_limits<float>::max());
-  BoundingBoxType bbox = occupied_bvh_.getRoot()->getBoundingBox();
+void ViewpointPlannerData::generateWeightGrid() {
+  const BoundingBoxType& bbox = occupied_bvh_.getRoot()->getBoundingBox();
   grid_dim_ = Vector3i(options_.grid_dimension, options_.grid_dimension, options_.grid_dimension);
   grid_origin_ = bbox.getMinimum();
   grid_increment_ = bbox.getMaxExtent() / (options_.grid_dimension + 1);
@@ -424,6 +557,12 @@ void ViewpointPlannerData::generateDistanceField() {
   //  std::cout << "grid_increment_: " << grid_increment_ << std::endl;
   //  std::cout << "grid_max: " << grid_max << std::endl;
   //  std::cout << "grid_bbox_: " << grid_bbox_ << std::endl;
+}
+
+void ViewpointPlannerData::generateDistanceField() {
+  ml::Grid3f seed_grid(options_.grid_dimension, options_.grid_dimension, options_.grid_dimension);
+  seed_grid.setValues(std::numeric_limits<float>::max());
+  const BoundingBoxType& bbox = occupied_bvh_.getRoot()->getBoundingBox();
   for (size_t i = 0; i < poisson_mesh_->m_FaceIndicesVertices.size(); ++i) {
     const MeshType::Indices::Face& face = poisson_mesh_->m_FaceIndicesVertices[i];
     AIT_ASSERT_STR(face.size() == 3, "Mesh faces need to have a valence of 3");

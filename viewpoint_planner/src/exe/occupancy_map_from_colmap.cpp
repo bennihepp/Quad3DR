@@ -48,6 +48,7 @@ std::pair<bool, boost::program_options::variables_map> process_commandline(int a
       ("map-file", po::value<string>()->default_value("output_map.ot"), "Octomap output file")
       ("lazy-eval", po::bool_switch()->default_value(true), "Only update inner nodes once at the end")
       ("dense", po::bool_switch()->default_value(true), "Make a dense tree by inserting unknown nodes")
+      ("no-display", po::bool_switch()->default_value(false), "Do not show depth maps")
       ;
 
     po::options_description options;
@@ -109,7 +110,7 @@ int main(int argc, char** argv) {
         reconstruction.readDepthMap(image_id, DenseReconstruction::DenseMapType::GEOMETRIC_FUSED);
 
     // Show depth maps for debugging
-    {
+    if (!vm["no-display"].as<bool>()) {
       cv::Mat depth_img(depth_map.height(), depth_map.width(), CV_32F);
       for (std::size_t y = 0; y < depth_map.height(); ++y) {
         for (std::size_t x = 0; x < depth_map.width(); ++x) {

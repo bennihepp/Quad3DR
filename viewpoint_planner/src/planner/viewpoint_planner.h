@@ -14,6 +14,8 @@
 #include <boost/functional/hash.hpp>
 #include <boost/archive/binary_iarchive.hpp>
 #include <boost/archive/binary_oarchive.hpp>
+#include <boost/serialization/vector.hpp>
+#include <boost/serialization/utility.hpp>
 #include <ait/common.h>
 #include <ait/options.h>
 #include <ait/random.h>
@@ -22,7 +24,7 @@
 #include "../mLib/mLib.h"
 #include "../octree/occupancy_map.h"
 #include "../reconstruction/dense_reconstruction.h"
-#include "../graph/graph.h"
+#include "../graph/graph_boost.h"
 #include "../ann/approximate_nearest_neighbor.h"
 #include "viewpoint.h"
 #include "viewpoint_planner_data.h"
@@ -43,6 +45,7 @@ public:
   using FloatType = ViewpointPlannerData::FloatType;
   USE_FIXED_EIGEN_TYPES(FloatType)
   using BoundingBoxType = ViewpointPlannerData::BoundingBoxType;
+  using RegionType = ViewpointPlannerData::RegionType;
   using RayType = Ray<FloatType>;
   using Pose = ait::Pose<FloatType>;
 
@@ -54,6 +57,9 @@ public:
     : ait::ConfigOptions("viewpoint_planner", "ViewpointPlanner options") {
       addOption<std::size_t>("rng_seed", &rng_seed);
       addOption<FloatType>("virtual_camera_scale", &virtual_camera_scale);
+      addOption<FloatType>("raycast_min_range", &raycast_min_range);
+      addOption<FloatType>("raycast_max_range", &raycast_max_range);
+      addOption<bool>("ignore_real_observed_voxels", &ignore_real_observed_voxels);
       addOption<FloatType>("drone_extent_x", 3);
       addOption<FloatType>("drone_extent_y", 3);
       addOption<FloatType>("drone_extent_z", 3);
@@ -75,10 +81,12 @@ public:
       addOption<FloatType>("viewpoint_path_initial_distance", &viewpoint_path_initial_distance);
       addOption<FloatType>("objective_parameter_alpha", &objective_parameter_alpha);
       addOption<FloatType>("objective_parameter_beta", &objective_parameter_beta);
+      addOption<std::size_t>("viewpoint_path_2opt_max_k_length", &viewpoint_path_2opt_max_k_length);
       addOption<std::string>("viewpoint_graph_filename", &viewpoint_graph_filename);
       // TODO:
       addOption<std::size_t>("num_sampled_poses", &num_sampled_poses);
       addOption<std::size_t>("num_planned_viewpoints", &num_planned_viewpoints);
+      addOption<std::string>("motion_planner_log_filename", &motion_planner_log_filename);
     }
 
     ~Options() override {}
@@ -88,6 +96,13 @@ public:
 
     // Scale factor from real camera to virtual camera
     FloatType virtual_camera_scale = 0.05f;
+
+    // Min and max range for raycast
+    FloatType raycast_min_range = 0;
+    FloatType raycast_max_range = 60;
+
+    // Whether to ignore the voxels already observed by a previous reconstruction
+    bool ignore_real_observed_voxels = true;
 
     // Viewpoint sampling parameters
 
@@ -134,14 +149,21 @@ public:
     // Objective factor for motion distance
     FloatType objective_parameter_beta = 0;
 
+    // Maximum segment length that is reversed by 2 Opt
+    std::size_t viewpoint_path_2opt_max_k_length = 15;
+
     // Filename of serialized viewpoint graph
     std::string viewpoint_graph_filename = "";
 
     // TODO: Needed?
     std::size_t num_sampled_poses = 100;
     std::size_t num_planned_viewpoints = 10;
+
+    // Log file for OMPL motion planner
+    std::string motion_planner_log_filename = "motion_planner.log";
   };
 
+  using PointCloudType = ViewpointPlannerData::PointCloudType;
   using MeshType = ViewpointPlannerData::MeshType;
 //    using OctomapType = octomap::OcTree;
   using InputOccupancyMapType = OccupancyMap<OccupancyNode>;
@@ -152,6 +174,9 @@ public:
   using CounterType = OccupancyMapType::NodeType::CounterType;
   using WeightType = OccupancyMapType::NodeType::WeightType;
   using VoxelType = ViewpointPlannerData::OccupiedTreeType::NodeType;
+
+  using MotionPlannerType = MotionPlanner<FloatType>;
+  using Motion = typename MotionPlannerType::Motion;
 
   class ViewpointEntrySerializer;
 
@@ -225,53 +250,42 @@ public:
 
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-private:
+  private:
     friend class ViewpointEntrySerializer;
   };
 
   using ViewpointEntryVector = std::vector<ViewpointEntry>;
   using ViewpointEntryIndex = ViewpointEntryVector::size_type;
 
-  class ViewpointEntrySaver {
-  public:
-    ViewpointEntrySaver(const ViewpointEntryVector& entries, const ViewpointPlannerData::OccupiedTreeType& bvh_tree)
-    : entries_(entries), bvh_tree_(bvh_tree) {}
+  // Pair of indices to index viewpoint motions
+  struct ViewpointIndexPair {
+    ViewpointIndexPair()
+    : index1((ViewpointEntryIndex)-1), index2((ViewpointEntryIndex)-1) {}
 
-  private:
-    // Boost serialization
-    friend class boost::serialization::access;
-
-    template <typename Archive>
-    void serialize(Archive& ar, const unsigned int version) const {
-      std::unordered_map<const VoxelType*, std::size_t> voxel_index_map;
-      // Compute consistent ordering of BVH nodes
-      std::size_t voxel_index = 0;
-      for (const ViewpointPlannerData::OccupiedTreeType::NodeType& node : bvh_tree_) {
-        voxel_index_map.emplace(&node, voxel_index);
-        ++voxel_index;
+    ViewpointIndexPair(ViewpointEntryIndex index1, ViewpointEntryIndex index2)
+    : index1(index1), index2(index2) {
+      if (this->index2 < this->index1) {
+        using std::swap;
+        swap(this->index1, this->index2);
       }
-      ar & entries_.size();
-      for (const ViewpointEntry& entry : entries_) {
-        // Save viewpoint
-        ar & entry.viewpoint.pose();
-        ar & entry.total_information;
-        ar & entry.voxel_set.size();
-        for (const VoxelWithInformation& voxel_with_information : entry.voxel_set) {
-          std::size_t voxel_index = voxel_index_map.at(voxel_with_information.voxel);
-          ar & voxel_index;
-          ar & voxel_with_information.information;
-        }
-      }
+      AIT_ASSERT_DBG(this->index1 <= this->index2);
     }
 
-    const ViewpointEntryVector& entries_;
-    const ViewpointPlannerData::OccupiedTreeType& bvh_tree_;
-  };
+    ViewpointEntryIndex index1;
+    ViewpointEntryIndex index2;
 
-  class ViewpointEntryLoader {
-  public:
-    ViewpointEntryLoader(ViewpointEntryVector* entries, ViewpointPlannerData::OccupiedTreeType* bvh_tree, SparseReconstruction* reconstruction)
-    : entries_(entries), bvh_tree_(bvh_tree), reconstruction_(reconstruction) {}
+    bool operator==(const ViewpointIndexPair& other) const {
+      return index1 == other.index1 && index2 == other.index2;
+    }
+
+    struct Hash {
+      std::size_t operator()(const ViewpointIndexPair& index_pair) const {
+        std::size_t val { 0 };
+        boost::hash_combine(val, index_pair.index1);
+        boost::hash_combine(val, index_pair.index2);
+        return val;
+      }
+    };
 
   private:
     // Boost serialization
@@ -279,13 +293,101 @@ private:
 
     template <typename Archive>
     void serialize(Archive& ar, const unsigned int version) {
-      std::unordered_map<std::size_t, VoxelType*> voxel_index_map;
+      ar & index1;
+      ar & index2;
+    }
+  };
+
+  class VoxelWithInformationSetSaver {
+  public:
+    VoxelWithInformationSetSaver(const ViewpointPlannerData::OccupiedTreeType& bvh_tree) {
       // Compute consistent ordering of BVH nodes
       std::size_t voxel_index = 0;
-      for (ViewpointPlannerData::OccupiedTreeType::NodeType& node : *bvh_tree_) {
-        voxel_index_map.emplace(voxel_index, &node);
+      for (const ViewpointPlannerData::OccupiedTreeType::NodeType& node : bvh_tree) {
+        voxel_index_map_.emplace(&node, voxel_index);
         ++voxel_index;
       }
+    }
+
+    template <typename Archive>
+    void save(const VoxelWithInformationSet& voxel_set, Archive& ar, const unsigned int version) const {
+      ar & voxel_set.size();
+      for (const VoxelWithInformation& voxel_with_information : voxel_set) {
+        std::size_t voxel_index = voxel_index_map_.at(voxel_with_information.voxel);
+        ar & voxel_index;
+        ar & voxel_with_information.information;
+      }
+    }
+
+  private:
+    std::unordered_map<const VoxelType*, std::size_t> voxel_index_map_;
+  };
+
+  class VoxelWithInformationSetLoader {
+  public:
+    VoxelWithInformationSetLoader(ViewpointPlannerData::OccupiedTreeType* bvh_tree) {
+      // Compute consistent ordering of BVH nodes
+      std::size_t voxel_index = 0;
+      for (ViewpointPlannerData::OccupiedTreeType::NodeType& node : *bvh_tree) {
+        index_voxel_map_.emplace(voxel_index, &node);
+        ++voxel_index;
+      }
+    }
+
+    template <typename Archive>
+    void load(VoxelWithInformationSet* voxel_set, Archive& ar, const unsigned int version) const {
+      std::size_t num_voxels;
+      ar & num_voxels;
+      for (std::size_t i = 0; i < num_voxels; ++i) {
+        std::size_t voxel_index;
+        ar & voxel_index;
+        VoxelType* voxel = index_voxel_map_.at(voxel_index);
+        FloatType information;
+        ar & information;
+        VoxelWithInformation voxel_with_information(voxel, information);
+        voxel_set->emplace(std::move(voxel_with_information));
+      }
+    }
+
+  private:
+    std::unordered_map<std::size_t, VoxelType*> index_voxel_map_;
+  };
+
+  class ViewpointEntrySaver {
+  public:
+    ViewpointEntrySaver(const ViewpointEntryVector& entries, const ViewpointPlannerData::OccupiedTreeType& bvh_tree)
+    : entries_(entries), voxel_set_saver_(bvh_tree) {}
+
+  private:
+    // Boost serialization
+    friend class boost::serialization::access;
+
+    template <typename Archive>
+    void serialize(Archive& ar, const unsigned int version) const {
+      ar & entries_.size();
+      for (const ViewpointEntry& entry : entries_) {
+        // Save viewpoint
+        ar & entry.viewpoint.pose();
+        ar & entry.total_information;
+        voxel_set_saver_.save(entry.voxel_set, ar, version);
+      }
+    }
+
+    const ViewpointEntryVector& entries_;
+    const VoxelWithInformationSetSaver voxel_set_saver_;
+  };
+
+  class ViewpointEntryLoader {
+  public:
+    ViewpointEntryLoader(ViewpointEntryVector* entries, ViewpointPlannerData::OccupiedTreeType* bvh_tree, SparseReconstruction* reconstruction)
+    : entries_(entries), voxel_set_loader_(bvh_tree), reconstruction_(reconstruction) {}
+
+  private:
+    // Boost serialization
+    friend class boost::serialization::access;
+
+    template <typename Archive>
+    void serialize(Archive& ar, const unsigned int version) {
       const PinholeCamera* camera = static_cast<PinholeCamera*>(&(reconstruction_->getCameras().begin()->second));
       std::size_t num_entries;
       ar & num_entries;
@@ -295,22 +397,12 @@ private:
         ar & pose;
         entry.viewpoint = Viewpoint(camera, pose);
         ar & entry.total_information;
-        std::size_t num_voxels;
-        ar & num_voxels;
-        for (std::size_t i = 0; i < num_voxels; ++i) {
-          std::size_t voxel_index;
-          ar & voxel_index;
-          VoxelType* voxel = voxel_index_map.at(voxel_index);
-          FloatType information;
-          ar & information;
-          VoxelWithInformation voxel_with_information(voxel, information);
-          entry.voxel_set.emplace(std::move(voxel_with_information));
-        }
+        voxel_set_loader_.load(&entry.voxel_set, ar, version);
       }
     }
 
     ViewpointEntryVector* entries_;
-    ViewpointPlannerData::OccupiedTreeType* bvh_tree_;
+    const VoxelWithInformationSetLoader voxel_set_loader_;
     SparseReconstruction* reconstruction_;
   };
 
@@ -333,20 +425,37 @@ private:
     FloatType acc_motion_distance;
     FloatType local_objective;
     FloatType acc_objective;
+
+  private:
+    // Boost serialization
+    friend class boost::serialization::access;
+
+    template <typename Archive>
+    void serialize(Archive& ar, const unsigned int version) {
+      ar & viewpoint_index;
+      ar & local_information;
+      ar & acc_information;
+      ar & local_motion_distance;
+      ar & acc_motion_distance;
+      ar & local_objective;
+      ar & acc_objective;
+    }
   };
 
   struct ViewpointMotion {
-    ViewpointMotion(ViewpointEntryIndex from_index, ViewpointEntryIndex to_index, FloatType cost)
-    : from_index(from_index), to_index(to_index), cost(cost) {}
+    ViewpointMotion(ViewpointEntryIndex from_index, ViewpointEntryIndex to_index, Motion motion)
+    : from_index(from_index), to_index(to_index), motion(motion) {}
 
     ViewpointEntryIndex from_index;
     ViewpointEntryIndex to_index;
-    FloatType cost;
+    Motion motion;
   };
 
   struct ViewpointPath {
-    // Ordered viewpoint entries on the path
+    // Viewpoint entries on the path
     std::vector<ViewpointPathEntry> entries;
+    // Indices into entries array ordered according to the flight path
+    std::vector<std::size_t> order;
     // Set of voxels that are observed on the whole path
     VoxelWithInformationSet observed_voxel_set;
     // Accumulated information over the whole path
@@ -355,6 +464,110 @@ private:
     FloatType acc_motion_distance;
     // Accumulated motion distance over the whole path
     FloatType acc_objective;
+
+  private:
+    // Boost serialization
+    friend class boost::serialization::access;
+
+    template <typename Archive>
+    void serialize(Archive& ar, const unsigned int version) {
+      ar & entries;
+      ar & order;
+      ar & acc_information;
+      ar & acc_motion_distance;
+      ar & acc_objective;
+    }
+  };
+
+  struct ViewpointPathComputationData {
+    // Viewpoint entries sorted by ascending order of their novel information for the corresponding viewpoint
+    std::vector<std::pair<ViewpointEntryIndex, FloatType>> sorted_new_informations;
+    // Number of viewpoints in the entries array that have been connected to each other
+    std::size_t num_connected_entries = 0;
+  };
+
+  class ViewpointPathSaver {
+  public:
+    ViewpointPathSaver(const std::vector<ViewpointPath>& paths,
+        const std::vector<ViewpointPathComputationData>& comp_datas,
+        const ViewpointPlannerData::OccupiedTreeType& bvh_tree)
+    : paths_(paths), comp_datas_(comp_datas), voxel_set_saver_(bvh_tree) {}
+
+  private:
+    // Boost serialization
+    friend class boost::serialization::access;
+
+    template <typename Archive>
+    void serialize(Archive& ar, const unsigned int version) const {
+      ar & paths_.size();
+      for (std::size_t i = 0; i < paths_.size(); ++i) {
+        const ViewpointPath& path = paths_[i];
+        const ViewpointPathComputationData& comp_data = comp_datas_[i];
+        ar & path.entries;
+        ar & path.order;
+        ar & path.acc_information;
+        ar & path.acc_motion_distance;
+        ar & path.acc_objective;
+        voxel_set_saver_.save(path.observed_voxel_set, ar, version);
+        ar & comp_data.sorted_new_informations;
+      }
+    }
+
+    const std::vector<ViewpointPath>& paths_;
+    const std::vector<ViewpointPathComputationData>& comp_datas_;
+    const VoxelWithInformationSetSaver voxel_set_saver_;
+  };
+
+  class ViewpointPathLoader {
+  public:
+    ViewpointPathLoader(std::vector<ViewpointPath>* paths,
+        std::vector<ViewpointPathComputationData>* comp_datas,
+        ViewpointPlannerData::OccupiedTreeType* bvh_tree)
+    : paths_(paths), comp_datas_(comp_datas), voxel_set_loader_(bvh_tree) {}
+
+  private:
+    // Boost serialization
+    friend class boost::serialization::access;
+
+    template <typename Archive>
+    void serialize(Archive& ar, const unsigned int version) {
+      std::size_t num_paths;
+      ar & num_paths;
+      paths_->resize(num_paths);
+      comp_datas_->resize(num_paths);
+      for (std::size_t i = 0; i < paths_->size(); ++i) {
+        ViewpointPath& path = (*paths_)[i];
+        ViewpointPathComputationData& comp_data = (*comp_datas_)[i];
+        ar & path.entries;
+        ar & path.order;
+        ar & path.acc_information;
+        ar & path.acc_motion_distance;
+        ar & path.acc_objective;
+        voxel_set_loader_.load(&path.observed_voxel_set, ar, version);
+        ar & comp_data.sorted_new_informations;
+      }
+    }
+
+    std::vector<ViewpointPath>* paths_;
+    std::vector<ViewpointPathComputationData>* comp_datas_;
+    VoxelWithInformationSetLoader voxel_set_loader_;
+  };
+
+  // Wrapper for computations on a viewpoint path
+  struct ViewpointPathGraphWrapper {
+    using WeightProperty = boost::property<boost::edge_weight_t, ViewpointPlanner::FloatType>;
+    using BoostGraph = boost::adjacency_list<
+        boost::vecS, boost::vecS, boost::bidirectionalS,
+        boost::no_property,
+        WeightProperty>;
+    using Vertex = typename BoostGraph::vertex_descriptor;
+    using IndexMap = boost::property_map<BoostGraph, boost::vertex_index_t>::type;
+    using VertexIterator = BoostGraph::vertex_iterator;
+
+    BoostGraph graph;
+    IndexMap index_map;
+    std::unordered_map<Vertex, ViewpointPlanner::ViewpointEntryIndex> viewpoint_indices;
+    std::unordered_map<ViewpointPlanner::ViewpointEntryIndex, Vertex> viewpoint_index_to_vertex_map;
   };
 
   using ViewpointGraph = Graph<ViewpointEntryIndex, FloatType>;
@@ -362,7 +575,11 @@ private:
   using FeatureViewpointMap = std::unordered_map<std::size_t, std::vector<const Viewpoint*>>;
 
 
-  ViewpointPlanner(const Options* options, std::unique_ptr<ViewpointPlannerData> data);
+  ViewpointPlanner(const Options* options,
+      const MotionPlannerType::Options* motion_options, std::unique_ptr<ViewpointPlannerData> data);
+
+  /// Get virtual camera
+  const PinholeCamera& getVirtualCamera() const;
 
   /// Set size of virtual camera used for raycasting.
   void setVirtualCamera(std::size_t virtual_width, std::size_t virtual_height, const Matrix4x4& virtual_intrinsics);
@@ -383,12 +600,28 @@ private:
 
   void loadViewpointGraph(const std::string& filename);
 
+  void saveViewpointPath(const std::string& filename) const;
+
+  void loadViewpointPath(const std::string& filename);
+
+  BoundingBoxType getRoiBbox() const {
+    return data_->roi_.getBoundingBox();
+  }
+
   const OccupancyMapType* getOctree() const {
       return data_->octree_.get();
   }
 
+  const ViewpointPlannerData::OccupiedTreeType& getBVHTree() const {
+    return data_->occupied_bvh_;
+  }
+
   const DenseReconstruction* getReconstruction() const {
       return data_->reconstruction_.get();
+  }
+
+  const PointCloudType* getDensePoints() const {
+    return data_->dense_points_.get();
   }
 
   const MeshType* getMesh() const {
@@ -405,10 +638,22 @@ private:
     return viewpoint_graph_;
   }
 
+  /// Return viewpoint graph for reading. Mutex needs to be locked.
+  ViewpointGraph& getViewpointGraph() {
+    return viewpoint_graph_;
+  }
+
   /// Return viewpoint paths for reading. Mutex needs to be locked.
   const std::vector<ViewpointPath>& getViewpointPaths() const {
     return viewpoint_paths_;
   }
+
+  /// Return the motion between two viewpoints.
+  Motion getViewpointMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index) const;
+
+  /// Adds a viewpoint motion to the graph. Reverses the order depending on the index ordering (see getViewpointMotion).
+  void addViewpointMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index, const Motion& motion);
+  void addViewpointMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index, Motion&& motion);
 
   /// Return best viewpoint path for reading. Mutex needs to be locked.
   const ViewpointPath& getBestViewpointPath() const;
@@ -447,7 +692,7 @@ private:
   Pose::Quaternion sampleBiasedOrientation(const Vector3& pos, const BoundingBoxType& bias_bbox) const;
 
   /// Check if an object can be placed at a position (i.e. is it free space)
-  bool isValidObjectPosition(const Vector3& position, const Vector3& object_extent);
+  bool isValidObjectPosition(const Vector3& position, const Vector3& object_extent) const;
 
   // TODO: remove
   void run();
@@ -467,12 +712,23 @@ private:
   /// Find the next best viewpoint to add to the viewpoint paths and use parameters from options.
   bool findNextViewpointPathEntries();
 
+  /// Compute the connected components of the graph and return a pair of the component labels and the number of components.
+  std::pair<std::vector<std::size_t>, std::size_t> getConnectedComponents() const;
+
+  /// Compute a viewpoint tour for all paths
+  void computeViewpointTour();
+
   // Raycasting and information computation
 
   /// Perform raycast on the BVH tree.
   /// Returns a vector of hit voxels with additional info.
   std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxelsBVH(
       const Pose& pose) const;
+
+  /// Perform raycast on the BVH tree on a limited window around the center.
+  /// Returns a vector of hit voxels with additional info.
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxelsBVH(
+      const Pose& pose, const std::size_t width, const std::size_t height) const;
 
   /// Perform raycast on the BVH tree.
   /// Returns the set of hit voxels with corresponding information + the total information of all voxels.
@@ -521,13 +777,63 @@ private:
   /// Find motion paths from provided viewpoint to neighbors in the viewpoint graph.
   std::vector<ViewpointMotion> findViewpointMotions(const ViewpointEntryIndex from_index);
 
+  /// Compute new information score of a new viewpoint given a path
+  FloatType computeNewInformation(const ViewpointPath* viewpoint_path, const ViewpointEntry& new_viewpoint) const;
+  FloatType computeNewInformation(const ViewpointPath* viewpoint_path, const ViewpointEntryIndex new_viewpoint_index) const;
+
+  /// Compute and initialize information scores of other viewpoints given a path
+  void initializeViewpointPathInformations(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data);
+
+  /// Compute and update information scores of other viewpoints given a path
+  void updateViewpointPathInformations(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data) const;
+
   /// Find the next best viewpoint to add to a single viewpoint path.
-  bool findNextViewpointPathEntry(ViewpointPath* viewpoint_path, const FloatType alpha, const FloatType beta);
+  bool findNextViewpointPathEntry(
+      ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data, const FloatType alpha, const FloatType beta);
+
+  /// Compute an upper bound on the information value of a given path
+  FloatType computeViewpointPathInformationUpperBound(
+      const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data, const std::size_t max_num_viewpoints) const;
+
+  /// Report info of current viewpoint paths
+  void reportViewpointPathsStats() const;
+
+  /// Compute approx. shortest cycle to cover all viewpoints in the path (i.e. solve TSP problem)
+  std::vector<std::size_t> computeApproximateShortestCycle(const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data);
+
+  /// Reorders the viewpoint path to an approx. shortest cycle covering all viewpoints (i.e. TSP solution)
+  void solveApproximateTSP(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data);
+
+  /// Ensures that all viewpoints on a path are connected by searching for shortest motion paths if necessary
+  void ensureConnectedViewpointPath(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data);
+
+  /// Uses 2 Opt to improve the viewpoint tour
+  void improveViewpointTourWith2Opt(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data);
+
+  /// Find shortest motion between two viewpoints using A-Star on the viewpoint graph. Returns true if successful.
+  bool findAndAddShortestMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index);
+
+  /// Find shortest motion between a new viewpoint and existing viewpoints using A-Star on the viewpoint graph. Returns true if successful.
+  template <typename Iterator>
+  bool findAndAddShortestMotions(const ViewpointEntryIndex from_index, Iterator to_index_first, Iterator to_index_last);
+
+  /// Computes the length of a viewpoint tour (cycle)
+  FloatType computeTourLength(const ViewpointPath& viewpoint_path, const std::vector<std::size_t>& order) const;
+
+  /// Returns a new tour order where the path from k_start to k_end is reversed
+  std::vector<std::size_t> swap2Opt(
+      ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data,
+      const std::size_t k_start, const std::size_t k_end) const;
+
+private:
+  /// Create a subgraph with the nodes from a viewpoint path
+  ViewpointPathGraphWrapper createViewpointPathGraph(const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data);
 
   ait::Random<FloatType, std::int64_t> random_;
 
   Options options_;
 
+  BoundingBoxType pose_sample_bbox_;
   Vector3 drone_extent_;
 
   std::unique_ptr<ViewpointPlannerData> data_;
@@ -535,7 +841,7 @@ private:
 
   std::mutex mutex_;
 
-  MotionPlanner<FloatType> motion_planner_;
+  MotionPlannerType motion_planner_;
 
   // All tentative viewpoints
   ViewpointEntryVector viewpoint_entries_;
@@ -546,29 +852,16 @@ private:
   ViewpointANN viewpoint_ann_;
   // Graph of tentative viewpoints with motion distances
   ViewpointGraph viewpoint_graph_;
+  // Motion description of the connections in the viewpoint graph (indexed by viewpoint id pair)
+  std::unordered_map<ViewpointIndexPair, Motion, ViewpointIndexPair::Hash> viewpoint_graph_motions_;
   // Current viewpoint paths
   std::vector<ViewpointPath> viewpoint_paths_;
+  // Data used for computation of viewpoint paths
+  std::vector<ViewpointPathComputationData> viewpoint_paths_data_;
   // Map from triangle index to viewpoints that project features into it
   FeatureViewpointMap feature_viewpoint_map_;
 };
 
-template <typename IteratorT>
-std::pair<bool, ViewpointPlanner::Pose> ViewpointPlanner::sampleSurroundingPose(IteratorT first, IteratorT last) const {
-  AIT_ASSERT_STR(last - first > 0, "Unable to sample surrounding pose from empty pose set");
-  std::size_t index = random_.sampleUniformIntExclusive(0, last - first);
-  IteratorT it = first + index;
-//  std::cout << "index=" << index << ", last-first=" << (last-first) << std::endl;
-  const Pose& pose = it->viewpoint.pose();
-  return sampleSurroundingPose(pose);
-}
+#include "viewpoint_planner.hxx"
 
-template <typename IteratorT>
-std::pair<bool, ViewpointPlanner::Pose> ViewpointPlanner::sampleSurroundingPoseFromEntries(IteratorT first, IteratorT last) const {
-  AIT_ASSERT_STR(last - first > 0, "Unable to sample surrounding pose from empty pose set");
-  std::size_t index = random_.sampleUniformIntExclusive(0, last - first);
-  IteratorT it = first + index;
-//  std::cout << "index=" << index << ", last-first=" << (last-first) << std::endl;
-  const ViewpointEntryIndex viewpoint_index = *it;
-  const Pose& pose = viewpoint_entries_[viewpoint_index].viewpoint.pose();
-  return sampleSurroundingPose(pose);
-}
+#include "viewpoint_planner_graph.hxx"

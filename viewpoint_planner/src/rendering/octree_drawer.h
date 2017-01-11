@@ -65,6 +65,8 @@ public:
   void setMaxVoxelSize(FloatType max_voxel_size);
   void setMinWeight(FloatType min_weight);
   void setMaxWeight(FloatType max_weight);
+  void setMinInformation(FloatType min_information);
+  void setMaxInformation(FloatType max_information);
 
   size_t getRenderTreeDepth() const;
   void setRenderTreeDepth(size_t render_tree_depth);
@@ -115,4 +117,6 @@ private:
   FloatType max_weight_;
   FloatType low_weight_;
   FloatType high_weight_;
+  FloatType min_information_;
+  FloatType max_information_;
 };

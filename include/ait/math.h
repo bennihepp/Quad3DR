@@ -18,6 +18,18 @@ namespace ait {
     using Mat3f = Eigen::Matrix<float, 3, 3>;
     using Mat3d = Eigen::Matrix<double, 3, 3>;
 
+    template <typename FloatType>
+    FloatType degreeToRadians(const FloatType degrees) {
+      const FloatType pi = (FloatType)M_PI;
+      return degrees * pi / 180;
+    }
+
+    template <typename FloatType>
+    FloatType radiansToDegrees(const FloatType radians) {
+      const FloatType pi = (FloatType)M_PI;
+      return radians * 180 / pi;
+    }
+
     template <typename FloatType1, typename FloatType2, typename FloatType3>
     bool isApproxEqual(FloatType1 a, FloatType2 b, FloatType3 tolerance) {
       return std::abs(a - b) <= tolerance;

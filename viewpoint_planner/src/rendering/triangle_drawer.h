@@ -35,7 +35,7 @@ class TriangleDrawer
 {
 public:
     TriangleDrawer()
-    : num_triangles_(0) {
+    : draw_triangles_(true), num_triangles_(0) {
     }
 
     ~TriangleDrawer() {
@@ -50,6 +50,10 @@ public:
         if (vbo_.isCreated()) {
             vbo_.destroy();
         }
+    }
+
+    void setDrawTriangles(bool draw_triangles) {
+      draw_triangles_ = draw_triangles;
     }
 
     void init() {
@@ -91,7 +95,7 @@ public:
     }
 
     void draw(const QMatrix4x4& pvm_matrix) {
-        if (num_triangles_ == 0) {
+        if (!draw_triangles_ || num_triangles_ == 0) {
             return;
         }
 
@@ -107,6 +111,7 @@ public:
     }
 
 private:
+    bool draw_triangles_;
     size_t num_triangles_;
     QOpenGLVertexArrayObject vao_;
     QOpenGLBuffer vbo_;

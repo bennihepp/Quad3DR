@@ -52,6 +52,8 @@ public:
     VIEWPOINT_GRAPH,
     VIEWPOINT_MOTIONS,
     VIEWPOINT_PATH,
+    VIEWPOINT_PATH_TSP,
+    VIEWPOINT_UPDATE,
   };
 
   ViewpointPlannerThread(ViewpointPlanner* planner, ViewerWidget* viewer_widget);
@@ -89,6 +91,32 @@ private:
   std::size_t viewpoint_path_branch_index_;
 };
 
+class CustomCamera : public qglviewer::Camera {
+public:
+  CustomCamera(const qreal z_near, const qreal z_far)
+  : z_near_(z_near), z_far_(z_far) {}
+
+  void setZNear(const qreal z_near) {
+    z_near_ = z_near;
+  }
+
+  void setZFar(const qreal z_far) {
+    z_far_ = z_far;
+  }
+
+  qreal zNear() const override {
+    return z_near_;
+  }
+
+  qreal zFar() const override {
+    return z_far_;
+  }
+
+private:
+  qreal z_near_;
+  qreal z_far_;
+};
+
 class ViewerWidget : public QGLViewer
 {
   Q_OBJECT
@@ -96,6 +124,15 @@ class ViewerWidget : public QGLViewer
   using SparseReconstruction = reconstruction::SparseReconstruction;
   using ImageId = reconstruction::ImageId;
   using ImageColmap = reconstruction::ImageColmap;
+
+  const double kZNearSpeed = 0.2;
+  const double kZNearMin = 1e-6;
+  const double kZNearMax = 10;
+  const double kZFarSpeed = 0.2;
+  const double kZFarMin = 20;
+  const double kZFarMax = 1000;
+
+  const int kScreenshotQuality = 90;
 
 public:
   using FloatType = float;
@@ -118,12 +155,15 @@ public:
 
   ~ViewerWidget();
 
-  virtual void setSceneBoundingBox(const qglviewer::Vec& min, const qglviewer::Vec& max);
+  void setSceneBoundingBox(const qglviewer::Vec& min, const qglviewer::Vec& max);
 
   void showOctree(const ViewpointPlanner::OccupancyMapType* octree);
+  void showDensePoints(const ViewpointPlanner::PointCloudType* dense_points);
+  void showPoissonMesh(const ViewpointPlanner::MeshType* poisson_mesh);
   void showViewpointGraph(const std::size_t selected_index = (std::size_t)-1);
   void showViewpointGraphMotions(const std::size_t selected_index);
   void showViewpointPath(const std::size_t selected_index = (std::size_t)-1);
+  void showViewpointPathMotions(const std::size_t selected_index = (std::size_t)-1);
   void showSparseReconstruction(const SparseReconstruction* sparse_recon);
   void resetView();
 
@@ -138,6 +178,7 @@ public slots:
   void refreshTree();
   void setDrawRaycast(bool draw_raycast);
   void captureRaycast();
+  void captureRaycastWindow(const std::size_t width, const std::size_t height);
   void setOccupancyBinThreshold(double occupancy_bin_threshold);
   void setColorFlags(uint32_t color_flags);
   void setDrawFreeVoxels(bool draw_free_voxels);
@@ -150,6 +191,8 @@ public slots:
   void setDrawViewpointMotions(bool draw_viewpoint_motions);
   void setDrawViewpointPath(bool draw_viewpoint_path);
   void setDrawSparsePoints(bool draw_sparse_points);
+  void setDrawDensePoints(bool draw_dense_points);
+  void setDrawPoissonMesh(bool draw_poisson_mesh);
   void setUseDroneCamera(bool use_drone_camera);
   void setImagePoseIndex(ImageId image_id);
   void setViewpointPathBranchSelectionIndex(std::size_t index);
@@ -163,6 +206,8 @@ public slots:
   void setMaxVoxelSize(double max_voxel_size);
   void setMinWeight(double min_weight);
   void setMaxWeight(double max_weight);
+  void setMinInformation(double min_information);
+  void setMaxInformation(double max_information);
   void setRenderTreeDepth(std::size_t render_tree_depth);
   void setRenderObservationThreshold(std::size_t render_observation_threshold);
 
@@ -170,12 +215,15 @@ public slots:
   void pauseContinueViewpointGraph();
   void pauseContinueViewpointMotions();
   void pauseContinueViewpointPath();
+  void solveViewpointTSP();
   void pauseContinueOperation(ViewpointPlannerThread::Operation operation);
   void resetViewpoints();
   void resetViewpointMotions();
   void resetViewpointPath();
   void onSaveViewpointGraph(const std::string& filename);
   void onLoadViewpointGraph(const std::string& filename);
+  void onSaveViewpointPath(const std::string& filename);
+  void onLoadViewpointPath(const std::string& filename);
   void continuePlannerThread();
   void pausePlannerThread();
 
@@ -186,6 +234,8 @@ public slots:
   void setBetaParameter(double beta);
   void setMinInformationFilter(double min_information_filter);
   void setViewpointPathLineWidth(double line_width);
+  void setViewpointColorMode(std::size_t color_mode);
+  void setViewpointGraphComponent(int component);
 
 protected slots:
   void updateViewpoints();
@@ -205,6 +255,8 @@ protected:
     void postSelection(const QPoint&) override;
 
     void wheelEvent(QWheelEvent* event) override;
+    void keyPressEvent(QKeyEvent *event) override;
+    void saveScreenshot(const std::string& filename);
 
     qglviewer::Vec eigenToQglviewer(const Vector3& eig_vec) const;
     Vector3 qglviewerToEigen(const qglviewer::Vec& qgl_vec) const;
@@ -214,6 +266,17 @@ protected:
 private:
     friend class ViewpointPlannerThread;
 
+    enum ViewpointColorMode : std::size_t {
+      Fixed = 1,
+      Component = 2,
+      Information = 3,
+    };
+
+    std::vector<std::pair<std::string, ViewerWidget::ViewpointColorMode>> getAvailableViewpointColorModes() const;
+
+    CustomCamera custom_camera_;
+    double z_near_coefficient_;
+
     std::mutex mutex_;
 
     ViewpointPlanner* planner_;
@@ -222,11 +285,16 @@ private:
     ViewerPlannerPanel* planner_panel_;
     const ViewpointPlanner::OccupancyMapType* octree_;
     const SparseReconstruction* sparse_recon_;
+    const ViewpointPlanner::PointCloudType* dense_points_;
+    const ViewpointPlanner::MeshType* poisson_mesh_;
+    FloatType dense_points_size_;
     bool display_axes_;
 
     LineDrawer axes_drawer_;
     OcTreeDrawer octree_drawer_;
     SparseReconstructionDrawer sparce_recon_drawer_;
+    PointDrawer dense_points_drawer_;
+    TriangleDrawer poisson_mesh_drawer_;
     FloatType aspect_ratio_;
 
     ViewpointDrawer<FloatType> viewpoint_graph_drawer_;
@@ -234,11 +302,14 @@ private:
     LineDrawer viewpoint_motion_line_drawer_;
     FloatType viewpoint_motion_line_width_;
     FloatType min_information_filter_;
+    ViewpointColorMode viewpoint_color_mode_;
+    int viewpoint_selected_component_;
 
 //    QTimer* process_timer_;
     ViewpointPlannerThread planner_thread_;
     std::vector<std::tuple<ViewpointPlanner::ViewpointEntryIndex, Pose, FloatType>> viewpoint_graph_copy_;
     std::vector<std::tuple<ViewpointPlanner::ViewpointEntryIndex, Pose, FloatType>> viewpoint_path_copy_;
+    std::vector<std::size_t> viewpoint_path_order_copy_;
     std::size_t viewpoint_path_branch_index_;
 
 };

@@ -24,6 +24,8 @@ uniform float u_min_observations;
 uniform float u_max_observations;
 uniform float u_min_weight;
 uniform float u_max_weight;
+uniform float u_min_information;
+uniform float u_max_information;
 
 uniform samplerBuffer u_pos_texture;
 uniform samplerBuffer u_offset_normal_texture;
@@ -119,6 +121,8 @@ void main(void) {
   v_keep_flag = observation_count <= u_max_observations ? v_keep_flag : 0;
   v_keep_flag = weight >= u_min_weight ? v_keep_flag : 0;
   v_keep_flag = weight <= u_max_weight ? v_keep_flag : 0;
+  v_keep_flag = information >= u_min_information ? v_keep_flag : 0;
+  v_keep_flag = information <= u_max_information ? v_keep_flag : 0;
 
   v_vertex_position_cameraspace = transformVectorToCameraspace(view_model_matrix, vertex_position).xyz;
   v_vertex_normal_cameraspace = transformVectorToCameraspace(view_model_matrix, vec4(vertex_normal, 0)).xyz;
@@ -135,8 +139,9 @@ void main(void) {
 
   // Apply color flags
   if ((u_color_mode & COLOR_WEIGHT) != 0u) {
-    float weight_scaled = u_weight_color_scale * (weight - u_weight_color_offset);
-    v_color = vec4(1 - weight_scaled, weight_scaled, 0, 1);
+    float weight_scaled = 0.5 * u_weight_color_scale * (weight - u_weight_color_offset);
+    //v_color = vec4(1 - weight_scaled, weight_scaled, 0, 1);
+    v_color = vec4(0.5 - weight_scaled, 0.5 + weight_scaled, 0.5 - weight_scaled, 1);
   }
   if ((u_color_mode & COLOR_OCCUPANCY) != 0u) {
     v_color = vec4(1 - occupancy, 0, occupancy, 1);
@@ -146,8 +151,9 @@ void main(void) {
     v_color = vec4(1 - observation_count_scaled, 0, observation_count_scaled, 1);
   }
   if ((u_color_mode & COLOR_INFORMATION) != 0u) {
-    float information_scaled = u_information_color_scale * (information - u_information_color_offset);
-    v_color = vec4(1 - information_scaled, information_scaled, 0, 1);
+    float information_scaled = 0.5 * u_information_color_scale * (information - u_information_color_offset);
+    //v_color = vec4(1 - information_scaled, information_scaled, 0, 1);
+    v_color = vec4(0.5 - information_scaled, 0.5 + information_scaled, 0.5 - information_scaled, 1);
   }
   // TODO: Coloring of unknown voxels. Make configurable with uniforms.
   if ((u_color_mode & COLOR_UNKNOWN_LOW_ALPHA) != 0u) {

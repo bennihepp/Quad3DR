@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <ait/eigen.h>
 #include <ait/eigen_serialization.h>
+#include <ait/gps.h>
 #include <ait/pose.h>
 
 // Representations for a sparse reconstruction from Colmap.
@@ -201,6 +202,19 @@ struct Point3D {
 
 const Point3DId invalid_point3d_id = std::numeric_limits<Point3DId>::max();
 
+struct SfmToGpsTransformation {
+  FloatType gps_scale;
+  FloatType sfm_scale;
+  FloatType gps_to_sfm_ratio;
+
+  Vector3 gps_centroid;
+  Vector3 sfm_centroid;
+  Quaternion sfm_to_gps_quaternion;
+
+  using GpsCoordinate = ait::GpsCoordinateWithAltitude<FloatType>;
+  GpsCoordinate gps_reference;
+};
+
 class SparseReconstruction {
 public:
   using CameraMapType = EIGEN_ALIGNED_UNORDERED_MAP(CameraId, PinholeCameraColmap);
@@ -225,6 +239,10 @@ public:
 
   Point3DMapType& getPoints3D();
 
+  const SfmToGpsTransformation& sfmGpsTransformation() const;
+
+  SfmToGpsTransformation& sfmGpsTransformation();
+
 private:
   void computePoint3DNormalAndStatistics(Point3D& point) const;
 
@@ -240,9 +258,14 @@ private:
 
   void readPoints3D(std::istream& in);
 
+  void readGpsTransformation(std::string filename);
+
+  void readGpsTransformation(std::istream& in);
+
   CameraMapType cameras_;
   ImageMapType images_;
   Point3DMapType points3D_;
+  SfmToGpsTransformation sfm_gps_transformation_;
 };
 
 }

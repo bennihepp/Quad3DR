@@ -55,7 +55,9 @@ VoxelDrawer::VoxelDrawer()
   min_voxel_size_(std::numeric_limits<float>::lowest()),
   max_voxel_size_(std::numeric_limits<float>::max()),
   min_weight_(std::numeric_limits<float>::lowest()),
-  max_weight_(std::numeric_limits<float>::max()) {}
+  max_weight_(std::numeric_limits<float>::max()),
+  min_information_(std::numeric_limits<float>::lowest()),
+  max_information_(std::numeric_limits<float>::max()) {}
 
 VoxelDrawer::~VoxelDrawer() {
   clear();
@@ -334,6 +336,8 @@ void VoxelDrawer::draw(const QMatrix4x4& pvm_matrix, const QMatrix4x4& view_matr
   program_.setUniformValue("u_max_voxel_size", max_voxel_size_);
   program_.setUniformValue("u_min_weight", min_weight_);
   program_.setUniformValue("u_max_weight", max_weight_);
+  program_.setUniformValue("u_min_information", min_information_);
+  program_.setUniformValue("u_max_information", max_information_);
 
   // Set transformation matrices
   program_.setUniformValue("u_pvm_matrix", pvm_matrix);
@@ -447,4 +451,12 @@ void VoxelDrawer::setMinWeight(const float min_weight) {
 
 void VoxelDrawer::setMaxWeight(const float max_weight) {
   max_weight_ = std::min(max_weight, std::numeric_limits<float>::max());
+}
+
+void VoxelDrawer::setMinInformation(const float min_information) {
+  min_information_ = std::max(min_information, std::numeric_limits<float>::lowest());
+}
+
+void VoxelDrawer::setMaxInformation(const float max_information) {
+  max_information_ = std::min(max_information, std::numeric_limits<float>::max());
 }

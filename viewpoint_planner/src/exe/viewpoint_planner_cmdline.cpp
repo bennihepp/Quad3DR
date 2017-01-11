@@ -35,6 +35,9 @@ public:
     config_options.emplace(std::piecewise_construct,
         std::forward_as_tuple("viewpoint_planner"),
         std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlanner::Options())));
+    config_options.emplace(std::piecewise_construct,
+        std::forward_as_tuple("motion_planner"),
+        std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlanner::MotionPlannerType::Options())));
     return config_options;
   }
 
@@ -45,6 +48,7 @@ public:
           new ViewpointPlannerData(viewpoint_planner_data_options));
       planner_ptr_ = new ViewpointPlanner(
           dynamic_cast<ViewpointPlanner::Options*>(config_options.at("viewpoint_planner").get()),
+          dynamic_cast<ViewpointPlanner::MotionPlannerType::Options*>(config_options.at("motion_planner").get()),
           std::move(planner_data));
     }
 
@@ -82,6 +86,10 @@ std::pair<bool, boost::program_options::variables_map> processOptions(
         generic_options.add_options()
             ("help", "Produce help message")
             ("config-file", po::value<string>()->default_value("viewpoint_planner.cfg"), "Config file.")
+            ("num-candidates", po::value<std::size_t>()->default_value(1000), "Number of candidate viewpoints to sample.")
+            ("num-viewpoints", po::value<std::size_t>()->default_value(25), "Number of path viewpoints to compute.")
+            ("in-viewpoint-graph-file", po::value<std::string>(), "Viewpoint graph file to load before processing.")
+            ("out-viewpoint-graph-file", po::value<std::string>()->required(), "File to save the viewpoint graph to after processing.")
             ;
 
         po::options_description options;
@@ -125,9 +133,17 @@ std::pair<bool, boost::program_options::variables_map> processOptions(
     }
 }
 
-bool ctrl_pressed = false;
+bool ctrl_c_pressed = false;
 void signalIntHandler(int sig) {
-  ctrl_pressed = true;
+  ctrl_c_pressed = true;
+}
+
+void enableCtrlCHandler(void (*signalHandler)(int)) {
+  std::signal(SIGINT, signalHandler);
+}
+
+void disableCtrlCHandler() {
+  std::signal(SIGINT, SIG_DFL);
 }
 
 int main(int argc, char** argv)
@@ -145,14 +161,38 @@ int main(int argc, char** argv)
 
     ViewpointPlannerCmdline planner_cmdline(config_options);
 
-    std::signal(SIGINT, signalIntHandler);
-    bool stop;
-    do {
-      bool result = planner_cmdline.runIteration();
-      std::cout << "Result -> " << result << std::endl;
-      stop = false;
+    if (vm.count("in-viewpoint-graph-file") > 0) {
+      planner_cmdline.getPlanner().loadViewpointGraph(vm["in-viewpoint-graph-file"].as<std::string>());
     }
-    while (!stop && !ctrl_pressed);
+
+    enableCtrlCHandler(signalIntHandler);
+    std::cout << "Sampling viewpoint candidates" << std::endl;
+    while (!ctrl_c_pressed && planner_cmdline.getPlanner().getViewpointGraph().numVertices() < vm["num-candidates"].as<std::size_t>()) {
+      const bool result = planner_cmdline.getPlanner().generateNextViewpointEntry();
+      std::cout << "Generate next viewpoint result -> " << result << std::endl;
+      std::cout << "Sampled " << planner_cmdline.getPlanner().getViewpointGraph().numVertices()
+          << " of " << vm["num-candidates"].as<std::size_t>() << " viewpoints" << std::endl;
+    }
+    std::cout << "Done" << std::endl;
+    disableCtrlCHandler();
+
+    planner_cmdline.getPlanner().saveViewpointGraph(vm["out-viewpoint-graph-file"].as<std::string>());
+
+    std::cout << "Computing motions" << std::endl;
+    planner_cmdline.getPlanner().computeViewpointMotions();
+    std::cout << "Done" << std::endl;
+    planner_cmdline.getPlanner().saveViewpointGraph(vm["out-viewpoint-graph-file"].as<std::string>());
+
+    enableCtrlCHandler(signalIntHandler);
+    std::cout << "Computing viewpoint paths" << std::endl;
+    while (!ctrl_c_pressed && planner_cmdline.getPlanner().getBestViewpointPath().entries.size() < vm["num-viewpoints"].as<std::size_t>()) {
+      bool result = planner_cmdline.getPlanner().findNextViewpointPathEntries();
+      std::cout << "Find next viewpoint path entries result -> " << result << std::endl;
+      std::cout << "Computed " << planner_cmdline.getPlanner().getBestViewpointPath().entries.size()
+          << " of " << vm["num-viewpoints"].as<std::size_t>() << " viewpoint path entries" << std::endl;
+    }
+    disableCtrlCHandler();
+    std::cout << "Done" << std::endl;
 
     return 0;
 }

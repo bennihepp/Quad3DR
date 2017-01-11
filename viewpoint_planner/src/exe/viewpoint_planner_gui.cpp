@@ -21,6 +21,7 @@
 #include "../reconstruction/dense_reconstruction.h"
 #include "../octree/occupancy_map.h"
 #include "../planner/viewpoint_planner.h"
+#include "../planner/motion_planner.h"
 #include "../ui/viewer_window.h"
 
 using std::cout;
@@ -37,6 +38,9 @@ public:
     config_options.emplace(std::piecewise_construct,
         std::forward_as_tuple("viewpoint_planner"),
         std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlanner::Options())));
+    config_options.emplace(std::piecewise_construct,
+        std::forward_as_tuple("motion_planner"),
+        std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlanner::MotionPlannerType::Options())));
     return config_options;
   }
 
@@ -47,6 +51,7 @@ public:
           new ViewpointPlannerData(viewpoint_planner_data_options));
       planner_ptr_ = new ViewpointPlanner(
           dynamic_cast<ViewpointPlanner::Options*>(config_options.at("viewpoint_planner").get()),
+          dynamic_cast<ViewpointPlanner::MotionPlannerType::Options*>(config_options.at("motion_planner").get()),
           std::move(planner_data));
       window_ptr_ = new ViewerWindow(planner_ptr_);
     }
@@ -72,7 +77,6 @@ public:
         return *window_ptr_;
     }
 
-private:
 private:
   ViewpointPlanner *planner_ptr_;
   ViewerWindow *window_ptr_;

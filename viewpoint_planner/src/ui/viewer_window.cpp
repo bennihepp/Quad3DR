@@ -34,6 +34,12 @@ ViewerWindow::ViewerWindow(ViewpointPlanner* planner, QWidget *parent)
     this->setCentralWidget(viewer_widget_);
     viewer_widget_->showOctree(planner_->getOctree());
     viewer_widget_->showSparseReconstruction(planner_->getReconstruction());
+    if (planner_->getDensePoints() != nullptr) {
+      viewer_widget_->showDensePoints(planner_->getDensePoints());
+    }
+    if (planner_->getMesh() != nullptr) {
+      viewer_widget_->showPoissonMesh(planner_->getMesh());
+    }
 
     // Update labels in info panel
     info_panel_->setVoxelSize(planner_->getOctree()->getResolution());

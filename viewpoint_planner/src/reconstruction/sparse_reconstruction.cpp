@@ -228,6 +228,7 @@ void SparseReconstruction::read(const std::string& path) {
   readCameras(ait::joinPaths(path, "cameras.txt"));
   readImages(ait::joinPaths(path, "images.txt"));
   readPoints3D(ait::joinPaths(path, "points3D.txt"));
+  readGpsTransformation(ait::joinPaths(path, "gps_transformation.txt"));
 }
 
 const CameraMapType& SparseReconstruction::getCameras() const {
@@ -252,6 +253,14 @@ const Point3DMapType& SparseReconstruction::getPoints3D() const {
 
 Point3DMapType& SparseReconstruction::getPoints3D() {
   return points3D_;
+}
+
+const SfmToGpsTransformation& SparseReconstruction::sfmGpsTransformation() const {
+  return sfm_gps_transformation_;
+}
+
+SfmToGpsTransformation& SparseReconstruction::sfmGpsTransformation() {
+  return sfm_gps_transformation_;
 }
 
 void SparseReconstruction::computePoint3DNormalAndStatistics(Point3D& point) const {
@@ -442,6 +451,7 @@ void SparseReconstruction::readImages(std::istream& in) {
     image_features.shrink_to_fit();
 
     ImageColmap image(image_id, image_pose, image_name, image_features, camera_id);
+    //std::cout << "Image " << image_id << " has pose " << image_pose << std::endl;
 
     images_.emplace(image.id(), image);
   }
@@ -518,5 +528,87 @@ void SparseReconstruction::readPoints3D(std::istream& in) {
     computePoint3DNormalAndStatistics(point3D);
 
     points3D_.emplace(point3D.id, std::move(point3D));
+  }
+}
+
+void SparseReconstruction::readGpsTransformation(std::string filename) {
+  std::ifstream in(filename);
+  if (!in) {
+    throw AIT_EXCEPTION("Unable to open GPS transformation file");
+  }
+  readGpsTransformation(in);
+}
+
+void SparseReconstruction::readGpsTransformation(std::istream& in) {
+  std::string line;
+  std::string item;
+
+  std::getline(in, line);
+  ait::trim(line);
+  while (line.empty() || line[0] == '#') {
+    std::getline(in, line);
+    ait::trim(line);
+  }
+
+  {
+    // Scale factors
+    std::stringstream line_stream1(line);
+    std::getline(line_stream1, item, ' ');
+    sfm_gps_transformation_.gps_scale = boost::lexical_cast<FloatType>(item);
+    std::getline(line_stream1, item, ' ');
+    sfm_gps_transformation_.sfm_scale = boost::lexical_cast<FloatType>(item);
+    std::getline(line_stream1, item, ' ');
+    sfm_gps_transformation_.gps_to_sfm_ratio = boost::lexical_cast<FloatType>(item);
+  }
+
+  std::getline(in, line);
+  ait::trim(line);
+  {
+    // SFM centroid factors
+    std::stringstream line_stream1(line);
+    for (std::size_t i = 0; i < 3; ++i) {
+      std::getline(line_stream1, item, ' ');
+      sfm_gps_transformation_.sfm_centroid(i) = boost::lexical_cast<FloatType>(item);
+    }
+  }
+
+  std::getline(in, line);
+  ait::trim(line);
+  {
+    // GPS centroid factors
+    std::stringstream line_stream1(line);
+    for (std::size_t i = 0; i < 3; ++i) {
+      std::getline(line_stream1, item, ' ');
+      sfm_gps_transformation_.gps_centroid(i) = boost::lexical_cast<FloatType>(item);
+    }
+  }
+
+  std::getline(in, line);
+  ait::trim(line);
+  {
+    // SFM to GPS quaternion
+    std::stringstream line_stream1(line);
+    std::getline(line_stream1, item, ' ');
+    FloatType qw = boost::lexical_cast<FloatType>(item);
+    std::getline(line_stream1, item, ' ');
+    FloatType qx = boost::lexical_cast<FloatType>(item);
+    std::getline(line_stream1, item, ' ');
+    FloatType qy = boost::lexical_cast<FloatType>(item);
+    std::getline(line_stream1, item, ' ');
+    FloatType qz = boost::lexical_cast<FloatType>(item);
+    sfm_gps_transformation_.sfm_to_gps_quaternion = Quaternion(qw, qx, qy, qz);
+  }
+
+  std::getline(in, line);
+  ait::trim(line);
+  {
+    // GPS reference coordinates
+    std::stringstream line_stream1(line);
+    Vector3 gps_vec;
+    for (std::size_t i = 0; i < 3; ++i) {
+      std::getline(line_stream1, item, ' ');
+      gps_vec(i) = boost::lexical_cast<FloatType>(item);
+    }
+    sfm_gps_transformation_.gps_reference = SfmToGpsTransformation::GpsCoordinate(gps_vec);
   }
 }

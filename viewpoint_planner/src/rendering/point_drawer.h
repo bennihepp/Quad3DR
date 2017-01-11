@@ -108,7 +108,7 @@ class PointDrawer
 {
 public:
     PointDrawer()
-    : num_points_(0) {
+    : draw_points_(true), num_points_(0) {
     }
 
     ~PointDrawer() {
@@ -123,6 +123,10 @@ public:
         if (vbo_.isCreated()) {
             vbo_.destroy();
         }
+    }
+
+    void setDrawPoints(bool draw_points) {
+      draw_points_ = draw_points;
     }
 
     void init() {
@@ -164,7 +168,7 @@ public:
     }
 
     void draw(const QMatrix4x4& pvm_matrix, const float point_size) {
-        if (num_points_ == 0) {
+        if (!draw_points_ || num_points_ == 0) {
             return;
         }
 
@@ -181,6 +185,7 @@ public:
     }
 
 private:
+    bool draw_points_;
     size_t num_points_;
     QOpenGLVertexArrayObject vao_;
     QOpenGLBuffer vbo_;

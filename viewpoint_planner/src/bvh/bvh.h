@@ -13,259 +13,18 @@
 #include <boost/iterator_adaptors.hpp>
 #include <ait/common.h>
 #include <ait/eigen.h>
+#include <ait/geometry.h>
 #include <ait/utilities.h>
 #include <ait/serialization.h>
 
 namespace bvh {
 
+using ait::Ray;
+using ait::RayData;
+using ait::BoundingBox3D;
+
 #pragma GCC push_options
 #pragma GCC optimize ("fast-math")
-
-// TODO: Duplicate with Viewpoint ray
-struct Ray {
-  Eigen::Vector3f origin;
-  Eigen::Vector3f direction;
-
-  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-};
-
-struct RayData : public Ray {
-  Eigen::Vector3f inv_direction;
-  float min_range_sq;
-  float max_range_sq;
-
-  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-};
-
-template <typename FloatType = float>
-class BoundingBox3D : public ait::Serializable {
-public:
-  using Vector3 = Eigen::Matrix<FloatType, 3, 1>;
-
-  static BoundingBox3D createFromCenterAndExtent(const Vector3& center, const Vector3& extent) {
-    const Vector3 min = center - extent / 2;
-    const Vector3 max = center + extent / 2;
-    return BoundingBox3D(min, max);
-  }
-
-  BoundingBox3D() {
-    min_ << 1, 1, 1;
-    max_ << -1, -1, -1;
-  }
-
-  BoundingBox3D(const Vector3& center, FloatType size)
-  : min_(center.array() - size / 2), max_(center.array() + size / 2) {}
-
-  BoundingBox3D(const Vector3& min, const Vector3& max)
-  : min_(min), max_(max) {}
-
-  ~BoundingBox3D() override {}
-
-  bool operator==(const BoundingBox3D& other) const {
-    return min_ == other.min_ && max_ == other.max_;
-  }
-
-  bool isValid() const {
-    return (min_.array() <= max_.array()).all();
-  }
-
-  bool isEmpty() const {
-    return (min_.array() >= max_.array()).all();
-  }
-
-  const Vector3& getMinimum() const {
-    return min_;
-  }
-
-  const FloatType getMinimum(std::size_t index) const {
-    return min_(index);
-  }
-
-  const Vector3& getMaximum() const {
-    return max_;
-  }
-
-  const FloatType getMaximum(std::size_t index) const {
-    return max_(index);
-  }
-
-  const Vector3 getExtent() const {
-    return max_ - min_;
-  }
-
-  FloatType getExtent(std::size_t index) const {
-    return (max_ - min_)(index);
-  }
-
-  const FloatType getMaxExtent() const {
-    return (max_ - min_).maxCoeff();
-  }
-
-  const FloatType getMaxExtent(std::size_t* index) const {
-    return (max_ - min_).maxCoeff(index);
-  }
-
-  const Vector3 getCenter() const {
-    return (min_ + max_) / 2;
-  }
-
-  const FloatType getCenter(std::size_t index) const {
-    return (min_(index) + max_(index)) / 2;
-  }
-
-  FloatType getVolume() const {
-    return getExtent().array().prod();
-  }
-
-  bool isOutside(const Vector3& point) const {
-    return (point.array() < min_.array()).any()
-        || (point.array() > max_.array()).any();
-  }
-
-  bool isInside(const Vector3& point) const {
-    return (point.array() >= min_.array()).all()
-        && (point.array() <= max_.array()).all();
-  }
-
-  bool isOutsideOf(const BoundingBox3D& bbox) const {
-    return (max_.array() < bbox.min_.array()).any()
-        || (min_.array() > bbox.max_.array()).any();
-  }
-
-  bool isInsideOf(const BoundingBox3D& bbox) const {
-    return (max_.array() >= bbox.min_.array()).all()
-        && (min_.array() <= bbox.max_.array()).all();
-  }
-
-  /// Return squared distance to closest point on the outside (if point is inside distance is 0)
-  FloatType squaredDistanceTo(const Vector3& point) const {
-    FloatType dist_sq = 0;
-    for (std::size_t i = 0; i < 3; ++i) {
-      bool outside = point(i) < getMinimum(i) || point(i) > getMaximum(i);
-      if (outside) {
-        FloatType d = std::min(std::abs(point(i) - getMinimum(i)), std::abs(point(i) - getMaximum(i)));
-        dist_sq += d * d;
-      }
-    }
-    return dist_sq;
-  }
-
-  /// Return distance to closest point on the outside (if point is inside distance is 0)
-  FloatType distanceTo(const Vector3& point) const {
-    return std::sqrt(squaredDistanceTo(point));
-  }
-
-  bool contains(const BoundingBox3D& other) const {
-    return other.isInsideOf(*this);
-  }
-
-  bool intersects(const BoundingBox3D& other) const {
-    if ((max_.array() < other.min_.array()).any()) {
-      return false;
-    }
-    if ((other.max_.array() < min_.array()).any()) {
-      return false;
-    }
-    return true;
-  }
-
-  bool intersects(const Ray& ray, Vector3* intersection = nullptr) const {
-    RayData ray_data(ray);
-    ray_data.inv_direction = ray.direction.cwiseInverse();
-    return intersects(ray_data, intersection);
-  }
-
-  bool intersects(const RayData& ray_data, Vector3* intersection = nullptr) const {
-  //  std::cout << "  intersecting node at depth " << cur_depth << " with size " << node_size_half * 2 << std::endl;
-    float t_min = -std::numeric_limits<FloatType>::max();
-    float t_max = std::numeric_limits<FloatType>::max();
-
-  //  for (std::size_t i = 0; i < 3; ++i) {
-  //    if (ray_data.direction(i) != 0) {
-  //      float t0 = (min_(i) - ray_data.origin(i)) * ray_data.inv_direction(i);
-  //      float t1 = (max_(i) - ray_data.origin(i)) * ray_data.inv_direction(i);
-  //      t_min = std::max(t_min, std::min(t0, t1));
-  //      t_max = std::min(t_max, std::max(t0, t1));
-  //    }
-  //    else {
-  //      if (ray_data.origin(i) <= min_(i) || ray_data.origin(i) >= max_(i)) {
-  //        return false;
-  //      }
-  //    }
-  //  }
-
-    // Faster version without explicit check for directions parallel to an axis
-    for (std::size_t i = 0; i < 3; ++i) {
-      float t0 = (min_(i) - ray_data.origin(i)) * ray_data.inv_direction(i);
-      float t1 = (max_(i) - ray_data.origin(i)) * ray_data.inv_direction(i);
-      t_min = std::max(t_min, std::min(t0, t1));
-      t_max = std::min(t_max, std::max(t0, t1));
-    }
-
-    bool intersect = t_max > std::max(t_min, FloatType(0));
-    if (intersect && intersection != nullptr) {
-      t_min = std::max(t_min, FloatType(0));
-      *intersection = ray_data.origin + ray_data.direction * t_min;
-    }
-    return intersect;
-  }
-
-  BoundingBox3D operator*(FloatType scale) const {
-    return BoundingBox3D::createFromCenterAndExtent(getCenter(), scale * getExtent());
-  }
-
-  static BoundingBox3D getUnion(const BoundingBox3D& bbox_a, const BoundingBox3D& bbox_b) {
-    Vector3 min = bbox_a.min_.array().min(bbox_b.min_.array());
-    Vector3 max = bbox_a.max_.array().max(bbox_b.max_.array());
-    return BoundingBox3D(min, max);
-  }
-
-  void include(const BoundingBox3D& other) {
-    min_ = min_.array().min(other.min_.array());
-    max_ = max_.array().max(other.max_.array());
-  }
-
-  void include(const Vector3& point) {
-    min_ = min_.array().min(point);
-    max_ = max_.array().min(point);
-  }
-
-  void constrainTo(const BoundingBox3D& bbox) {
-    min_ = min_.array().max(bbox.min_.array());
-    max_ = max_.array().min(bbox.max_.array());
-  }
-
-  void write(std::ostream& out) const override {
-    ait::writeToStream(out, min_);
-    ait::writeToStream(out, max_);
-  }
-
-  void read(std::istream& in) override {
-    ait::readFromStream(in, &min_);
-    ait::readFromStream(in, &max_);
-  }
-
-  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-
-private:
-  Vector3 min_;
-  Vector3 max_;
-};
-
-template <typename FloatType>
-BoundingBox3D<FloatType> operator*(FloatType scale, const BoundingBox3D<FloatType>& bbox) {
-  return BoundingBox3D<FloatType>::createFromCenterAndExtent(bbox.getCenter(), scale * bbox.getExtent());
-}
-
-using BoundingBox3Df = BoundingBox3D<float>;
-using BoundingBox3Dd = BoundingBox3D<double>;
-
-template <typename FloatType, typename CharType>
-std::basic_ostream<CharType>& operator<<(std::basic_ostream<CharType>& out, const BoundingBox3D<FloatType>& bbox) {
-  out << "(" << bbox.getMinimum(0) << ", " << bbox.getMinimum(1) << ", " << bbox.getMinimum(2) << ") -> ";
-  out << "(" << bbox.getMaximum(0) << ", " << bbox.getMaximum(1) << ", " << bbox.getMaximum(2) << ")";
-  return out;
-}
 
 template <typename FloatType = float>
 class BoundingBox3DInterface {
@@ -380,7 +139,14 @@ public:
   };
 
   struct BBoxIntersectionResult {
-    NodeType* node;
+    using NodePtrType = NodeType*;
+    NodePtrType node;
+    std::size_t depth;
+  };
+
+  struct ConstBBoxIntersectionResult {
+    using NodePtrType = const NodeType*;
+    NodePtrType node;
     std::size_t depth;
   };
 
@@ -445,6 +211,8 @@ public:
 //    build(map, copy);
 //  }
 
+  Tree(const Tree& other) = delete;
+
   ~Tree() {
     clear();
   }
@@ -486,6 +254,22 @@ public:
     num_leaf_nodes_ = 0;
     stored_as_vector_ = false;
     owns_objects_ = false;
+    voxel_index_map_.clear();
+    index_voxel_map_.clear();
+  }
+
+  const std::unordered_map<std::size_t, const NodeType*>& getIndexVoxelMap() const {
+    if (index_voxel_map_.empty()) {
+      computeIndexVoxelMap();
+    }
+    return index_voxel_map_;
+  }
+
+  const std::unordered_map<const NodeType*, std::size_t>& getVoxelIndexMap() const {
+    if (voxel_index_map_.empty()) {
+      computeVoxelIndexMap();
+    }
+    return voxel_index_map_;
   }
 
   NodeType* getRoot() {
@@ -515,6 +299,8 @@ public:
     std::cout << "Info: Tree depth " << getDepth() << std::endl;
     std::cout << "Info: NumNodes " << getNumOfNodes() << std::endl;
     std::cout << "Info: NumLeaves " << getNumOfLeafNodes() << std::endl;
+    std::cout << "Info: Boundingbox " << getRoot()->getBoundingBox() << std::endl;
+    std::cout << "Info: Root pointer " << getRoot() << std::endl;
   }
 
   void build(std::vector<ObjectWithBoundingBox> objects, bool take_ownership=true) {
@@ -526,6 +312,9 @@ public:
 //    nodes_.shrink_to_fit();
     computeInfo();
     printInfo();
+//    for (auto it = begin(); it != end(); ++it) {
+//      AIT_ASSERT(!it->isLeaf || it->getObject() == nullptr);
+//    }
   }
 
   // Cannot be const because BBoxIntersectionResult contains a non-const pointer to a node
@@ -546,10 +335,15 @@ public:
     return std::make_pair(does_intersect, result);
   }
 
-  // Cannot be const because BBoxIntersectionResult contains a non-const pointer to a node
   std::vector<BBoxIntersectionResult> intersects(const BoundingBoxType& bbox) {
     std::vector<BBoxIntersectionResult> results;
-    intersectsRecursive(bbox, getRoot(), 0, &results);
+    intersectsRecursive<BBoxIntersectionResult>(bbox, getRoot(), 0, &results);
+    return results;
+  }
+
+  std::vector<ConstBBoxIntersectionResult> intersects(const BoundingBoxType& bbox) const {
+    std::vector<ConstBBoxIntersectionResult> results;
+    intersectsRecursive<ConstBBoxIntersectionResult>(bbox, getRoot(), 0, &results);
     return results;
   }
 
@@ -729,6 +523,28 @@ private:
     }
   }
 
+  void computeVoxelIndexMap() const {
+    std::cout << "BVH: Computing voxel index map" << std::endl;
+    // Compute consistent ordering of BVH nodes
+    voxel_index_map_.clear();
+    std::size_t voxel_index = 0;
+    for (const NodeType& node : *this) {
+      voxel_index_map_.emplace(&node, voxel_index);
+      ++voxel_index;
+    }
+  }
+
+  void computeIndexVoxelMap() const {
+    std::cout << "BVH: Computing index voxel map" << std::endl;
+    // Compute consistent ordering of BVH nodes
+    index_voxel_map_.clear();
+    std::size_t voxel_index = 0;
+    for (const NodeType& node : *this) {
+      index_voxel_map_.emplace(voxel_index, &node);
+      ++voxel_index;
+    }
+  }
+
   void clearObjectsRecursive(NodeType* node) {
     if (node->left_child_ != nullptr) {
       clearObjectsRecursive(node->left_child_);
@@ -781,6 +597,7 @@ private:
       assert(end - begin == 1);
       node->bounding_box_ = begin->bounding_box;
       node->object_ = begin->object;
+      AIT_ASSERT(begin->object != nullptr);
     }
   }
 
@@ -836,6 +653,7 @@ private:
     }
   }
 
+
   bool intersectsRecursive(const IntersectionData& data, NodeType* cur_node, std::size_t cur_depth, IntersectionResult* result) const {
     // Early break because of node semantics (i.e. free nodes)
 //    if (CollisionPredicate::earlyBreak(this, cur_node)) {
@@ -876,6 +694,7 @@ private:
 
 //    std::cout << "cur_node->isLeaf(): " << cur_node->isLeaf() << std::endl;
     if (cur_node->isLeaf()) {
+//      AIT_ASSERT(cur_node->object_ != nullptr);
 //      if (below_min_range) {
 //        return false;
 //      }
@@ -904,8 +723,11 @@ private:
     return intersects_left || intersects_right;
   }
 
-  void intersectsRecursive(const BoundingBoxType& bbox, NodeType* cur_node, std::size_t cur_depth,
-      std::vector<BBoxIntersectionResult>* results) const {
+  template <typename IntersectionResultT>
+  void intersectsRecursive(const BoundingBoxType& bbox,
+      typename IntersectionResultT::NodePtrType cur_node,
+      std::size_t cur_depth,
+      std::vector<IntersectionResultT>* results) const {
     const bool intersects = cur_node->getBoundingBox().intersects(bbox);
 //    std::cout << "cur_depth: " << cur_depth << std::endl;
 //    std::cout << "intersects: " << intersects << std::endl;
@@ -916,7 +738,7 @@ private:
     }
 
     if (cur_node->isLeaf()) {
-      BBoxIntersectionResult result;
+      IntersectionResultT result;
       result.node = cur_node;
       result.depth = cur_depth;
       results->push_back(result);
@@ -947,6 +769,9 @@ private:
   std::size_t depth_;
   std::size_t num_nodes_;
   std::size_t num_leaf_nodes_;
+
+  mutable std::unordered_map<std::size_t, const NodeType*> index_voxel_map_;
+  mutable std::unordered_map<const NodeType*, std::size_t> voxel_index_map_;
 };
 
 template <typename ObjectType, typename FloatType>

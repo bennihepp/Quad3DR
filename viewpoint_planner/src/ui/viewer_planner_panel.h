@@ -23,10 +23,14 @@ public:
       connect(ui.pauseContinueViewpointGraph, SIGNAL(clicked(void)), this, SLOT(pauseContinueViewpointGraphInternal()));
       connect(ui.pauseContinueViewpointMotions, SIGNAL(clicked(void)), this, SLOT(pauseContinueViewpointMotionsInternal()));
       connect(ui.pauseContinueViewpointPath, SIGNAL(clicked(void)), this, SLOT(pauseContinueViewpointPathInternal()));
+      connect(ui.solveViewpointTSP, SIGNAL(clicked(void)), this, SLOT(solveViewpointTSPInternal()));
       connect(ui.resetViewpoints, SIGNAL(clicked(void)), this, SLOT(resetViewpointsInternal()));
+      connect(ui.resetViewpointMotions, SIGNAL(clicked(void)), this, SLOT(resetViewpointMotionsInternal()));
       connect(ui.resetViewpointPath, SIGNAL(clicked(void)), this, SLOT(resetViewpointPathInternal()));
       connect(ui.saveViewpointGraph, SIGNAL(clicked(void)), this, SLOT(saveViewpointGraphInternal()));
       connect(ui.loadViewpointGraph, SIGNAL(clicked(void)), this, SLOT(loadViewpointGraphInternal()));
+      connect(ui.saveViewpointPath, SIGNAL(clicked(void)), this, SLOT(saveViewpointPathInternal()));
+      connect(ui.loadViewpointPath, SIGNAL(clicked(void)), this, SLOT(loadViewpointPathInternal()));
       connect(ui.drawViewpointGraph, SIGNAL(stateChanged(int)), this, SLOT(setDrawViewpointGraphInternal(int)));
       connect(ui.viewpointGraphSelection, SIGNAL(activated(int)), this, SLOT(setViewpointGraphSelectionInternal(int)));
       connect(ui.drawViewpointMotions, SIGNAL(stateChanged(int)), this, SLOT(setDrawViewpointMotionsInternal(int)));
@@ -38,6 +42,8 @@ public:
       connect(ui.betaParameter, SIGNAL(valueChanged(double)), this, SIGNAL(betaParameterChanged(double)));
       connect(ui.minInformationFilter, SIGNAL(valueChanged(double)), this, SIGNAL(minInformationFilterChanged(double)));
       connect(ui.viewpointPathLineWidth, SIGNAL(valueChanged(double)), this, SIGNAL(viewpointPathLineWidthChanged(double)));
+      connect(ui.viewpointColorMode, SIGNAL(currentIndexChanged(int)), this, SLOT(setViewpointColorModeInternal(int)));
+      connect(ui.viewpointGraphComponent, SIGNAL(currentIndexChanged(int)), this, SLOT(setViewpointGraphComponentInternal(int)));
   }
 
   ~ViewerPlannerPanel() {
@@ -67,6 +73,28 @@ public:
     ui.pauseContinueViewpointPath->setText(QString::fromStdString(text));
   }
 
+  void setSolveViewpointTSPEnabled(bool enabled) {
+    ui.solveViewpointTSP->setEnabled(enabled);
+  }
+
+  void setSolveViewpointTSPText(const std::string& text) {
+    ui.solveViewpointTSP->setText(QString::fromStdString(text));
+  }
+
+  void setAllComputationButtonsEnabled(bool enabled) {
+    setPauseContinueViewpointGraphEnabled(enabled);
+    setPauseContinueViewpointMotionsEnabled(enabled);
+    setPauseContinueViewpointPathEnabled(enabled);
+    setSolveViewpointTSPEnabled(enabled);
+  }
+
+  void setAllComputationButtonsText(const std::string& text) {
+    setPauseContinueViewpointGraphText(text);
+    setPauseContinueViewpointMotionsText(text);
+    setPauseContinueViewpointPathText(text);
+    setSolveViewpointTSPText(text);
+  }
+
   void setResetViewpointsEnabled(bool enabled) {
     ui.resetViewpoints->setEnabled(enabled);
   }
@@ -77,6 +105,12 @@ public:
 
   void setResetViewpointPathEnabled(bool enabled) {
     ui.resetViewpointPath->setEnabled(enabled);
+  }
+
+  void setAllResetButtonsEnabled(bool enabled) {
+    setResetViewpointsEnabled(enabled);
+    setResetViewpointMotionsEnabled(enabled);
+    setResetViewpointPathEnabled(enabled);
   }
 
   void initializeViewpointGraph(const std::vector<std::pair<std::string, size_t>>& entries) {
@@ -122,6 +156,10 @@ public:
     return static_cast<std::size_t>(ui.viewpointPathSelection->currentIndex());
   }
 
+  void setViewpointPathSelectionByItemIndex(int index) {
+    ui.viewpointPathSelection->setCurrentIndex(index);
+  }
+
   void setViewpointPathSelection(const std::size_t index) {
     selectItemByUserData(ui.viewpointPathSelection, index);
   }
@@ -138,6 +176,10 @@ public:
 
   void setViewpointPathSize(std::size_t viewpoint_path_size) {
     ui.viewpointPathSize->setText(QString::number(viewpoint_path_size));
+  }
+
+  void setViewpointMotionsSize(std::size_t viewpoint_motions_size) {
+    ui.viewpointMotionsSize->setText(QString::number(viewpoint_motions_size));
   }
 
   bool isDrawViewpointGraphChecked() const {
@@ -158,6 +200,10 @@ public:
 
   bool isShowIncrementalVoxelSetChecked() const {
     return ui.showIncrementalVoxelSet->isChecked();
+  }
+
+  bool isShowAccumulativeVoxelSetChecked() const {
+    return ui.showAccumulatedVoxelSet->isChecked();
   }
 
   bool isInspectViewpointGraphMotionsChecked() const {
@@ -182,6 +228,48 @@ public:
 
   double getViewpointPathLineWidth() const {
     return ui.viewpointPathLineWidth->value();
+  }
+
+  void selectViewpointColorMode(const std::size_t color_mode) {
+    for (std::size_t i = 0; i < static_cast<std::size_t>(ui.viewpointColorMode->count()); ++i) {
+      std::size_t entry_mode = ui.viewpointColorMode->itemData(i).toUInt();
+      if (color_mode == entry_mode) {
+        ui.viewpointColorMode->setCurrentIndex(i);
+        return;
+      }
+    }
+    throw AIT_EXCEPTION(std::string("Could not find corresponding color mode in combo box: ") + std::to_string(color_mode));
+  }
+
+  void initializeViewpointColorMode(std::vector<std::pair<std::string, std::size_t>>& entries) {
+    ui.viewpointColorMode->blockSignals(true);
+    ui.viewpointColorMode->clear();
+    for (const auto& entry : entries) {
+        ui.viewpointColorMode->addItem(QString::fromStdString(entry.first), QVariant(static_cast<uint32_t>(entry.second)));
+    }
+    ui.viewpointColorMode->blockSignals(false);
+  }
+
+  int getViewpointComponentSelection() {
+    return static_cast<int>(ui.viewpointGraphComponent->currentIndex());
+  }
+
+  void setViewpointComponentSelectionByItemIndex(int index) {
+    ui.viewpointGraphComponent->setCurrentIndex(index);
+  }
+
+  void setViewpointComponentSelection(int index) {
+    index = std::min(index, ui.viewpointGraphComponent->count());
+    selectItemByUserData(ui.viewpointGraphComponent, index);
+  }
+
+  void initializeViewpointComponents(std::vector<std::pair<std::string, int>>& entries) {
+    ui.viewpointGraphComponent->blockSignals(true);
+    ui.viewpointGraphComponent->clear();
+    for (const auto& entry : entries) {
+        ui.viewpointGraphComponent->addItem(QString::fromStdString(entry.first), QVariant(entry.second));
+    }
+    ui.viewpointGraphComponent->blockSignals(false);
   }
 
 protected slots:
@@ -247,6 +335,10 @@ protected slots:
     emit pauseContinueViewpointPath();
   }
 
+  void solveViewpointTSPInternal() {
+    emit solveViewpointTSP();
+  }
+
   void resetViewpointsInternal() {
     emit resetViewpoints();
   }
@@ -268,17 +360,52 @@ protected slots:
   }
 
   void loadViewpointGraphInternal() {
-    QString filename = QFileDialog::getOpenFileName(this, tr("Save viewpoint graph"),
+    QString filename = QFileDialog::getOpenFileName(this, tr("Load viewpoint graph"),
         QString(), tr("Boost Serialization File (*.bs);;All Files (*.*)"));
     if (!filename.isNull()) {
       emit loadViewpointGraph(filename.toStdString());
     }
   }
 
+  void saveViewpointPathInternal() {
+    QString filename = QFileDialog::getSaveFileName(this, tr("Save viewpoint path"),
+        "viewpoint_path.bs", tr("Boost Serialization File (*.bs);;All Files (*.*)"));
+    if (!filename.isNull()) {
+      emit saveViewpointPath(filename.toStdString());
+    }
+  }
+
+  void loadViewpointPathInternal() {
+    QString filename = QFileDialog::getOpenFileName(this, tr("Load viewpoint path"),
+        QString(), tr("Boost Serialization File (*.bs);;All Files (*.*)"));
+    if (!filename.isNull()) {
+      emit loadViewpointPath(filename.toStdString());
+    }
+  }
+
+  void setViewpointColorModeInternal(int index) {
+      bool ok;
+      std::size_t color_mode = ui.viewpointColorMode->itemData(index).toUInt(&ok);
+      if (!ok) {
+          throw AIT_EXCEPTION("Unable to convert color mode user data to uint");
+      }
+      emit viewpointColorModeChanged(color_mode);
+  }
+
+  void setViewpointGraphComponentInternal(int index) {
+      bool ok;
+      int component = ui.viewpointGraphComponent->itemData(index).toInt(&ok);
+      if (!ok) {
+          throw AIT_EXCEPTION("Unable to convert graph component user data to int");
+      }
+      emit viewpointGraphComponentChanged(component);
+  }
+
 signals:
   void pauseContinueViewpointGraph();
   void pauseContinueViewpointMotions();
   void pauseContinueViewpointPath();
+  void solveViewpointTSP();
   void drawViewpointGraphChanged(bool draw_viewpoint_graph_changed);
   void viewpointGraphSelectionChanged(std::size_t index);
   void drawViewpointPathChanged(bool draw_viewpoint_path_changed);
@@ -291,13 +418,18 @@ signals:
   void resetViewpointPath();
   void saveViewpointGraph(const std::string& filename);
   void loadViewpointGraph(const std::string& filename);
+  void saveViewpointPath(const std::string& filename);
+  void loadViewpointPath(const std::string& filename);
   void alphaParameterChanged(double alpha);
   void betaParameterChanged(double beta);
   void minInformationFilterChanged(double min_information_filter);
   void viewpointPathLineWidthChanged(double line_width);
+  void viewpointColorModeChanged(std::size_t color_mode);
+  void viewpointGraphComponentChanged(int component);
 
 private:
-  void selectItemByUserData(QComboBox* combo_box, const std::size_t item_user_data) {
+  template <typename T>
+  void selectItemByUserData(QComboBox* combo_box, const T item_user_data) {
     combo_box->blockSignals(true);
     for (int i = 0; i < combo_box->count(); ++i) {
       bool ok;
@@ -305,7 +437,7 @@ private:
       if (!ok) {
         throw AIT_EXCEPTION("Unable to convert combo box user data user data to int");
       }
-      if (static_cast<std::size_t>(user_data) == item_user_data) {
+      if (static_cast<T>(user_data) == item_user_data) {
         combo_box->setCurrentIndex(i);
         break;
       }

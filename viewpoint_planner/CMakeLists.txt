@@ -95,6 +95,9 @@ set(VIEWPOINT_PLANNER_SOURCES_COMMON
   src/mLib/mLib.cpp
   # BVH
   src/bvh/bvh.h
+  # Graph
+  #src/graph/graph.h
+  src/graph/graph_boost.h
   # Octree
   src/octree/occupancy_map.h
   src/octree/occupancy_map.hxx
@@ -107,6 +110,9 @@ set(VIEWPOINT_PLANNER_SOURCES_COMMON
   src/planner/viewpoint.cpp
   src/planner/viewpoint_planner.h
   src/planner/viewpoint_planner.cpp
+  src/planner/viewpoint_planner.hxx
+  src/planner/viewpoint_planner_graph.cpp
+  src/planner/viewpoint_planner_graph.hxx
   src/planner/viewpoint_planner_data.h
   src/planner/viewpoint_planner_data.cpp
   src/planner/motion_planner.h

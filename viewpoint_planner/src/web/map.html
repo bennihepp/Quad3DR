@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Quad3DR Webinterface</title>
+    <meta name="viewport" content="initial-scale=1.0, user-scalable=no">
+    <meta charset="utf-8">
+    <style>
+        /* Always set the map height explicitly to define the size of the div
+         * element that contains the map. */
+        #map {
+            height: 100%;
+        }
+        /* Optional: Makes the sample page fill the window. */
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+        #floating-panel-address {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 5;
+            background-color: #fff;
+            padding: 5px;
+            border: 1px solid #999;
+            text-align: center;
+            font-family: 'Roboto','sans-serif';
+            line-height: 30px;
+            padding-left: 10px;
+        }
+        #floating-panel-waypoints {
+            position: absolute;
+            top: 60px;
+            right: 10px;
+            z-index: 5;
+            background-color: #fff;
+            padding: 5px;
+            border: 1px solid #999;
+            text-align: center;
+            line-height: 25px;
+            padding-left: 10px;
+            //font-family: 'Roboto','sans-serif';
+        }
+        #floating-panel-polygon {
+            position: absolute;
+            top: 210px;
+            right: 10px;
+            z-index: 5;
+            background-color: #fff;
+            padding: 5px;
+            border: 1px solid #999;
+            text-align: center;
+            line-height: 25px;
+            padding-left: 10px;
+        //font-family: 'Roboto','sans-serif';
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="col-xs-3" id="floating-panel-address">
+    <div class="input-group">
+        <input id="address" type="text" class="form-control" value="Zurich, Switzerland">
+        <span class="input-group-btn">
+            <button id="submit_address" class="btn btn-default" type="button">Go!</button>
+        </span>
+    </div>
+</div>
+
+<div class="col-xs-3" id="floating-panel-waypoints">
+    <div class="row-xs-1">
+        <button onclick="clearManualViewpoints();" aria-label="..." type="button" class="btn btn-sm">Clear viewpoints</button>
+        <button onclick="clearLastManualViewpoint();" aria-label="..." type="button" class="btn btn-sm">Clear last viewpoint</button>
+    </div>
+    <div style="padding-top: 5px;" class="input-group">
+        <span class="input-group-addon" id="waypoint-altitude-label">Altitude</span>
+        <input id="waypoint-altitude" type="text" class="form-control" placeholder="Altitude" aria-describedby="waypoint-altitude-label" value="30">
+    </div>
+    <div>
+        <span>
+            <label>
+                <input id="look-down-radio" type="radio" name="marker_type" aria-label="..." />
+                <span class="label label-info">Look-down</span>
+            </label>
+        </span>
+        <span>
+            <label>
+                <input id="look-at-radio" type="radio" name="marker_type" aria-label="..." />
+                <span class="label label-warning">Look-at</span>
+            </label>
+        </span>
+        <button onclick="downloadViewpointsAsJson();" aria-label="..." type="button" class="btn btn-sm">Download viewpoints as JSON</button>
+    </div>
+</div>
+
+<div class="col-xs-3" id="floating-panel-polygon">
+    <div>
+        <span>
+            <label>
+                <input id="region-of-interest-radio" type="radio" name="polygon_type" aria-label="..." />
+                <span class="label label-success">Region of interest</span>
+            </label>
+        </span>
+        <span>
+            <label>
+                <input id="no-fly-zones-radio" type="radio" name="polygon_type" aria-label="..." />
+                <span class="label label-danger">No-fly zone</span>
+            </label>
+        </span>
+        <span>
+            <label>
+                <input id="start-position-radio" type="radio" name="marker_type" aria-label="..." />
+                <span class="label label-primary">Start position</span>
+            </label>
+        </span>
+    </div>
+    <div style="padding-top: 5px;" class="input-group">
+        <span class="input-group-addon" id="lower-altitude-label">Lower altitude</span>
+        <input id="region-lower-altitude" type="text" class="form-control" placeholder="Lower altitude" aria-describedby="lower-altitude-label" value="3">
+        <span class="input-group-addon" id="upper-altitude-label">Upper altitude</span>
+        <input id="region-upper-altitude" type="text" class="form-control" placeholder="Upper altitude" aria-describedby="lower-altitude-label" value="30">
+    </div>
+    <div style="padding-top: 5px;" class="row-xs-1">
+        <button onclick="clearRegion();" aria-label="..." type="button" class="btn btn-sm">Clear all regions</button>
+        <button onclick="clearLastRegion();" aria-label="..." type="button" class="btn btn-sm">Clear last region</button>
+        <button onclick="clearStartPosition();" aria-label="..." type="button" class="btn btn-sm">Clear start position</button>
+    </div>
+    <div style="padding-top: 5px;">
+        <button onclick="downloadRegionsAsJson();" aria-label="..." type="button" class="btn btn-sm">Download region as JSON</button>
+    </div>
+</div>
+
+<div id="map"></div>
+
+<!-- JQuery -->
+<script src="external/jquery-3.1.1.js"></script>
+
+<script>
+    function stringifyJson(data) {
+        return JSON.stringify(data, null, 2);
+    }
+
+    var manualViewpoints = [];
+    var manualViewpointPolyline = null;
+    var lookAtPos = null;
+    var lookAtMarker = null;
+
+    function clearLastManualViewpoint() {
+        viewpoint = manualViewpoints.pop();
+        viewpoint.marker.setMap(null);
+        manualViewpointPolyline.getPath().pop();
+    }
+
+    function clearManualViewpoints() {
+        while (manualViewpoints.length > 0) {
+            clearLastManualViewpoint();
+        }
+        clearLookAtPosition();
+    }
+
+    function clearLookAtPosition() {
+        lookAtPos = null;
+        if (lookAtMarker != null) {
+            lookAtMarker.setMap(null);
+            lookAtMarker = null;
+        }
+    }
+
+    // Hack
+//    new Object({
+//        lat: 47.37717892063398,
+//        long: 8.546741008758545,
+//        altitude: 20
+//    });
+    // End Hack
+
+    function toRadians(degrees) {
+        return degrees * Math.PI / 180.0;
+    }
+
+    function toDegrees(radians) {
+        return radians * 180.0 / Math.PI;
+    }
+
+    function latlngToXy(latlng1, latlng2) {
+        x = 111300 * (latlng2.lat - latlng1.lat);
+        y = 111300 * Math.cos(toRadians(latlng2.lat)) * (latlng2.long - latlng1.long);
+        return new Object({
+            x: x,
+            y: y
+        });
+    }
+
+    function downloadViewpointsAsJson() {
+        var data = new Object();
+        data.viewpoints = [];
+        for (var i = 0; i < manualViewpoints.length; ++i) {
+            var doLookAt = $('#look-at-radio').is(':checked');
+            if (doLookAt && lookAtPos == null) {
+                console.error("No look-at position defined!");
+                return;
+            }
+            console.log(doLookAt);
+            viewpoint = manualViewpoints[i].viewpoint;
+            pose = new Object();
+            pose.latitude = viewpoint.lat;
+            pose.longitude = viewpoint.long;
+            pose.altitude = viewpoint.altitude;
+            pose.yaw = viewpoint.yaw;
+            path = [new Object()];
+            path[0].latitude = viewpoint.lat;
+            path[0].longitude = viewpoint.long;
+            path[0].altitude = viewpoint.altitude;
+            path[0].yaw = viewpoint.yaw;
+            if (doLookAt) {
+                diff = latlngToXy(viewpoint, lookAtPos)
+                yaw = toDegrees(Math.atan2(diff.y, diff.x))
+                pitch = toDegrees(Math.atan2(lookAtPos.altitude - viewpoint.altitude, Math.sqrt(diff.x * diff.x + diff.y * diff.y)))
+                console.log("yaw = " + yaw);
+                pose.yaw = -yaw;
+                path[0].yaw = -yaw;
+                viewpoint.pitch = pitch;
+            }
+            data.viewpoints.push(new Object({
+                pose: pose,
+                path: path,
+                camera_yaw: 0,
+                camera_pitch: viewpoint.pitch
+            }));
+        }
+        jsonString = stringifyJson(data);
+        console.log(jsonString);
+        var url = 'data:text/json;charset=utf8,' + encodeURIComponent(jsonString);
+        window.open(url, '_blank');
+        window.focus();
+    }
+
+    var startPosition = null;
+    var regionOfInterest = null;
+    var noFlyZones = [];
+
+    function clearRegion() {
+        if ($('#region-of-interest-radio').is(':checked')) {
+            clearRegionOfInterest();
+        }
+        else if ($('#no-fly-zones-radio').is(':checked')) {
+            clearNoFlyZones();
+        }
+    }
+
+    function clearLastRegion() {
+        if ($('#region-of-interest-radio').is(':checked')) {
+            clearRegionOfInterest();
+        }
+        else if ($('#no-fly-zones-radio').is(':checked')) {
+            clearLastNoFlyZone();
+        }
+    }
+
+    function clearStartPosition() {
+        if (startPosition != null) {
+            startPosition.marker.setMap(null);
+            startPosition = null;
+        }
+    }
+
+    function convertRegionToPolygonWithLowerUpperBound(region) {
+        poly = new Object();
+        poly.latlong_vertices = [];
+        region.polygon.getPath().forEach(function (latlong, index) {
+            var lat = latlong.lat();
+            var long = latlong.lng();
+            poly.latlong_vertices.push(new Object({
+                latitude: lat,
+                longitude: long
+            }));
+        });
+        poly.lower_altitude = region.lower_altitude;
+        poly.upper_altitude = region.upper_altitude;
+        return poly;
+    }
+
+    function convertStartPosition(position) {
+        var latlong = position.marker.getPosition();
+        data = new Object({
+            latitude: latlong.lat(),
+            longitude: latlong.lng(),
+            lower_altitude: position.lower_altitude,
+            upper_altitude: position.upper_altitude
+        });
+        return data;
+    }
+
+    function downloadRegionsAsJson() {
+        if (startPosition == null) {
+            console.warn("No start position defined");
+//            console.error("No start position defined");
+//            return;
+        }
+        if (regionOfInterest == null) {
+            console.error("No region of interest defined");
+            return;
+        }
+        var data = new Object();
+        if (startPosition != null) {
+            data.startPosition = convertStartPosition(startPosition);
+        }
+        data.regionOfInterest = convertRegionToPolygonWithLowerUpperBound(regionOfInterest);
+        data.noFlyZones = [];
+        noFlyZones.forEach(function (region, index) {
+            data.noFlyZones.push(convertRegionToPolygonWithLowerUpperBound(region));
+        });
+        jsonString = stringifyJson(data);
+        console.log(jsonString);
+        var url = 'data:text/json;charset=utf8,' + encodeURIComponent(jsonString);
+        window.open(url, '_blank');
+        window.focus();
+    }
+
+    function clearRegionOfInterest() {
+        if (regionOfInterest != null) {
+            regionOfInterest.polygon.setMap(null);
+            regionOfInterest = null;
+        }
+    }
+
+    function clearLastNoFlyZone() {
+        if (noFlyZones.length > 0) {
+            region = noFlyZones.pop();
+            region.polygon.setMap(null);
+        }
+    }
+
+    function clearNoFlyZones() {
+        while (noFlyZones.length > 0) {
+            clearLastNoFlyZone();
+        }
+    }
+
+    function initMap() {
+        var map = new google.maps.Map(document.getElementById('map'), {
+            center: {lat: 47.377201, lng: 8.547395},
+            zoom: 18,
+            tilt: 0,
+            mapTypeId: 'satellite'
+        });
+
+        var geocoder = new google.maps.Geocoder();
+        document.getElementById('submit_address').addEventListener('click', function () {
+            geocodeAddress(geocoder, map);
+        });
+
+        function geocodeAddress(geocoder, resultsMap) {
+            var address = document.getElementById('address').value;
+            geocoder.geocode({'address': address}, function (results, status) {
+                if (status === 'OK') {
+                    resultsMap.setCenter(results[0].geometry.location);
+                    var marker = new google.maps.Marker({
+                        map: resultsMap,
+                        position: results[0].geometry.location
+                    });
+                } else {
+                    alert('Geocode was not successful for the following reason: ' + status);
+                }
+            });
+        }
+
+        var drawingManager = new google.maps.drawing.DrawingManager({
+            drawingMode: google.maps.drawing.OverlayType.MARKER,
+            drawingControl: true,
+            drawingControlOptions: {
+                position: google.maps.ControlPosition.TOP_CENTER,
+                drawingModes: ['marker', 'polygon']
+            },
+            //markerOptions: {icon: 'https://developers.google.com/maps/documentation/javascript/examples/full/images/beachflag.png'},
+            markerOptions: {
+                draggable: true,
+                editable: true,
+                zIndex: 2
+            },
+            polygonOptions: {
+                strokeColor: '#00ff00',
+                fillColor: '#00ff00',
+                fillOpacity: 0.5,
+                strokeWeight: 3,
+                draggable: true,
+                editable: true,
+                zIndex: 2
+            }
+        });
+        drawingManager.setMap(map);
+
+        $('#look-down-radio').click();
+        $('#look-down-radio, #look-at-radio').click(function() {
+            clearManualViewpoints();
+        });
+        $('#region-of-interest-radio').click(function() {
+            drawingManager.setOptions({
+                polygonOptions: {
+                    strokeColor: '#00ff00',
+                    fillColor: '#00ff00',
+                    fillOpacity: 0.5,
+                    strokeWeight: 3,
+                    draggable: true,
+                    editable: true,
+                    zIndex: 2
+                }
+            });
+        });
+        $('#no-fly-zones-radio').click(function() {
+            drawingManager.setOptions({
+                polygonOptions: {
+                    strokeColor: '#ff0000',
+                    fillColor: '#ff0000',
+                    fillOpacity: 0.5,
+                    strokeWeight: 3,
+                    draggable: true,
+                    editable: true,
+                    zIndex: 1
+                }
+            });
+        });
+        $('#region-of-interest-radio').click();
+
+        google.maps.event.addListener(drawingManager, 'markercomplete', function (marker) {
+            if ($('#start-position-radio').is(':checked')) {
+                clearStartPosition();
+                marker.setIcon("http://maps.google.com/mapfiles/ms/icons/blue-dot.png");
+                startPosition = new Object({
+                    marker: marker,
+                    lower_altitude: parseFloat($('#region-lower-altitude').val()),
+                    upper_altitude: parseFloat($('#region-upper-altitude').val())
+                });
+            }
+            else {
+                var lookDownChecked = $('#look-down-radio').is(':checked');
+                var lookAtChecked = $('#look-at-radio').is(':checked');
+                if (!lookDownChecked && !lookAtChecked) {
+                    console.error("No marker mode selected");
+                    return;
+                }
+                var latlong = marker.getPosition();
+                var altitude = parseFloat($('#waypoint-altitude').val());
+                if (lookAtChecked && lookAtPos == null) {
+                    lookAtPos = new Object({
+                        lat: latlong.lat(),
+                        long: latlong.lng(),
+                        altitude: altitude
+                    });
+                    marker.setIcon("http://maps.google.com/mapfiles/ms/icons/yellow-dot.png");
+                    lookAtMarker = marker;
+                    return;
+                }
+                else if (lookDownChecked) {
+                    lookAtPos = null;
+                }
+                var viewpoint = new Object();
+                viewpoint.lat = latlong.lat();
+                viewpoint.long = latlong.lng();
+                viewpoint.altitude = altitude;
+                viewpoint.yaw = 0;
+                viewpoint.pitch = -90;
+                var viewpoint_entry = new Object();
+                viewpoint_entry.marker = marker;
+                viewpoint_entry.viewpoint = viewpoint;
+                if (manualViewpoints.length == 0) {
+                    marker.setIcon("http://maps.google.com/mapfiles/ms/icons/green-dot.png");
+                }
+                else {
+                    if (manualViewpoints.length > 1) {
+                        manualViewpoints[manualViewpoints.length - 1].marker.setIcon("http://maps.google.com/mapfiles/ms/icons/blue-dot.png");
+                    }
+                    marker.setIcon("http://maps.google.com/mapfiles/ms/icons/red-dot.png");
+                }
+                manualViewpoints.push(viewpoint_entry);
+                if (manualViewpointPolyline == null) {
+                    manualViewpointPolyline = new google.maps.Polyline({
+                        strokeColor: '#FFFF00',
+                        strokeOpacity: 1.0,
+                        strokeWeight: 2,
+                        geodesic: true,
+                        map: map,
+                        path: [latlong]
+                    });
+//                drawingManager.setOptions({
+//                    markerOptions: {
+//                        icon: getMarkerPinWithColor("#0000FF")
+//                    }
+//                });
+                }
+                else {
+                    var polyPath = manualViewpointPolyline.getPath();
+                    polyPath.push(latlong);
+                    manualViewpointPolyline.setPath(polyPath);
+                }
+                console.log("lat=" + viewpoint.lat + ", long=" + viewpoint.long + ", altitude=" + viewpoint.altitude);
+            }
+        });
+
+        google.maps.event.addListener(drawingManager, 'polygoncomplete', function (polygon) {
+            var region = new Object({
+                polygon: polygon,
+                lower_altitude: parseFloat($('#region-lower-altitude').val()),
+                upper_altitude: parseFloat($('#region-upper-altitude').val())
+            });
+            console.log(region);
+            if ($('#region-of-interest-radio').is(':checked')) {
+                clearRegionOfInterest();
+                regionOfInterest = region;
+            }
+            else {
+                noFlyZones.push(region);
+            }
+            region.polygon.getPath().forEach(function (latlong, index) {
+                var long = latlong.lng();
+                var lat = latlong.lat();
+                console.log("lat=" + lat + ", long=" + long);
+            });
+        });
+    }
+</script>
+<!-- Google Maps API -->
+<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCu9XlP0cpxy1w66TrufWCcZUp-zsps-jM&libraries=drawing&callback=initMap"
+        async defer></script>
+<!-- Bootstrap -->
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css" integrity="sha384-BVYiiSIFeK1dGmJRAkycuHAHRg32OmUcww7on3RYdg4Va+PmSTsz/K68vbdEjh4u" crossorigin="anonymous">
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap-theme.min.css" integrity="sha384-rHyoN1iRsVXV4nD0JutlnGaslCJuC7uwjduW9SVrLvRYooPp2bWYgmgJQIXwl/Sp" crossorigin="anonymous">
+<script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js" integrity="sha384-Tc5IQib027qvyjSMfHjOMaLkfuWVxZxUPnCJA7l2mCWNIpG9mGCD8wGNIcPD7Txa" crossorigin="anonymous"></script>
+</body>
+</html>

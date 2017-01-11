@@ -28,7 +28,8 @@ OcTreeDrawer::OcTreeDrawer()
     low_observation_count_(0), high_observation_count_(std::numeric_limits<uint32_t>::max()),
     min_voxel_size_(0), max_voxel_size_(std::numeric_limits<FloatType>::max()),
     min_weight_(0), max_weight_(std::numeric_limits<FloatType>::max()),
-    low_weight_(0), high_weight_(std::numeric_limits<FloatType>::max()) {
+    low_weight_(0), high_weight_(std::numeric_limits<FloatType>::max()),
+    min_information_(0), max_information_(std::numeric_limits<FloatType>::max()) {
   // origin and movement
   initial_origin_ = octomap::pose6d(0, 0, 0, 0, 0, 0);
   origin_ = initial_origin_;
@@ -147,6 +148,20 @@ void OcTreeDrawer::setMaxWeight(FloatType max_weight) {
   max_weight_ = max_weight;
   forEachVoxelDrawer([this](VoxelDrawer& voxel_drawer) {
     voxel_drawer.setMaxWeight(max_weight_);
+  });
+}
+
+void OcTreeDrawer::setMinInformation(FloatType min_information) {
+  min_information_ = min_information;
+  forEachVoxelDrawer([this](VoxelDrawer& voxel_drawer) {
+    voxel_drawer.setMinInformation(min_information_);
+  });
+}
+
+void OcTreeDrawer::setMaxInformation(FloatType max_information) {
+  max_information_ = max_information;
+  forEachVoxelDrawer([this](VoxelDrawer& voxel_drawer) {
+    voxel_drawer.setMaxInformation(max_information_);
   });
 }
 

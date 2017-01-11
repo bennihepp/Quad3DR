@@ -33,6 +33,8 @@ public:
         connect(ui.drawOctree, SIGNAL(stateChanged(int)), this, SLOT(setDrawOctreeInternal(int)));
         connect(ui.drawCameras, SIGNAL(stateChanged(int)), this, SLOT(setDrawCamerasInternal(int)));
         connect(ui.drawSparsePoints, SIGNAL(stateChanged(int)), this, SLOT(setDrawSparsePointsInternal(int)));
+        connect(ui.drawDensePoints, SIGNAL(stateChanged(int)), this, SLOT(setDrawDensePointsInternal(int)));
+        connect(ui.drawPoissonMesh, SIGNAL(stateChanged(int)), this, SLOT(setDrawPoissonMeshInternal(int)));
         connect(ui.refreshTree, SIGNAL(clicked(void)), this, SLOT(signalRefreshTreeInternal()));
         connect(ui.drawRaycast, SIGNAL(stateChanged(int)), this, SLOT(setDrawRaycastInternal(int)));
         connect(ui.captureRaycast, SIGNAL(clicked(void)), this, SLOT(signalCaptureRaycastInternal()));
@@ -46,6 +48,8 @@ public:
         connect(ui.maxVoxelSize, SIGNAL(valueChanged(double)), this, SLOT(setMaxVoxelSizeInternal(double)));
         connect(ui.minWeight, SIGNAL(valueChanged(double)), this, SLOT(setMinWeightInternal(double)));
         connect(ui.maxWeight, SIGNAL(valueChanged(double)), this, SLOT(setMaxWeightInternal(double)));
+        connect(ui.minInformation, SIGNAL(valueChanged(double)), this, SLOT(setMinInformationInternal(double)));
+        connect(ui.maxInformation, SIGNAL(valueChanged(double)), this, SLOT(setMaxInformationInternal(double)));
         connect(ui.renderTreeDepth, SIGNAL(valueChanged(int)), this, SLOT(setRenderTreeDepthInternal(int)));
         connect(ui.renderObservationThreshold, SIGNAL(valueChanged(int)), this, SLOT(setRenderObservationThresholdInternal(int)));
     }
@@ -175,6 +179,22 @@ public:
       ui.maxWeight->setValue(max_weight);
     }
 
+    double getMinInformation() const {
+      return ui.minInformation->value();
+    }
+
+    void setMinInformation(double min_information) {
+      ui.minInformation->setValue(min_information);
+    }
+
+    double getMaxInformation() const {
+      return ui.maxInformation->value();
+    }
+
+    void setMaxInformation(double max_information) {
+      ui.maxInformation->setValue(max_information);
+    }
+
     std::size_t getRenderTreeDepth() const {
       return ui.renderTreeDepth->value();
     }
@@ -238,6 +258,14 @@ protected slots:
         emit drawSparsePointsChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
     }
 
+    void setDrawDensePointsInternal(int state) {
+        emit drawDensePointsChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
+    }
+
+    void setDrawPoissonMeshInternal(int state) {
+        emit drawPoissonMeshChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
+    }
+
     void signalRefreshTreeInternal() {
         emit refreshTree();
     }
@@ -298,6 +326,14 @@ protected slots:
       emit maxWeightChanged(max_weight);
     }
 
+    void setMinInformationInternal(double min_information) {
+      emit minInformationChanged(min_information);
+    }
+
+    void setMaxInformationInternal(double max_information) {
+      emit maxInformationChanged(max_information);
+    }
+
     void setRenderTreeDepthInternal(int render_tree_depth) {
         emit renderTreeDepthChanged(static_cast<std::size_t>(render_tree_depth));
     }
@@ -316,6 +352,8 @@ signals:
   void drawOctreeChanged(bool draw_octree);
   void drawCamerasChanged(bool draw_cameras);
   void drawSparsePointsChanged(bool draw_sparse_points);
+  void drawDensePointsChanged(bool draw_dense_points);
+  void drawPoissonMeshChanged(bool draw_poisson_mesh);
   void useDroneCameraChanged(bool use_drone_camera);
   void refreshTree();
   void drawRaycastChanged(bool draw_raycast);
@@ -329,6 +367,8 @@ signals:
   void maxVoxelSizeChanged(double max_voxel_size);
   void minWeightChanged(double min_weight);
   void maxWeightChanged(double max_weight);
+  void minInformationChanged(double min_information);
+  void maxInformationChanged(double max_information);
   void renderTreeDepthChanged(std::size_t render_tree_depth);
   void renderObservationThresholdChanged(std::size_t render_tree_depth);
 

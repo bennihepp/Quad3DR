@@ -19,6 +19,9 @@
 #define NOEXCEPT
 #endif
 
+// Easy value printer
+#define AIT_PRINT_VALUE(x) std::cout << #x << "=" << x << std::endl
+
 // Marco for function name and line number as a string
 #define FUNCTION_LINE_STRING (std::string(__FILE__) + " [" + std::string(__FUNCTION__) + ":" + std::to_string(__LINE__) + "]")
 
@@ -37,6 +40,8 @@
 #if !defined(MLIB_ERROR) && AIT_MLIB_COMPATIBILITY
   #define MLIB_ERROR(s) ait::errorFunction(std::string(FUNCTION_LINE_STRING) + ": " + std::string(s))
 #endif
+
+#define AIT_DEBUG_BREAK ait::debugBreakFunction()
 
 // Assertion macros
 #if !AIT_NO_ASSERT
@@ -99,6 +104,7 @@ public:
     }
 };
 
+void debugBreakFunction();
 void warningFunction(const std::string& description);
 void errorFunction(const std::string& description);
 void assertFunction(bool predicate, const std::string& description);

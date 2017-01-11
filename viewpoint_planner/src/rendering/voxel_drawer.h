@@ -112,6 +112,9 @@ public:
   void setMinWeight(const float min_weight);
   void setMaxWeight(const float max_weight);
 
+  void setMinInformation(const float min_information);
+  void setMaxInformation(const float max_information);
+
 private:
   size_t num_voxels_;
   QOpenGLVertexArrayObject vao_;
@@ -142,4 +145,6 @@ private:
   float max_voxel_size_;
   float min_weight_;
   float max_weight_;
+  float min_information_;
+  float max_information_;
 };

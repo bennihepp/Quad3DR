@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <functional>
+#include <boost/serialization/access.hpp>
 #include <ompl/base/SpaceInformation.h>
 #include <ompl/base/OptimizationObjective.h>
 #include <ompl/base/objectives/PathLengthOptimizationObjective.h>
@@ -55,8 +56,34 @@ public:
     std::size_t max_iterations_per_solve = 1000;
   };
 
-  MotionPlanner(ViewpointPlannerData* data)
-  : initialized_(false), data_(data) {}
+  struct Motion {
+    Motion()
+    : distance(-1), cost(-1) {}
+
+    FloatType distance;
+    FloatType cost;
+    std::vector<Pose> poses;
+
+private:
+    // Boost serialization
+    friend class boost::serialization::access;
+
+    template <typename Archive>
+    void serialize(Archive& ar, const unsigned int version) {
+      ar & distance;
+      ar & cost;
+      ar & poses;
+    }
+  };
+
+  MotionPlanner(const Options* options, ViewpointPlannerData* data)
+  : options_(*options), initialized_(false), data_(data) {}
+
+  MotionPlanner(const Options* options, ViewpointPlannerData* data, const std::string& log_filename)
+  : options_(*options), initialized_(false), data_(data) {
+    ompl_output_handler_ = std::make_shared<ompl::msg::OutputHandlerFile>(log_filename.c_str());
+    ompl::msg::useOutputHandler(ompl_output_handler_.get());
+  }
 
   void setSpaceBoundingBox(const BoundingBoxType& space_bbox) {
     space_bbox_ = space_bbox;
@@ -107,19 +134,11 @@ public:
     initialized_ = true;
   }
 
-  /// Check if an object can be placed at a position (i.e. is it free space)
-  bool isValidObjectPosition(const Vector3& position, const Vector3& object_extent) {
-    BoundingBoxType object_bbox = BoundingBoxType::createFromCenterAndExtent(position, object_extent);
-    std::vector<ViewpointPlannerData::OccupiedTreeType::BBoxIntersectionResult> results =
-        data_->occupied_bvh_.intersects(object_bbox);
-    return results.empty();
-  }
-
-  std::pair<bool, FloatType> findMotion(const Pose& from, const Pose& to) {
+  std::pair<Motion, bool> findMotion(const Pose& from, const Pose& to) {
     if (!initialized_) {
       initialize();
     }
-    ait::Timer timer;
+//    ait::Timer timer;
 
     // TODO: Initialize a pool of structures in the beginning for thread-safety
 
@@ -132,7 +151,9 @@ public:
     }
 //    std::cout << "Bounding box=" << space_bbox_ << std::endl;
     space_->setBounds(bounds);
-//
+    FloatType fraction = object_extent_.maxCoeff() / 2 / space_bbox_.getMaxExtent();
+    space_->setLongestValidSegmentFraction(fraction);
+
     std::shared_ptr<ob::SpaceInformation> space_info_ = std::make_shared<ob::SpaceInformation>(space_);
     space_info_->setStateValidityChecker(std::bind(&MotionPlanner::isStateValid, this, std::placeholders::_1));
 
@@ -177,12 +198,13 @@ public:
 
     ob::PlannerStatus solved = planner_->solve(termination_cond);
 
-    timer.printTimingMs("MotionPlanner::findMotion()");
+//    timer.printTimingMs("MotionPlanner::findMotion()");
 
     if (solved == ob::PlannerStatus::EXACT_SOLUTION) {
 //      std::cout << "Found exact solution:" << std::endl;
       const ob::PathPtr path = problem_def_->getSolutionPath();;
       const og::PathGeometric* geo_path = dynamic_cast<og::PathGeometric*>(path.get());
+      FloatType motion_distance = geo_path->cost(problem_def_->getOptimizationObjective()).value();
 
       // print the path to screen
 //      path->print(std::cout);
@@ -193,22 +215,33 @@ public:
 //      std::cout << "Solution path length: " << geo_path->length() << std::endl;
 //      std::cout << "Solution difference: " << solution.difference_ << std::endl;
 //      std::cout << "Solution cost: " <<  << std::endl;
-      // TODO: Remove
-      FloatType motion_distance = geo_path->cost(problem_def_->getOptimizationObjective()).value();
+
+      // Sanity checks
       FloatType distance_square = (from.getWorldPosition() - to.getWorldPosition()).squaredNorm();
-      FloatType distance2 = space_info_->distance(start.get(), goal.get());
-      if (motion_distance * motion_distance < distance_square) {
-        std::cout << "distance_square=" << distance_square << std::endl;
-        std::cout << "distance2 * distance2=" << distance2 * distance2 << std::endl;
-        std::cout << "motion_distance * motion_distance=" << motion_distance * motion_distance << std::endl;
-      }
+//      FloatType distance2 = space_info_->distance(start.get(), goal.get());
+//      if (motion_distance * motion_distance < distance_square) {
+//        std::cout << "distance_square=" << distance_square << std::endl;
+//        std::cout << "distance2 * distance2=" << distance2 * distance2 << std::endl;
+//        std::cout << "motion_distance * motion_distance=" << motion_distance * motion_distance << std::endl;
+//      }
       AIT_ASSERT(ait::isApproxGreater(motion_distance * motion_distance, distance_square, 1e-2));
-      AIT_ASSERT(ait::isApproxGreater(motion_distance * motion_distance, distance2 * distance2, 1e-2));
-      return std::make_pair(true, motion_distance);
+//      AIT_ASSERT(ait::isApproxGreater(motion_distance * motion_distance, distance2 * distance2, 1e-2));
+
+      Motion motion;
+      motion.distance = motion_distance;
+      motion.cost = motion_distance;
+      for (std::size_t i = 0; i < geo_path->getStateCount(); ++i) {
+        const StateSpaceType::StateType* state = static_cast<const StateSpaceType::StateType*>(geo_path->getState(i));
+        Vector3 position(state->getX(), state->getY(), state->getZ());
+        Quaternion quat = Quaternion::Identity();
+        Pose pose = Pose::createFromImageToWorldTransformation(position, quat);
+        motion.poses.push_back(pose);
+      }
+      return std::make_pair(motion, true);
     }
     else {
 //      std::cout << "No solution found" << std::endl;
-      return std::make_pair(false, -1);
+      return std::make_pair(Motion(), false);
     }
   }
 
@@ -216,7 +249,7 @@ private:
   bool isStateValid(const ob::State *state) {
     const StateSpaceType::StateType* state_tmp = static_cast<const StateSpaceType::StateType*>(state);
     Vector3 position(state_tmp->getX(), state_tmp->getY(), state_tmp->getZ());
-    return isValidObjectPosition(position, object_extent_);
+    return data_->isValidObjectPosition(position, object_extent_);
   }
 
   ob::ScopedState<StateSpaceType> createStateFromPose(const Pose& pose, const std::shared_ptr<ob::SpaceInformation>& space_info) const {
@@ -261,4 +294,5 @@ private:
   std::shared_ptr<ob::SpaceInformation> space_info_;
   std::shared_ptr<ob::ProblemDefinition> problem_def_;
   std::shared_ptr<PlannerType> planner_;
+  std::shared_ptr<ompl::msg::OutputHandler> ompl_output_handler_;
 };
