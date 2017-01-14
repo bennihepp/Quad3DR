@@ -26,3 +26,25 @@ std::pair<bool, ViewpointPlanner::Pose> ViewpointPlanner::sampleSurroundingPoseF
   const Pose& pose = viewpoint_entries_[viewpoint_index].viewpoint.pose();
   return sampleSurroundingPose(pose);
 }
+
+template <typename Iterator>
+std::pair<bool, ViewpointPlanner::ViewpointEntryIndex> ViewpointPlanner::canVoxelBeTriangulated(
+    const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data,
+    const ViewpointEntry& new_viewpoint, Iterator it) const {
+  if (it != comp_data.voxel_observation_counts.cend()) {
+    const VoxelType* voxel = it->first;
+    const Vector3 voxel_center = voxel->getBoundingBox().getCenter();
+    const Vector3 view_direction_1 = (new_viewpoint.viewpoint.pose().getWorldPosition() - voxel_center).normalized();
+    const std::vector<ViewpointEntryIndex>& observing_entries = it->second.observing_entries;
+    // Check if voxel can be triangulated
+    for (auto other_it = observing_entries.cbegin(); other_it != observing_entries.cend(); ++other_it) {
+      const ViewpointEntry& other_viewpoint_entry = viewpoint_entries_[*other_it];
+      const Vector3 view_direction_2 = (other_viewpoint_entry.viewpoint.pose().getWorldPosition() - voxel_center).normalized();
+      const FloatType cos_angle = view_direction_1.dot(view_direction_2);
+      if (cos_angle <= triangulation_max_cos_angle_) {
+        return std::make_pair(true, *other_it);
+      }
+    }
+  }
+  return std::make_pair(false, (ViewpointEntryIndex)-1);
+}

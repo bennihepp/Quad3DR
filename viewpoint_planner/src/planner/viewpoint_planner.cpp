@@ -10,6 +10,10 @@
 #include <random>
 #include <boost/filesystem.hpp>
 #include <boost/serialization/unordered_map.hpp>
+#include <rapidjson/document.h>
+#include <rapidjson/prettywriter.h>
+#include <rapidjson/ostreamwrapper.h>
+#include <rapidjson/stringbuffer.h>
 #include <ait/common.h>
 #include <ait/math.h>
 #include <ait/utilities.h>
@@ -52,6 +56,14 @@ ViewpointPlanner::ViewpointPlanner(
   motion_planner_.setSpaceBoundingBox(motion_sampling_bbox);
   motion_planner_.setObjectExtent(drone_extent_);
 
+  // TODO: Remove?
+  triangulation_max_cos_angle_ = std::cos(options_.triangulation_min_angle_degrees * FloatType(M_PI) / 180);
+  const FloatType triangulation_min_sin_angle = std::sin(options_.triangulation_min_angle_degrees * FloatType(M_PI) / 180);
+  triangulation_min_sin_angle_square_ = triangulation_min_sin_angle * triangulation_min_sin_angle;
+  const FloatType triangulation_max_sin_angle = std::sin(options_.triangulation_max_angle_degrees * FloatType(M_PI) / 180);
+  triangulation_max_sin_angle_square_ = triangulation_max_sin_angle * triangulation_max_sin_angle;
+  triangulation_max_angular_deviation_ = options_.triangulation_max_angular_deviation_degrees * (FloatType)M_PI / 180;
+
   reset();
 
   if (!options_.viewpoint_graph_filename.empty()) {
@@ -93,7 +105,7 @@ void ViewpointPlanner::reset() {
       std::pair<VoxelWithInformationSet, FloatType> raycast_result =
           getRaycastHitVoxelsWithInformationScoreBVH(viewpoint_entry.viewpoint.pose());
       const VoxelWithInformationSet& voxel_set = raycast_result.first;
-      viewpoint_entry.voxel_set = std::move(raycast_result.first);
+      viewpoint_entry.voxel_set = std::move(voxel_set);
     }
   }
   // Initialize viewpoint nearest neighbor index
@@ -158,6 +170,28 @@ void ViewpointPlanner::loadViewpointGraph(const std::string& filename) {
       << " and " << viewpoint_graph_.numEdges() << " motions" << std::endl;
   AIT_ASSERT(viewpoint_entries_.size() == viewpoint_graph_.numVertices());
   AIT_ASSERT(viewpoint_graph_.numEdges() == viewpoint_graph_motions_.size());
+  // TODO: Would be good to have this as an option??
+  if (options_.ignore_real_observed_voxels) {
+    std::cout << "Clearing observed voxels for previous camera viewpoints" << std::endl;
+    for (std::size_t i = 0; i < num_real_viewpoints_; ++i) {
+      ViewpointEntry& viewpoint_entry = viewpoint_entries_[i];
+      viewpoint_entry.voxel_set.clear();
+    }
+  }
+  else {
+    std::cout << "Computing observed voxels for previous camera viewpoints" << std::endl;
+#pragma omp parallel for
+    for (std::size_t i = 0; i < num_real_viewpoints_; ++i) {
+      ViewpointEntry& viewpoint_entry = viewpoint_entries_[i];
+      if (viewpoint_entry.voxel_set.empty()) {
+        // Compute observed voxels and information
+        std::pair<VoxelWithInformationSet, FloatType> raycast_result =
+            getRaycastHitVoxelsWithInformationScoreBVH(viewpoint_entry.viewpoint.pose());
+        const VoxelWithInformationSet& voxel_set = raycast_result.first;
+        viewpoint_entry.voxel_set = std::move(voxel_set);
+      }
+    }
+  }
 }
 
 void ViewpointPlanner::saveViewpointPath(const std::string& filename) const {
@@ -168,6 +202,22 @@ void ViewpointPlanner::saveViewpointPath(const std::string& filename) const {
   boost::archive::binary_oarchive oa(ofs);
   ViewpointPathSaver vps(viewpoint_paths_, viewpoint_paths_data_, data_->occupied_bvh_);
   oa << vps;
+  std::unordered_map<ViewpointIndexPair, Motion, ViewpointIndexPair::Hash> local_viewpoint_path_motions;
+  for (const ViewpointPath& viewpoint_path : viewpoint_paths_) {
+    for (auto it1 = viewpoint_path.entries.begin(); it1 != viewpoint_path.entries.end(); ++it1) {
+      for (auto it2 = viewpoint_path.entries.begin(); it2 != viewpoint_path.entries.end(); ++it2) {
+        if (it1 != it2) {
+          const ViewpointIndexPair vip(it1->viewpoint_index, it2->viewpoint_index);
+          const auto it = viewpoint_graph_motions_.find(vip);
+          if (it != viewpoint_graph_motions_.end()) {
+            const Motion& motion = it->second;
+            local_viewpoint_path_motions.emplace(vip, motion);
+          }
+        }
+      }
+    }
+  }
+  oa << local_viewpoint_path_motions;
   std::cout << "Done" << std::endl;
   reportViewpointPathsStats();
 }
@@ -181,6 +231,14 @@ void ViewpointPlanner::loadViewpointPath(const std::string& filename) {
   viewpoint_paths_data_.clear();
   ViewpointPathLoader vpl(&viewpoint_paths_, &viewpoint_paths_data_, &data_->occupied_bvh_);
   ia >> vpl;
+  //
+  std::unordered_map<ViewpointIndexPair, Motion, ViewpointIndexPair::Hash> local_viewpoint_path_motions;
+  ia >> local_viewpoint_path_motions;
+  for (const auto& motion_entry : local_viewpoint_path_motions) {
+    const ViewpointIndexPair& vip = motion_entry.first;
+    const Motion& motion = motion_entry.second;
+    addViewpointMotion(vip.index1, vip.index2, motion);
+  }
 //  std::cout << "Recomputing observed voxel sets" << std::endl;
 //  std::cout << "Recomputing sorted information lists" << std::endl;
 //#pragma omp parallel for
@@ -214,6 +272,85 @@ void ViewpointPlanner::loadViewpointPath(const std::string& filename) {
   }
   std::cout << "Loaded " << viewpoint_paths_.size() << " viewpoint paths."
       << " The best path has " << getBestViewpointPath().entries.size() << " viewpoints" << std::endl;
+}
+
+void ViewpointPlanner::exportViewpointPathAsJson(const std::string& filename, const ViewpointPath& viewpoint_path) const {
+  std::cout << "Converting viewpoint path to JSON" << std::endl;
+
+  using GpsCoordinateType = reconstruction::SfmToGpsTransformation::GpsCoordinate;
+  using GpsFloatType = typename GpsCoordinateType::FloatType;
+  using GpsConverter = ait::GpsConverter<GpsFloatType>;
+  const GpsCoordinateType gps_reference = data_->reconstruction_->sfmGpsTransformation().gps_reference;
+  std::cout << "GPS reference: " << gps_reference << std::endl;
+  const GpsConverter gps_converter = GpsConverter::createWGS84(gps_reference);
+//  const FloatType ref_altitude = gps_reference.altitude();
+//  std::vector<GpsCoordinateType> gps_coordinates;
+//  for (const boost::property_tree::ptree::value_type& v : pt.get_child("latlong_vertices")) {
+//    gps_coordinates.push_back(GpsCoordinateType(v.second.get<FloatType>("latitude"), v.second.get<FloatType>("longitude"), ref_altitude));
+//  }
+//  std::vector<RegionType::Vector2> vertices;
+//  for (const GpsCoordinateType& gps : gps_coordinates) {
+//    const Vector3 enu = gps_converter.convertGpsToEnu(gps);
+//    if (verbose) {
+//      std::cout << "GPS: " << gps << ", ENU: " << enu.transpose() << std::endl;
+//    }
+//    vertices.emplace_back(enu(0), enu(1));
+//  }
+//  if (verbose) {
+//    std::cout << "Lower altitude: " << lower_altitude << ", upper_altitude: " << upper_altitude << std::endl;
+//  }
+//  const RegionType region(vertices, lower_altitude, upper_altitude);
+
+  using rapidjson::Document;
+  using rapidjson::Value;
+  using rapidjson::kArrayType;
+  using rapidjson::kObjectType;
+  Document d;
+  d.SetObject();
+  auto& allocator = d.GetAllocator();
+  Value viewpoints(kArrayType);
+  for (std::size_t i : viewpoint_path.order) {
+    const ViewpointPathEntry& path_entry = viewpoint_path.entries[i];
+    const ViewpointEntry& viewpoint_entry = viewpoint_entries_[path_entry.viewpoint_index];
+    const GpsCoordinateType gps = gps_converter.convertEnuToGps(viewpoint_entry.viewpoint.pose().getWorldPosition().cast<GpsFloatType>());
+    Value json_pose(kObjectType);
+    const GpsFloatType latitude = gps.latitude();
+    const GpsFloatType longitude = gps.longitude();
+    const GpsFloatType altitude = gps.altitude();
+    // East is yaw = 0, south is yaw = 90, rotation axis is pointing in z-direction
+    const Vector3 viewing_direction = viewpoint_entry.viewpoint.pose().rotation().col(2);
+    const FloatType yaw_radians = -std::atan2(viewing_direction(1), viewing_direction(0));
+    const FloatType camera_pitch_radians = std::atan2(viewing_direction(2), viewing_direction.topRows(2).squaredNorm());
+    const FloatType yaw = ait::radiansToDegrees(yaw_radians);
+    const FloatType camera_yaw = 0;
+    const FloatType camera_pitch = ait::radiansToDegrees(camera_pitch_radians);
+    json_pose.AddMember("latitude", latitude, allocator);
+    json_pose.AddMember("longitude", longitude, allocator);
+    json_pose.AddMember("altitude", altitude, allocator);
+    json_pose.AddMember("yaw", yaw, allocator);
+    Value json_path_entry(kObjectType);
+    json_path_entry.AddMember("index", 0, allocator);
+    json_path_entry.AddMember("latitude", latitude, allocator);
+    json_path_entry.AddMember("longitude", longitude, allocator);
+    json_path_entry.AddMember("altitude", altitude, allocator);
+    json_path_entry.AddMember("yaw", yaw, allocator);
+    Value json_path_array(kArrayType);
+    json_path_array.PushBack(json_path_entry, allocator);
+    Value json_viewpoint(kObjectType);
+    json_viewpoint.AddMember("index", i, allocator);
+    json_viewpoint.AddMember("pose", json_pose, allocator);
+    json_viewpoint.AddMember("path", json_path_array, allocator);
+    json_viewpoint.AddMember("camera_yaw", camera_yaw, allocator);
+    json_viewpoint.AddMember("camera_pitch", camera_pitch, allocator);
+    std::cout << "i=" << i << ", latitude=" << latitude << ", longitude" << longitude << std::endl;
+    viewpoints.PushBack(json_viewpoint, allocator);
+  }
+  d.AddMember("viewpoints", viewpoints, d.GetAllocator());
+  std::cout << "Exporting viewpoint path as JSON to" << filename << std::endl;
+  std::ofstream ofs(filename);
+  rapidjson::OStreamWrapper osw(ofs);
+  rapidjson::PrettyWriter<rapidjson::OStreamWrapper> writer(osw);
+  d.Accept(writer);
 }
 
 std::pair<bool, ViewpointPlanner::Pose> ViewpointPlanner::samplePose(std::size_t max_trials /*= (std::size_t)-1*/) const {
@@ -309,8 +446,6 @@ ViewpointPlanner::Pose::Quaternion ViewpointPlanner::sampleOrientation() const {
   return Pose::Quaternion(rotation);
 }
 
-#pragma GCC push_options
-#pragma GCC optimize("O0")
 ViewpointPlanner::Pose::Quaternion ViewpointPlanner::sampleBiasedOrientation(const Vector3& pos, const BoundingBoxType& bias_bbox) const {
   const FloatType dist = (pos - bias_bbox.getCenter()).norm();
   const FloatType bbox_fov_angle = std::atan(bias_bbox.getMaxExtent() / (2 * dist));
@@ -325,12 +460,8 @@ ViewpointPlanner::Pose::Quaternion ViewpointPlanner::sampleBiasedOrientation(con
   }
   angle2 = ait::clamp<FloatType>(angle2, 0, M_PI / 2);
   // Compute viewing direction (i.e. pose z axis)
-  AIT_PRINT_VALUE(bbox_direction.transpose());
   Pose::Vector3 viewing_direction = AngleAxis(angle1, Vector3::UnitZ()) * bbox_direction;
-  AIT_PRINT_VALUE(viewing_direction.transpose());
-  AIT_PRINT_VALUE(viewing_direction.cross(Vector3::UnitZ()));
   viewing_direction = AngleAxis(-angle2, viewing_direction.cross(Vector3::UnitZ())) * viewing_direction;
-  AIT_PRINT_VALUE(viewing_direction.transpose());
 
   // TODO: Remove old code
 //  FloatType angle_deviation = std::abs(random_.sampleNormal(0, angle_stddev));
@@ -359,10 +490,8 @@ ViewpointPlanner::Pose::Quaternion ViewpointPlanner::sampleBiasedOrientation(con
   rotation.col(0) = pose_x_axis.normalized();
   rotation.col(1) = pose_y_axis.normalized();
   rotation.col(2) = pose_z_axis.normalized();
-  AIT_PRINT_VALUE(rotation);
   return Pose::Quaternion(rotation);
 }
-#pragma GCC pop_options
 
 bool ViewpointPlanner::isValidObjectPosition(const Vector3& position, const Vector3& object_extent) const {
   return data_->isValidObjectPosition(position, object_extent);
@@ -408,9 +537,10 @@ void ViewpointPlanner::setScaledVirtualCamera(CameraId camera_id, FloatType scal
   std::cout << "Virtual camera size: " << virtual_width << " x " << virtual_height << std::endl;
 }
 
-ViewpointPlanner::WeightType ViewpointPlanner::computeObservationInformationFactor(CounterType observation_count) {
-//  return std::exp(- 0.1f * observation_count);
-  return observation_count == 0 ? 1 : 0;
+ViewpointPlanner::WeightType ViewpointPlanner::computeObservationInformationFactor(CounterType observation_count) const {
+  const FloatType information_factor = std::exp(- options_.voxel_information_lambda * observation_count);
+  return information_factor;
+//  return observation_count == 0 ? 1 : 0;
 }
 
 std::unordered_set<Point3DId> ViewpointPlanner::computeProjectedMapPoints(const CameraId camera_id, const Pose& pose,
@@ -586,16 +716,26 @@ ViewpointPlanner::getRaycastHitVoxelsWithInformationScoreBVH(
   return std::make_pair(voxel_set, total_information);
 }
 
-float ViewpointPlanner::computeInformationScore(const ViewpointPlannerData::OccupiedTreeType::IntersectionResult& result) const {
-  // TODO: Make sure tree is not pruned for occupied voxels.
-  // Or consider how to handle larger unknown/known voxels
-  CounterType voxel_observation_count = result.node->getObject()->observation_count;
-//  if (result.depth < data_->octree_->getTreeDepth()) {
-//    voxel_observation_count /= 1 << (data_->octree_->getTreeDepth() - result.depth);
-//  }
+ViewpointPlanner::FloatType  ViewpointPlanner::computeInformationScore(const ViewpointPlannerData::OccupiedTreeType::IntersectionResult& result) const {
+  return computeInformationScore(result.node);
+//  // TODO: Make sure tree is not pruned for occupied voxels.
+//  // Or consider how to handle larger unknown/known voxels
+//  CounterType voxel_observation_count = result.node->getObject()->observation_count;
+////  if (result.depth < data_->octree_->getTreeDepth()) {
+////    voxel_observation_count /= 1 << (data_->octree_->getTreeDepth() - result.depth);
+////  }
+//  WeightType information_factor = computeObservationInformationFactor(voxel_observation_count);
+////  WeightType information_factor = 1;
+//  WeightType weight = result.node->getObject()->weight;
+//  WeightType information = information_factor * weight;
+//  return information;
+}
+
+ViewpointPlanner::FloatType ViewpointPlanner::computeInformationScore(const VoxelType* node) const {
+  CounterType voxel_observation_count = node->getObject()->observation_count;
   WeightType information_factor = computeObservationInformationFactor(voxel_observation_count);
 //  WeightType information_factor = 1;
-  WeightType weight = result.node->getObject()->weight;
+  WeightType weight = node->getObject()->weight;
   WeightType information = information_factor * weight;
   return information;
 }
@@ -643,8 +783,6 @@ void ViewpointPlanner::removeOccludedPoints(const Pose& pose, std::unordered_set
   timer.printTiming("removeOccludedPoints");
 }
 
-#pragma GCC push_options
-#pragma GCC optimize("O0")
 std::pair<bool, ViewpointPlanner::Pose>
 ViewpointPlanner::sampleSurroundingPose(const Pose& pose) const {
   // Sample position from sphere around pose
@@ -662,11 +800,10 @@ ViewpointPlanner::sampleSurroundingPose(const Pose& pose) const {
   if (!found_position) {
     return std::make_pair(false, Pose());
   }
-  Pose::Quaternion sampled_orientation = sampleBiasedOrientation(sampled_pos, pose_sample_bbox_);
+  Pose::Quaternion sampled_orientation = sampleBiasedOrientation(sampled_pos, data_->roi_bbox_);
   Pose sampled_pose = Pose::createFromImageToWorldTransformation(sampled_pos, sampled_orientation);
   return std::make_pair(true, sampled_pose);
 }
-#pragma GCC pop_options
 
 bool ViewpointPlanner::generateNextViewpointEntry() {
   const bool verbose = true;
@@ -690,6 +827,7 @@ bool ViewpointPlanner::generateNextViewpointEntry() {
   const std::size_t dist_knn = options_.viewpoint_discard_dist_knn;
   const FloatType dist_thres_square = options_.viewpoint_discard_dist_thres_square;
   const std::size_t dist_count_thres = options_.viewpoint_discard_dist_count_thres;
+  const FloatType dist_real_thres_square = options_.viewpoint_discard_dist_real_thres_square;
   static std::vector<ViewpointANN::IndexType> knn_indices;
   static std::vector<ViewpointANN::DistanceType> knn_distances;
   knn_indices.resize(dist_knn);
@@ -699,7 +837,15 @@ bool ViewpointPlanner::generateNextViewpointEntry() {
 //  for (ViewpointANN::IndexType viewpoint_index : knn_indices) {
 //    const ViewpointEntry& other_viewpoint = viewpoint_entries_[viewpoint_index];
 //    FloatType dist_square = (pose.getWorldPosition() - other_viewpoint.viewpoint.pose().getWorldPosition()).squaredNorm();
-  for (ViewpointANN::DistanceType dist_square : knn_distances) {
+  for (std::size_t i = 0; i < knn_distances.size(); ++i) {
+    const ViewpointANN::DistanceType dist_square = knn_distances[i];
+    const ViewpointEntryIndex viewpoint_index = knn_indices[i];
+    if (viewpoint_index < num_real_viewpoints_ && dist_square < dist_real_thres_square) {
+//      if (verbose) {
+//        std::cout << "Rejected: Too close to real viewpoint" << std::endl;
+//      }
+      return false;
+    }
 //    std::cout << "dist_square=" << dist_square << std::endl;
     if (dist_square < dist_thres_square) {
       ++too_close_count;
@@ -758,7 +904,7 @@ bool ViewpointPlanner::generateNextViewpointEntry() {
 
   if (too_close_count > dist_count_thres) {
 //    if (verbose) {
-//      std::cout << "too_close_count > dist_count_thres" << std::endl;
+//      std::cout << "Rejected: Too close to other viewpoints" << std::endl;
 //    }
     return false;
   }
@@ -943,20 +1089,39 @@ ViewpointPlanner::findViewpointMotions(const ViewpointEntryIndex from_index) {
 }
 
 ViewpointPlanner::FloatType ViewpointPlanner::computeNewInformation(
-    const ViewpointPath* viewpoint_path, const ViewpointEntry& new_viewpoint) const {
-  VoxelWithInformationSet difference_set = ait::computeSetDifference(new_viewpoint.voxel_set, viewpoint_path->observed_voxel_set);
-//    std::cout << "  j=" << j << ", next_node.voxel_set.size()= " << next_node.voxel_set.size() << std::endl;
-//    std::cout << "  j=" << j << ", difference_set.size()= " << difference_set.size() << std::endl;
-  FloatType new_information = std::accumulate(difference_set.cbegin(), difference_set.cend(),
-      FloatType { 0 }, [](const FloatType& value, const VoxelWithInformation& voxel) {
-        return value + voxel.information;
-  });
-  return new_information;
+    const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data,
+    const ViewpointEntryIndex new_viewpoint_index) const {
+  const ViewpointEntry& new_viewpoint = viewpoint_entries_[new_viewpoint_index];
+  if (options_.consider_triangulation) {
+    FloatType new_information = std::accumulate(new_viewpoint.voxel_set.cbegin(), new_viewpoint.voxel_set.cend(),
+          FloatType { 0 }, [&](const FloatType& value, const VoxelWithInformation& voxel) {
+            FloatType information = 0;
+            if (viewpoint_path.observed_voxel_set.count(voxel) == 0) {
+              bool can_be_triangulated;
+              std::tie(can_be_triangulated, std::ignore) = canVoxelBeTriangulated(viewpoint_path, comp_data, new_viewpoint, voxel);
+              if (can_be_triangulated) {
+                information = voxel.information / options_.triangulation_min_count;
+              }
+            }
+            return value + information;
+      });
+    return new_information;
+  }
+  else {
+    VoxelWithInformationSet difference_set = ait::computeSetDifference(new_viewpoint.voxel_set, viewpoint_path.observed_voxel_set);
+    FloatType new_information = std::accumulate(difference_set.cbegin(), difference_set.cend(),
+        FloatType { 0 }, [](const FloatType& value, const VoxelWithInformation& voxel) {
+          return value + voxel.information;
+    });
+    return new_information;
+  }
 }
 
-ViewpointPlanner::FloatType ViewpointPlanner::computeNewInformation(
-    const ViewpointPath* viewpoint_path, const ViewpointEntryIndex new_viewpoint_index) const {
-  return computeNewInformation(viewpoint_path, viewpoint_entries_[new_viewpoint_index]);
+std::pair<bool, ViewpointPlanner::ViewpointEntryIndex> ViewpointPlanner::canVoxelBeTriangulated(
+    const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data,
+    const ViewpointEntry& new_viewpoint, const VoxelWithInformation& voxel) const {
+  auto found_it = comp_data.voxel_observation_counts.find(voxel.voxel);
+  return canVoxelBeTriangulated(viewpoint_path, comp_data, new_viewpoint, found_it);
 }
 
 void ViewpointPlanner::initializeViewpointPathInformations(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data) {
@@ -991,29 +1156,84 @@ void ViewpointPlanner::updateViewpointPathInformations(ViewpointPath* viewpoint_
 //  });
 //  // End of test code
 
-  // TODO: This would be better to do with a binary heap
-  // Our function is sub-modular so we can lazily update the best entries
-  std::size_t recompute_count = 0;
-  bool change_occured;
-  do {
-    change_occured = false;
-    auto best_it = comp_data->sorted_new_informations.rbegin();
-    best_it->second = computeNewInformation(viewpoint_path, best_it->first);
-    ++recompute_count;
-    for (auto it = comp_data->sorted_new_informations.rbegin() + 1; it != comp_data->sorted_new_informations.rend(); ++it) {
-      if (it->second > (it-1)->second) {
-        change_occured = true;
-        // Swap with higher entry if update gives better information score
-        swap(*it, *(it - 1));
+  if (options_.consider_triangulation) {
+    // Updating information considering triangulation (array is not sorted)
+    for (auto it = comp_data->sorted_new_informations.begin(); it != comp_data->sorted_new_informations.end(); ++it) {
+      const ViewpointEntryIndex viewpoint_index = it->first;
+      const auto other_it = std::find_if(viewpoint_path->entries.begin(), viewpoint_path->entries.end(),
+          [viewpoint_index](const ViewpointPathEntry& path_entry) {
+        return viewpoint_index == path_entry.viewpoint_index;
+      });
+      if (other_it != viewpoint_path->entries.end()) {
+        it->second = 0;
       }
       else {
-        break;
+        it->second = computeNewInformation(*viewpoint_path, *comp_data, viewpoint_index);
       }
     }
-  } while (change_occured);
-  std::cout << "Recomputed " << recompute_count << " of " << comp_data->sorted_new_informations.size() << " viewpoints" << std::endl;
+  }
+  else {
+    // Updating information without considering triangulation
+    // TODO: This would be better to do with a binary heap
+    // Our function is sub-modular so we can lazily update the best entries
+    std::size_t recompute_count = 0;
+    bool change_occured;
+    do {
+      change_occured = false;
+      auto best_it = comp_data->sorted_new_informations.rbegin();
+      best_it->second = computeNewInformation(*viewpoint_path, *comp_data, best_it->first);
+      ++recompute_count;
+      for (auto it = comp_data->sorted_new_informations.rbegin() + 1; it != comp_data->sorted_new_informations.rend(); ++it) {
+        if (it->second > (it-1)->second) {
+          change_occured = true;
+          // Swap with higher entry if update gives better information score
+          swap(*it, *(it - 1));
+        }
+        else {
+          break;
+        }
+      }
+    } while (change_occured);
+    std::cout << "Recomputed " << recompute_count << " of " << comp_data->sorted_new_informations.size() << " viewpoints" << std::endl;
+  }
+}
+std::pair<ViewpointPlanner::ViewpointEntryIndex, ViewpointPlanner::FloatType> ViewpointPlanner::getBestNextViewpoint(
+      const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data) const {
+  if (options_.consider_triangulation) {
+    auto best_it = comp_data.sorted_new_informations.end();
+    FloatType best_information = std::numeric_limits<FloatType>::lowest();
+    for (auto it = comp_data.sorted_new_informations.begin(); it != comp_data.sorted_new_informations.end(); ++it) {
+      if (it->second > best_information) {
+        best_it = it;
+        best_information = it->second;
+      }
+    }
+    return std::make_pair(best_it->first, best_it->second);
+  }
+  else {
+    const bool is_primary_path = &viewpoint_path == &viewpoint_paths_.front();
+    if (is_primary_path) {
+      return std::make_pair(comp_data.sorted_new_informations.back().first, comp_data.sorted_new_informations.back().second);
+    }
+    else {
+      // TODO: Make as parameters
+      const std::size_t num_of_good_viewpoints_to_sample_from = 100;
+      auto it = random_.sampleDiscreteWeighted(
+          comp_data.sorted_new_informations.cend() - num_of_good_viewpoints_to_sample_from,
+          comp_data.sorted_new_informations.cend(),
+          [](const std::pair<ViewpointEntryIndex, FloatType>& entry) {
+        const FloatType information = entry.second;
+        return information;
+      });
+      if (it == comp_data.sorted_new_informations.cend()) {
+        it = comp_data.sorted_new_informations.cend() - 1;
+      }
+      return std::make_pair(it->first, it->second);
+    }
+  }
 }
 
+// TODO: Upper bound is wrong when voxels are triangulated
 ViewpointPlanner::FloatType ViewpointPlanner::computeViewpointPathInformationUpperBound(
     const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data, const std::size_t max_num_viewpoints) const {
   FloatType information_upper_bound = viewpoint_path.acc_objective;
@@ -1025,16 +1245,199 @@ ViewpointPlanner::FloatType ViewpointPlanner::computeViewpointPathInformationUpp
   return information_upper_bound;
 }
 
+#pragma GCC push_options
+#pragma GCC optimize("O0")
+bool ViewpointPlanner::addMatchingStereoViewpointWithoutLock(
+    ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data, const ViewpointPathEntry& path_entry) {
+  const bool verbose = true;
+
+  const ViewpointEntry& viewpoint_entry = viewpoint_entries_[path_entry.viewpoint_index];
+
+  // Compute center position of voxels with information
+  Vector3 voxel_center = Vector3::Zero();
+  // TODO
+//  std::accumulate(viewpoint_entry.voxel_set.begin(), viewpoint_entry.voxel_set.end(), voxel_center,
+//      [](Vector3& vector, const VoxelWithInformation& vi) {
+//    vector += vi.voxel->getBoundingBox().getCenter();
+//    return vector;
+//  });
+  for (const VoxelWithInformation& vi : viewpoint_entry.voxel_set) {
+    voxel_center += vi.voxel->getBoundingBox().getCenter();
+  }
+  voxel_center /= viewpoint_entry.voxel_set.size();
+
+  // Compute minimum and maximum stereo basleine
+  const Pose& pose = viewpoint_entry.viewpoint.pose();
+  const FloatType dist_to_voxel_sq = (voxel_center - pose.getWorldPosition()).squaredNorm();
+  const FloatType min_baseline_square = 4 * dist_to_voxel_sq * triangulation_min_sin_angle_square_;
+  const FloatType max_baseline_square = 4 * dist_to_voxel_sq * triangulation_max_sin_angle_square_;
+  std::cout << "min_baseline_square=" << min_baseline_square << std::endl;
+  std::cout << "max_baseline_square=" << max_baseline_square << std::endl;
+
+  const auto is_stereo_pair_lambda = [&](const ViewpointEntry& other_viewpoint) -> bool {
+    const Pose& other_pose = other_viewpoint.viewpoint.pose();
+    const Vector3 rel_pose_vector = other_pose.getWorldPosition() - pose.getWorldPosition();
+    const Vector3 mid_point = (pose.getWorldPosition() + other_pose.getWorldPosition()) / 2;
+    const Vector3 mid_point_to_voxel_center = voxel_center - mid_point;
+    const Vector3 mid_point_to_voxel_center_norm = mid_point_to_voxel_center.normalized();
+    const FloatType dist_deviation = mid_point_to_voxel_center_norm.dot(rel_pose_vector);
+    const FloatType dist_deviation_ratio = std::abs(dist_deviation) / mid_point_to_voxel_center.norm();
+    const Vector3 baseline_vector = rel_pose_vector - dist_deviation * mid_point_to_voxel_center_norm;
+    const FloatType baseline_square = baseline_vector.squaredNorm();
+//      const FloatType other_dist_deviation_ratio = std::abs(other_dist_to_voxel_sq - dist_to_voxel_sq) / dist_to_voxel_sq;
+    const FloatType angular_deviation = other_pose.quaternion().angularDistance(pose.quaternion());
+    AIT_PRINT_VALUE(rel_pose_vector);
+    AIT_PRINT_VALUE(mid_point_to_voxel_center_norm);
+    AIT_PRINT_VALUE(dist_deviation);
+    AIT_PRINT_VALUE(dist_deviation_ratio);
+    AIT_PRINT_VALUE(baseline_square);
+    AIT_PRINT_VALUE(angular_deviation);
+    const bool is_dist_deviation_valid = dist_deviation_ratio <= options_.triangulation_max_dist_deviation_ratio;
+    const bool is_angular_deviation_valid = angular_deviation <= triangulation_max_angular_deviation_;
+    const bool is_baseline_valid = baseline_square >= min_baseline_square && baseline_square <= max_baseline_square;
+    AIT_PRINT_VALUE(is_dist_deviation_valid);
+    AIT_PRINT_VALUE(is_angular_deviation_valid);
+    AIT_PRINT_VALUE(is_baseline_valid);
+    if (is_dist_deviation_valid && is_angular_deviation_valid && is_baseline_valid) {
+      return true;
+    }
+    else {
+      return false;
+    }
+  };
+
+  // Check if a matching viewpoint already exists
+  std::size_t i = 0;
+  for (const ViewpointPathEntry& other_path_entry : viewpoint_path->entries) {
+    std::cout << "i=" << i << std::endl;
+    ++i;
+    // TODO: Check shouldn't be necessary
+    if (other_path_entry.viewpoint_index != path_entry.viewpoint_index) {
+      const ViewpointEntryIndex& other_index = other_path_entry.viewpoint_index;
+      std::cout << "other_index=" << other_index << std::endl;
+      const ViewpointEntry& other_viewpoint = viewpoint_entries_[other_index];
+      if (is_stereo_pair_lambda(other_viewpoint)) {
+        return true;
+      }
+    }
+  }
+
+  // Find best viewpoint in baseline range
+  // TODO: Should use a radius search??
+  ViewpointEntryIndex best_index = (ViewpointEntryIndex)-1;
+  FloatType best_information = std::numeric_limits<FloatType>::lowest();
+  for (const auto& entry : comp_data->sorted_new_informations) {
+    const ViewpointEntryIndex& stereo_index = entry.first;
+    const FloatType stereo_information = entry.second;
+    const ViewpointEntry& stereo_viewpoint = viewpoint_entries_[stereo_index];
+    if (is_stereo_pair_lambda(stereo_viewpoint)) {
+      if (stereo_information > best_information) {
+        best_index = stereo_index;
+        best_information = stereo_information;
+      }
+    }
+  }
+  if (best_index == (ViewpointEntryIndex)-1) {
+    if (verbose) {
+      std::cout << "Could not find any stereo viewpoint in the right baseline and distance range" << std::endl;
+    }
+    return false;
+  }
+
+  // TODO: Add viewpoint candidate with same viewing direction as reference viewpoint. Then remove angular deviation.
+
+  ViewpointPathEntry best_stereo_path_entry;
+  best_stereo_path_entry.viewpoint_index = best_index;
+  best_stereo_path_entry.local_information = best_information;
+  best_stereo_path_entry.local_motion_distance = 0;
+  best_stereo_path_entry.local_objective = best_stereo_path_entry.local_information;
+
+  if (best_stereo_path_entry.local_objective <= 0) {
+    if (verbose) {
+      std::cout << "No improvement in objective in stereo viewpoint" << std::endl;
+    }
+    return false;
+  }
+
+  // Make sure stereo viewpoints can be connected
+  if (!findAndAddShortestMotion(path_entry.viewpoint_index, best_stereo_path_entry.viewpoint_index)) {
+    if (verbose) {
+      std::cout << "Could not find connection between stereo pair" << std::endl;
+    }
+    return false;
+  }
+
+  const ViewpointEntry& best_stereo_viewpoint_entry = viewpoint_entries_[best_stereo_path_entry.viewpoint_index];
+
+  if (std::find_if(viewpoint_path->entries.begin(), viewpoint_path->entries.end(),
+      [&](const ViewpointPathEntry& entry) {
+    return entry.viewpoint_index == best_stereo_path_entry.viewpoint_index;
+  }) != viewpoint_path->entries.end()) {
+    AIT_DEBUG_BREAK;
+  }
+
+  if (options_.consider_triangulation) {
+    for (const VoxelWithInformation& voxel : best_stereo_viewpoint_entry.voxel_set) {
+      if (viewpoint_path->observed_voxel_set.count(voxel) == 0) {
+        auto found_it = comp_data->voxel_observation_counts.find(voxel.voxel);
+        bool triangulated;
+        ViewpointEntryIndex other_index;
+        std::tie(triangulated, other_index) = canVoxelBeTriangulated(*viewpoint_path, *comp_data, best_stereo_viewpoint_entry, found_it);
+        if (triangulated) {
+          std::vector<ViewpointEntryIndex>& observing_entries = found_it->second.observing_entries;
+          ++found_it->second.num_triangulated;
+          bool erased = false;
+          if (found_it->second.num_triangulated >= options_.triangulation_min_count) {
+            // Voxel can be observed
+            comp_data->voxel_observation_counts.erase(found_it);
+            viewpoint_path->observed_voxel_set.emplace(voxel);
+            erased = true;
+          }
+          if (!erased) {
+            AIT_ASSERT(std::find(observing_entries.begin(), observing_entries.end(), best_stereo_path_entry.viewpoint_index)
+              == observing_entries.end());
+            observing_entries.push_back(best_stereo_path_entry.viewpoint_index);
+          }
+          // Hack to track which viewpoints triangulated which voxels
+          auto it_tmp = comp_data->triangulated_voxel_to_path_entries_map.find(voxel.voxel);
+          if (it_tmp == comp_data->triangulated_voxel_to_path_entries_map.end()) {
+            comp_data->triangulated_voxel_to_path_entries_map.emplace(
+                voxel.voxel, std::vector<std::pair<ViewpointEntryIndex, ViewpointEntryIndex>>());
+          }
+          std::pair<ViewpointEntryIndex, ViewpointEntryIndex> p = std::make_pair(best_stereo_path_entry.viewpoint_index, other_index);
+          comp_data->triangulated_voxel_to_path_entries_map.at(voxel.voxel).push_back(p);
+        }
+      }
+    }
+  }
+  else {
+      viewpoint_path->observed_voxel_set.insert(best_stereo_viewpoint_entry.voxel_set.cbegin(), best_stereo_viewpoint_entry.voxel_set.cend());
+  }
+  viewpoint_path->entries.emplace_back(std::move(best_stereo_path_entry));
+  viewpoint_path->acc_information += best_stereo_path_entry.local_information;
+  viewpoint_path->acc_motion_distance += best_stereo_path_entry.local_motion_distance;
+  viewpoint_path->acc_objective += best_stereo_path_entry.local_objective;
+  viewpoint_path->entries.back().acc_information = viewpoint_path->acc_information;
+  viewpoint_path->entries.back().acc_motion_distance = viewpoint_path->acc_motion_distance;
+  viewpoint_path->entries.back().acc_objective = viewpoint_path->acc_objective;
+
+  return true;
+}
+#pragma GCC pop_options
+
 bool ViewpointPlanner::findNextViewpointPathEntry(
     ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data, const FloatType alpha, const FloatType beta) {
   const bool verbose = true;
 
-  // TODO: The mutex should be locked when updating this
+  // TODO: The mutex should be locked when updating viewpoint information
   updateViewpointPathInformations(viewpoint_path, comp_data);
-  ViewpointEntryIndex new_viewpoint_index = comp_data->sorted_new_informations.back().first;
+  ViewpointEntryIndex new_viewpoint_index;
+  FloatType new_information;
+  std::tie(new_viewpoint_index, new_information) = getBestNextViewpoint(*viewpoint_path, *comp_data);
+
   ViewpointPathEntry best_path_entry;
   best_path_entry.viewpoint_index = new_viewpoint_index;
-  best_path_entry.local_information = comp_data->sorted_new_informations.back().second;
+  best_path_entry.local_information = new_information;
   best_path_entry.local_motion_distance = 0;
   best_path_entry.local_objective = best_path_entry.local_information;
 
@@ -1123,7 +1526,60 @@ bool ViewpointPlanner::findNextViewpointPathEntry(
     return false;
   }
 
-  viewpoint_path->observed_voxel_set.insert(best_viewpoint_entry.voxel_set.cbegin(), best_viewpoint_entry.voxel_set.cend());
+  if (std::find_if(viewpoint_path->entries.begin(), viewpoint_path->entries.end(),
+      [&](const ViewpointPathEntry& entry) {
+    return entry.viewpoint_index == best_path_entry.viewpoint_index;
+  }) != viewpoint_path->entries.end()) {
+    AIT_DEBUG_BREAK;
+  }
+
+  if (options_.viewpoint_generate_stereo_pairs) {
+    // Try to find a matching stereo pair. Otherwise discard.
+    if (!addMatchingStereoViewpointWithoutLock(viewpoint_path, comp_data, best_path_entry)) {
+      if (verbose) {
+        std::cout << "Could not find any usable stereo viewpoint" << std::endl;
+      }
+      return false;
+    }
+  }
+
+  if (options_.consider_triangulation) {
+    for (const VoxelWithInformation& voxel : best_viewpoint_entry.voxel_set) {
+      if (viewpoint_path->observed_voxel_set.count(voxel) == 0) {
+        auto found_it = comp_data->voxel_observation_counts.find(voxel.voxel);
+        bool triangulated;
+        ViewpointEntryIndex other_index;
+        std::tie(triangulated, other_index) = canVoxelBeTriangulated(*viewpoint_path, *comp_data, best_viewpoint_entry, found_it);
+        if (triangulated) {
+          std::vector<ViewpointEntryIndex>& observing_entries = found_it->second.observing_entries;
+          ++found_it->second.num_triangulated;
+          bool erased = false;
+          if (found_it->second.num_triangulated >= options_.triangulation_min_count) {
+            // Voxel can be observed
+            comp_data->voxel_observation_counts.erase(found_it);
+            viewpoint_path->observed_voxel_set.emplace(voxel);
+            erased = true;
+          }
+          if (!erased) {
+            AIT_ASSERT(std::find(observing_entries.begin(), observing_entries.end(), best_path_entry.viewpoint_index)
+              == observing_entries.end());
+            observing_entries.push_back(best_path_entry.viewpoint_index);
+          }
+          // Hack to track which viewpoints triangulated which voxels
+          auto it_tmp = comp_data->triangulated_voxel_to_path_entries_map.find(voxel.voxel);
+          if (it_tmp == comp_data->triangulated_voxel_to_path_entries_map.end()) {
+            comp_data->triangulated_voxel_to_path_entries_map.emplace(
+                voxel.voxel, std::vector<std::pair<ViewpointEntryIndex, ViewpointEntryIndex>>());
+          }
+          std::pair<ViewpointEntryIndex, ViewpointEntryIndex> p = std::make_pair(best_path_entry.viewpoint_index, other_index);
+          comp_data->triangulated_voxel_to_path_entries_map.at(voxel.voxel).push_back(p);
+        }
+      }
+    }
+  }
+  else {
+      viewpoint_path->observed_voxel_set.insert(best_viewpoint_entry.voxel_set.cbegin(), best_viewpoint_entry.voxel_set.cend());
+  }
   viewpoint_path->entries.emplace_back(std::move(best_path_entry));
   viewpoint_path->acc_information += best_path_entry.local_information;
   viewpoint_path->acc_motion_distance += best_path_entry.local_motion_distance;
@@ -1223,7 +1679,16 @@ void ViewpointPlanner::findInitialViewpointPathEntries(const FloatType alpha, co
     it->acc_motion_distance = best_path_entry.acc_motion_distance;
     it->acc_objective = best_path_entry.acc_objective;
     it->entries.emplace_back(std::move(best_path_entry));
-    it->observed_voxel_set.insert(best_viewpoint_entry.voxel_set.cbegin(), best_viewpoint_entry.voxel_set.cend());
+    if (options_.consider_triangulation) {
+      for (const VoxelWithInformation& voxel : best_viewpoint_entry.voxel_set) {
+        ViewpointPathComputationData::VoxelTriangulation vt;
+        vt.observing_entries.push_back(best_path_entry.viewpoint_index);
+        comp_data.voxel_observation_counts.emplace(voxel.voxel, std::move(vt));
+      }
+    }
+    else {
+      it->observed_voxel_set.insert(best_viewpoint_entry.voxel_set.cbegin(), best_viewpoint_entry.voxel_set.cend());
+    }
     comp_data.num_connected_entries = 1;
     std::cout << "Initial viewpoint [" << (it - viewpoint_paths_.begin())
         << "]: acc_objective=" << it->acc_objective << std::endl;
@@ -1247,11 +1712,23 @@ void ViewpointPlanner::reportViewpointPathsStats() const {
 bool ViewpointPlanner::findNextViewpointPathEntries(const FloatType alpha, const FloatType beta) {
   if (viewpoint_paths_.front().entries.empty()) {
     findInitialViewpointPathEntries(alpha, beta);
+    std::vector<bool> results(viewpoint_paths_.size());
 #pragma omp parallel for
     for (std::size_t i = 0; i < viewpoint_paths_.size(); ++i) {
       ViewpointPath& viewpoint_path = viewpoint_paths_[i];
       ViewpointPathComputationData& comp_data = viewpoint_paths_data_[i];
       initializeViewpointPathInformations(&viewpoint_path, &comp_data);
+      if (options_.viewpoint_generate_stereo_pairs) {
+        results[i] = addMatchingStereoViewpointWithoutLock(&viewpoint_path, &comp_data, viewpoint_path.entries[0]);
+      }
+    }
+    if (options_.viewpoint_generate_stereo_pairs) {
+      for (bool result : results) {
+        if (!result) {
+          std::cout << "Not all initialized viewpoints could be matched with a stereo pair" << std::endl;
+          return false;
+        }
+      }
     }
     reportViewpointPathsStats();
     return true;

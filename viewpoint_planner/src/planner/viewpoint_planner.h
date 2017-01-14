@@ -69,10 +69,18 @@ public:
       addOption<std::size_t>("pose_sample_num_trials", &pose_sample_num_trials);
       addOption<std::size_t>("viewpoint_sample_count", &viewpoint_sample_count);
       addOption<std::size_t>("viewpoint_min_voxel_count", &viewpoint_min_voxel_count);
+      addOption<bool>("viewpoint_generate_stereo_pairs", &viewpoint_generate_stereo_pairs);
       addOption<FloatType>("viewpoint_min_information", &viewpoint_min_information);
+      addOption<bool>("consider_triangulation", &consider_triangulation);
+      addOption<FloatType>("triangulation_min_angle_degrees", &triangulation_min_angle_degrees);
+      addOption<FloatType>("triangulation_max_angle_degrees", &triangulation_max_angle_degrees);
+      addOption<FloatType>("triangulation_max_dist_deviation_ratio", &triangulation_max_dist_deviation_ratio);
+      addOption<FloatType>("triangulation_max_angular_deviation_degrees", &triangulation_max_angular_deviation_degrees);
+      addOption<std::size_t>("triangulation_min_count", &triangulation_min_count);
       addOption<std::size_t>("viewpoint_discard_dist_knn", &viewpoint_discard_dist_knn);
       addOption<FloatType>("viewpoint_discard_dist_thres_square", &viewpoint_discard_dist_thres_square);
       addOption<std::size_t>("viewpoint_discard_dist_count_thres", &viewpoint_discard_dist_count_thres);
+      addOption<FloatType>("viewpoint_discard_dist_real_thres_square", &viewpoint_discard_dist_real_thres_square);
       addOption<std::size_t>("viewpoint_motion_max_neighbors", &viewpoint_motion_max_neighbors);
       addOption<FloatType>("viewpoint_motion_max_dist_square", &viewpoint_motion_max_dist_square);
       addOption<std::size_t>("viewpoint_motion_min_connections", &viewpoint_motion_min_connections);
@@ -81,6 +89,7 @@ public:
       addOption<FloatType>("viewpoint_path_initial_distance", &viewpoint_path_initial_distance);
       addOption<FloatType>("objective_parameter_alpha", &objective_parameter_alpha);
       addOption<FloatType>("objective_parameter_beta", &objective_parameter_beta);
+      addOption<FloatType>("voxel_information_lambda", &voxel_information_lambda);
       addOption<std::size_t>("viewpoint_path_2opt_max_k_length", &viewpoint_path_2opt_max_k_length);
       addOption<std::string>("viewpoint_graph_filename", &viewpoint_graph_filename);
       // TODO:
@@ -102,7 +111,7 @@ public:
     FloatType raycast_max_range = 60;
 
     // Whether to ignore the voxels already observed by a previous reconstruction
-    bool ignore_real_observed_voxels = true;
+    bool ignore_real_observed_voxels = false;
 
     // Viewpoint sampling parameters
 
@@ -116,10 +125,25 @@ public:
     std::size_t pose_sample_num_trials = 100;
     // Number of viewpoints to sample per iteration
     std::size_t viewpoint_sample_count = 10;
+    // Ensure that every viewpoint is part of a stereo pair
+    bool viewpoint_generate_stereo_pairs;
     // Minimum voxel count for viewpoints
     std::size_t viewpoint_min_voxel_count = 100;
     // Minimum information for viewpoints
     FloatType viewpoint_min_information = 10;
+
+    // Whether to check for triangulation constraint
+    bool consider_triangulation = true;
+    // Minimum angle between two views so that a voxel can be triangulated
+    FloatType triangulation_min_angle_degrees = 5;
+    // Maximum angle between two views so that a voxel can be triangulated
+    FloatType triangulation_max_angle_degrees = 15;
+    // Maximum deviation ratio of distances between stereo pair
+    FloatType triangulation_max_dist_deviation_ratio = (FloatType)0.1;
+    // Maximum angular deviation between stereo viewpoints
+    FloatType triangulation_max_angular_deviation_degrees = 20;
+    // Minimum number of viewpairs that can triangulate a voxel to be observed
+    std::size_t triangulation_min_count = 2;
 
     // For checking whether a sampled viewpoint is too close to existing ones
     //
@@ -129,6 +153,8 @@ public:
     FloatType viewpoint_discard_dist_thres_square = 4;
     // How many other viewpoints need to be too close for the sampled viewpoint to be discarded
     std::size_t viewpoint_discard_dist_count_thres = 3;
+    // Squared distance to a real viewpoint considered to be too close
+    FloatType viewpoint_discard_dist_real_thres_square = 9;
 
     // Maximum number of neighbors to consider for finding a motion path
     std::size_t viewpoint_motion_max_neighbors = 10;
@@ -148,6 +174,8 @@ public:
     FloatType objective_parameter_alpha = 0;
     // Objective factor for motion distance
     FloatType objective_parameter_beta = 0;
+    // Factor in the exponential of the voxel information
+    FloatType voxel_information_lambda = FloatType(0.1);
 
     // Maximum segment length that is reversed by 2 Opt
     std::size_t viewpoint_path_2opt_max_k_length = 15;
@@ -484,6 +512,12 @@ public:
     std::vector<std::pair<ViewpointEntryIndex, FloatType>> sorted_new_informations;
     // Number of viewpoints in the entries array that have been connected to each other
     std::size_t num_connected_entries = 0;
+    struct VoxelTriangulation {
+      std::size_t num_triangulated = 0;
+      std::vector<ViewpointEntryIndex> observing_entries;
+    };
+    std::unordered_map<const VoxelType*, VoxelTriangulation> voxel_observation_counts;
+    std::unordered_map<const VoxelType*, std::vector<std::pair<ViewpointEntryIndex, ViewpointEntryIndex>>> triangulated_voxel_to_path_entries_map;
   };
 
   class ViewpointPathSaver {
@@ -604,6 +638,8 @@ public:
 
   void loadViewpointPath(const std::string& filename);
 
+  void exportViewpointPathAsJson(const std::string& filename, const ViewpointPath& viewpoint_path) const;
+
   BoundingBoxType getRoiBbox() const {
     return data_->roi_.getBoundingBox();
   }
@@ -646,6 +682,11 @@ public:
   /// Return viewpoint paths for reading. Mutex needs to be locked.
   const std::vector<ViewpointPath>& getViewpointPaths() const {
     return viewpoint_paths_;
+  }
+
+  /// Return additional computation data for viewpoint paths. Mutex needs to be locked.
+  const std::vector<ViewpointPathComputationData>& getViewpointPathsComputationData() const {
+    return viewpoint_paths_data_;
   }
 
   /// Return the motion between two viewpoints.
@@ -737,6 +778,7 @@ public:
 
   /// Returns the information score for a single hit voxel.
   FloatType computeInformationScore(const ViewpointPlannerData::OccupiedTreeType::IntersectionResult& result) const;
+  FloatType computeInformationScore(const VoxelType* node) const;
 
   // Matching score computation
 
@@ -760,7 +802,7 @@ private:
   void removeOccludedPoints(const Pose& pose, std::unordered_set<Point3DId>& point3D_ids, FloatType dist_margin) const;
 
   /// Compute information factor based on observation count (i.e. exp(-theta * observation_count)
-  static WeightType computeObservationInformationFactor(CounterType observation_count);
+  WeightType computeObservationInformationFactor(CounterType observation_count) const;
 
   /// Add a viewpoint entry to the graph.
   void addViewpointEntry(ViewpointEntry&& viewpoint_entry);
@@ -771,6 +813,11 @@ private:
   /// Add a viewpoint entry without acquiring a lock. Returns the index of the new viewpoint entry.
   ViewpointEntryIndex addViewpointEntryWithoutLock(ViewpointEntry&& viewpoint_entry);
 
+  /// Find a matching viewpoint for stereo matching and add it. If a suitable viewpoint already is on the path no viewpoint is
+  /// added. Returns whether a suitable viewpoint was found. Must be called with lock.
+  bool addMatchingStereoViewpointWithoutLock(
+      ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data, const ViewpointPathEntry& path_entry);
+
   /// Find motion paths from provided viewpoint to neighbors in the viewpoint graph.
   std::vector<ViewpointMotion> findViewpointMotions(const Pose& from_pose, std::size_t tentative_viewpoint_index);
 
@@ -778,14 +825,26 @@ private:
   std::vector<ViewpointMotion> findViewpointMotions(const ViewpointEntryIndex from_index);
 
   /// Compute new information score of a new viewpoint given a path
-  FloatType computeNewInformation(const ViewpointPath* viewpoint_path, const ViewpointEntry& new_viewpoint) const;
-  FloatType computeNewInformation(const ViewpointPath* viewpoint_path, const ViewpointEntryIndex new_viewpoint_index) const;
+  FloatType computeNewInformation(const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data,
+      const ViewpointEntryIndex new_viewpoint_index) const;
+
+  /// Checks whether a voxel can be triangulated on the viewpoint path
+  std::pair<bool, ViewpointEntryIndex> canVoxelBeTriangulated(const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data,
+      const ViewpointEntry& new_viewpoint, const VoxelWithInformation& voxel) const;
+  template <typename Iterator>
+  std::pair<bool, ViewpointEntryIndex> canVoxelBeTriangulated(
+      const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data,
+      const ViewpointEntry& new_viewpoint, Iterator it) const;
 
   /// Compute and initialize information scores of other viewpoints given a path
   void initializeViewpointPathInformations(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data);
 
-  /// Compute and update information scores of other viewpoints given a path
+  /// Compute and update information scores of other viewpoints given a path.
   void updateViewpointPathInformations(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data) const;
+
+  /// Returns the best next viewpoint index.
+  std::pair<ViewpointEntryIndex, FloatType> getBestNextViewpoint(
+      const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data) const;
 
   /// Find the next best viewpoint to add to a single viewpoint path.
   bool findNextViewpointPathEntry(
@@ -829,12 +888,16 @@ private:
   /// Create a subgraph with the nodes from a viewpoint path
   ViewpointPathGraphWrapper createViewpointPathGraph(const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data);
 
-  ait::Random<FloatType, std::int64_t> random_;
+  mutable ait::Random<FloatType, std::int64_t> random_;
 
   Options options_;
 
   BoundingBoxType pose_sample_bbox_;
   Vector3 drone_extent_;
+  FloatType triangulation_max_cos_angle_;
+  FloatType triangulation_min_sin_angle_square_;
+  FloatType triangulation_max_sin_angle_square_;
+  FloatType triangulation_max_angular_deviation_;
 
   std::unique_ptr<ViewpointPlannerData> data_;
   PinholeCamera virtual_camera_;
