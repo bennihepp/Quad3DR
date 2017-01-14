@@ -128,7 +128,7 @@ private:
 
 template <typename _CharT, typename FloatType>
 std::basic_ostream<_CharT>& operator<<(std::basic_ostream<_CharT>& out, const Pose<FloatType>& pose) {
-  out << "t: (" << pose.translation().transpose() << "), q: (" << pose.quaternion() << ")" << std::endl;
+  out << "t: (" << pose.translation().transpose() << "), q: (" << pose.quaternion() << ")";
   return out;
 }
 
