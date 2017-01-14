@@ -90,6 +90,7 @@ std::pair<bool, boost::program_options::variables_map> processOptions(
             ("num-viewpoints", po::value<std::size_t>()->default_value(25), "Number of path viewpoints to compute.")
             ("in-viewpoint-graph-file", po::value<std::string>(), "Viewpoint graph file to load before processing.")
             ("out-viewpoint-graph-file", po::value<std::string>()->required(), "File to save the viewpoint graph to after processing.")
+            ("out-viewpoint-path-file", po::value<std::string>()->required(), "File to save the viewpoint path to after processing.")
             ;
 
         po::options_description options;
@@ -193,6 +194,10 @@ int main(int argc, char** argv)
     }
     disableCtrlCHandler();
     std::cout << "Done" << std::endl;
+
+    planner_cmdline.getPlanner().saveViewpointPath(vm["out-viewpoint-path-file"].as<std::string>());
+    planner_cmdline.getPlanner().exportViewpointPathAsJson(vm["out-viewpoint-path-file"].as<std::string>() + ".json",
+        planner_cmdline.getPlanner().getBestViewpointPath());
 
     return 0;
 }
