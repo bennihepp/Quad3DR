@@ -8,8 +8,10 @@
 #include "viewpoint_planner_data.h"
 #include <boost/filesystem.hpp>
 #include <boost/property_tree/json_parser.hpp>
+#include <ait/common.h>
 #include <ait/gps.h>
 #include <ait/geometry.h>
+#include <Eigen/Core>
 
 const std::string NodeObject::kFileTag = "NodeObject";
 
@@ -48,6 +50,7 @@ ViewpointPlannerData::ViewpointPlannerData(const Options* options)
     vertices.push_back(RegionType::Vector2(roi_max_x, roi_min_y));
     roi_ = RegionType(vertices, roi_min_z, roi_max_z);
     std::cout << "ROI bounding box: " << roi_.getBoundingBox() << std::endl;
+    // Test code
 //    std::cout << roi_min_x << ", " << roi_min_y << std::endl;
 //    std::cout << roi_min_x << ", " << roi_max_y << std::endl;
 //    std::cout << roi_max_x << ", " << roi_max_y << std::endl;
@@ -77,6 +80,7 @@ ViewpointPlannerData::ViewpointPlannerData(const Options* options)
       no_fly_zones_.push_back(convertGpsRegionToEnuRegion(v.second));
     }
   }
+  roi_bbox_ = roi_.getBoundingBox();
 
   const std::string raw_octree_filename = options->getValue<std::string>("raw_octree_filename");
   const std::string dense_points_filename = options->getValue<std::string>("dense_points_filename");
@@ -127,7 +131,8 @@ ViewpointPlannerData::RegionType ViewpointPlannerData::convertGpsRegionToEnuRegi
   const bool verbose = true;
 
   using GpsCoordinateType = reconstruction::SfmToGpsTransformation::GpsCoordinate;
-  using GpsConverter = ait::GpsConverter<typename GpsCoordinateType::FloatType>;
+  using GpsFloatType = typename GpsCoordinateType::FloatType;
+  using GpsConverter = ait::GpsConverter<GpsFloatType>;
   const GpsCoordinateType gps_reference = reconstruction_->sfmGpsTransformation().gps_reference;
   std::cout << "GPS reference: " << gps_reference << std::endl;
   const GpsConverter gps_converter = GpsConverter::createWGS84(gps_reference);
@@ -140,11 +145,30 @@ ViewpointPlannerData::RegionType ViewpointPlannerData::convertGpsRegionToEnuRegi
   }
   std::vector<RegionType::Vector2> vertices;
   for (const GpsCoordinateType& gps : gps_coordinates) {
-    const Vector3 enu = gps_converter.convertGpsToEnu(gps);
+    const Vector3 enu = gps_converter.convertGpsToEnu(gps).cast<FloatType>();
     if (verbose) {
       std::cout << "GPS: " << gps << ", ENU: " << enu.transpose() << std::endl;
     }
     vertices.emplace_back(enu(0), enu(1));
+
+    // Test code for GPS conversion
+//    GpsCoordinateType gps2 = gps;
+//    AIT_PRINT_VALUE(gps2);
+//    AIT_PRINT_VALUE(gps_converter.convertGpsToEcef(gps2));
+//    AIT_PRINT_VALUE(gps_converter.convertGpsToEnu(gps2));
+//    gps2 = GpsCoordinateType(gps2.latitude(), gps2.longitude(), gps2.altitude() + 360);
+//    AIT_PRINT_VALUE(gps2);
+//    AIT_PRINT_VALUE(gps_converter.convertGpsToEcef(gps2));
+//    AIT_PRINT_VALUE(gps_converter.convertGpsToEnu(gps2));
+//    Vector3 enu2 = enu;
+//    AIT_PRINT_VALUE(enu2);
+//    AIT_PRINT_VALUE(gps_converter.convertEnuToGps(enu2.cast<GpsFloatType>()));
+//    enu2(2) = 360;
+//    AIT_PRINT_VALUE(enu2);
+//    AIT_PRINT_VALUE(gps_converter.convertEnuToGps(enu2.cast<GpsFloatType>()));
+//    enu2(2) = 0;
+//    AIT_PRINT_VALUE(enu2);
+//    AIT_PRINT_VALUE(gps_converter.convertEnuToGps(enu2.cast<GpsFloatType>()));
   }
   if (verbose) {
     std::cout << "Lower altitude: " << lower_altitude << ", upper_altitude: " << upper_altitude << std::endl;
@@ -599,7 +623,7 @@ bool ViewpointPlannerData::isInsideGrid(const Vector3& xyz) const {
 
 ViewpointPlannerData::Vector3i ViewpointPlannerData::getGridIndices(const Vector3& xyz) const {
   Vector3 indices_float = (xyz - grid_origin_) / grid_increment_;
-  Vector3i indices(Eigen::round(indices_float.array()).cast<int>());
+  Vector3i indices(indices_float.array().round().cast<int>());
   for (int i = 0; i < indices.rows(); ++i) {
     if (indices(i) >= grid_dim_(i) && xyz(i) < grid_bbox_.getMaximum()(i)) {
       --indices(i);

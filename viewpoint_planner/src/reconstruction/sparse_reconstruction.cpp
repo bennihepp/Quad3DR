@@ -604,10 +604,10 @@ void SparseReconstruction::readGpsTransformation(std::istream& in) {
   {
     // GPS reference coordinates
     std::stringstream line_stream1(line);
-    Vector3 gps_vec;
+    Eigen::Matrix<GpsFloatType, 3, 1> gps_vec;
     for (std::size_t i = 0; i < 3; ++i) {
       std::getline(line_stream1, item, ' ');
-      gps_vec(i) = boost::lexical_cast<FloatType>(item);
+      gps_vec(i) = boost::lexical_cast<GpsFloatType>(item);
     }
     sfm_gps_transformation_.gps_reference = SfmToGpsTransformation::GpsCoordinate(gps_vec);
   }

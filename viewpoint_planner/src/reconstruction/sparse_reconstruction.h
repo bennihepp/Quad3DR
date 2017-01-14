@@ -36,6 +36,7 @@
 namespace reconstruction {
 
 using FloatType = float;
+using GpsFloatType = double;
 USE_FIXED_EIGEN_TYPES(FloatType)
 
 using CameraMatrix = Eigen::Matrix<FloatType, 4, 4>;
@@ -211,7 +212,7 @@ struct SfmToGpsTransformation {
   Vector3 sfm_centroid;
   Quaternion sfm_to_gps_quaternion;
 
-  using GpsCoordinate = ait::GpsCoordinateWithAltitude<FloatType>;
+  using GpsCoordinate = ait::GpsCoordinateWithAltitude<GpsFloatType>;
   GpsCoordinate gps_reference;
 };
 

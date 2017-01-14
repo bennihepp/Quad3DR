@@ -184,8 +184,8 @@ private:
   Options options_;
 
   BoundingBoxType bvh_bbox_;
-//  BoundingBoxType roi_bbox_;
   RegionType roi_;
+  BoundingBoxType roi_bbox_;
   std::vector<RegionType> no_fly_zones_;
 
   std::unique_ptr<reconstruction::DenseReconstruction> reconstruction_;
