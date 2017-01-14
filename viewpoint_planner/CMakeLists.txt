@@ -136,6 +136,20 @@ target_link_libraries(viewpoint_planner_cmdline
   ${OMPL_LIBRARIES}
 )
 
+add_executable(clip_point_cloud WIN32
+  # Executable
+  src/exe/clip_point_cloud.cpp
+  # AIT
+  ../src/common.cpp
+  ../src/utilities.cpp
+  # mLib
+  src/mLib/mLib.h
+  src/mLib/mLib.cpp
+)
+target_link_libraries(clip_point_cloud
+  ${Boost_LIBRARIES}
+)
+
 QT5_WRAP_UI(viewpoint_planner_gui_UIS_H 
 	src/ui/viewer_info_panel.ui
 	src/ui/viewer_settings_panel.ui
