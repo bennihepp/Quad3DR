@@ -112,9 +112,47 @@ public:
     vec->normalize();
   }
 
+  /// Sample from a discrete distribution with probabilities proportional to the given (positive) weights
+  template <typename Iterator>
+  Iterator sampleDiscreteWeighted(Iterator first, Iterator last) {
+    FloatType total_weight = 0;
+    for (Iterator it = first; it != last; ++it) {
+      total_weight += *it;
+    }
+    const FloatType normalizing_factor = 1 / total_weight;
+    const FloatType u = sampleUniform();
+    FloatType cumulative_probability = 0;
+    for (Iterator it = first; it != last; ++it) {
+      cumulative_probability += *it * normalizing_factor;
+      if (u <= cumulative_probability) {
+        return it;
+      }
+    }
+    return last;
+  }
+
+  /// Sample from a discrete distribution with probabilities proportional to the given (positive) weights
+  template <typename Iterator, typename Evaluator>
+  Iterator sampleDiscreteWeighted(Iterator first, Iterator last, Evaluator eval) {
+    FloatType total_weight = 0;
+    for (Iterator it = first; it != last; ++it) {
+      total_weight += eval(*it);
+    }
+    const FloatType normalizing_factor = 1 / total_weight;
+    const FloatType u = sampleUniform();
+    FloatType cumulative_probability = 0;
+    for (Iterator it = first; it != last; ++it) {
+      cumulative_probability += eval(*it) * normalizing_factor;
+      if (u <= cumulative_probability) {
+        return it;
+      }
+    }
+    return last;
+  }
+
   /// Sample from a discrete distribution with given cumulative probabilities (sorted in ascending order)
   template <typename Iterator>
-  Iterator sampleDiscrete(Iterator first, Iterator last) {
+  Iterator sampleDiscreteCumulative(Iterator first, Iterator last) {
     FloatType u = sampleUniform();
     Iterator it = std::upper_bound(first, last, u);
     if (it == last) {
@@ -125,7 +163,7 @@ public:
 
   /// Sample from a discrete distribution with given cumulative probabilities (sorted in ascending order)
   template <typename Iterator, typename Compare>
-  Iterator sampleDiscrete(Iterator first, Iterator last, Compare comp) {
+  Iterator sampleDiscreteCumulative(Iterator first, Iterator last, Compare comp) {
     FloatType u = sampleUniform();
     Iterator it = std::upper_bound(first, last, u, comp);
     if (it == last) {
