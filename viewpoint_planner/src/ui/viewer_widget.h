@@ -169,6 +169,8 @@ public:
 
   Pose getCameraPose() const;
   void setCameraPose(const Pose& camera_pose);
+  using GpsCoordinateType = reconstruction::SfmToGpsTransformation::GpsCoordinate;
+  GpsCoordinateType getGpsFromPose(const Pose& pose) const;
 
   QSize sizeHint() const override;
   int heightForWidth(int w) const override;
@@ -224,6 +226,7 @@ public slots:
   void onLoadViewpointGraph(const std::string& filename);
   void onSaveViewpointPath(const std::string& filename);
   void onLoadViewpointPath(const std::string& filename);
+  void onExportViewpointPathAsJson(const std::string& filename);
   void continuePlannerThread();
   void pausePlannerThread();
 

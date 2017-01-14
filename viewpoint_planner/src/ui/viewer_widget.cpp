@@ -102,6 +102,7 @@ ViewerWidget::ViewerWidget(const QGLFormat& format, ViewpointPlanner* planner, V
     connect(planner_panel_, SIGNAL(resetViewpointMotions()), this, SLOT(resetViewpointMotions()));
     connect(planner_panel_, SIGNAL(resetViewpointPath()), this, SLOT(resetViewpointPath()));
     connect(planner_panel_, SIGNAL(saveViewpointGraph(const std::string&)), this, SLOT(onSaveViewpointGraph(const std::string&)));
+    connect(planner_panel_, SIGNAL(exportViewpointPathAsJson(const std::string&)), this, SLOT(onExportViewpointPathAsJson(const std::string&)));
     connect(planner_panel_, SIGNAL(loadViewpointGraph(const std::string&)), this, SLOT(onLoadViewpointGraph(const std::string&)));
     connect(planner_panel_, SIGNAL(saveViewpointPath(const std::string&)), this, SLOT(onSaveViewpointPath(const std::string&)));
     connect(planner_panel_, SIGNAL(loadViewpointPath(const std::string&)), this, SLOT(onLoadViewpointPath(const std::string&)));
@@ -829,19 +830,26 @@ void ViewerWidget::captureRaycastWindow(const std::size_t width, const std::size
   std::cout << "Raycast hit " << raycast_results.size() << " voxels" << std::endl;
   std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, FloatType>> tmp;
   tmp.reserve(raycast_results.size());
-  std::cout << "Node with weight > 0.5" << std::endl;
+  std::cout << "Nodes:" << std::endl;
   for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
-    if (it->node->getObject()->weight > 0.5) {
-      std::cout << "  &node_idx=" << planner_->getBVHTree().getVoxelIndexMap().at(it->node)
-          << ", weight=" << it->node->getObject()->weight
-          << ", obs_count=" << it->node->getObject()->observation_count << std::endl;
-    }
+    std::cout << "  position=" << it->node->getBoundingBox().getCenter().transpose() << std::endl;
+  }
+//  std::cout << "Node with weight > 0.5" << std::endl;
+//  for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
+//    if (it->node->getObject()->weight > 0.5) {
+//      std::cout << "  &node_idx=" << planner_->getBVHTree().getVoxelIndexMap().at(it->node)
+//          << ", weight=" << it->node->getObject()->weight
+//          << ", obs_count=" << it->node->getObject()->observation_count << std::endl;
+//    }
+//  }
+  for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
     FloatType information = planner_->computeInformationScore(*it);
     tmp.push_back(std::make_pair(*it, information));
   }
   octree_drawer_.updateRaycastVoxels(tmp);
   update();
 }
+
 void ViewerWidget::resetView() {
     this->camera()->setOrientation((FloatType) -M_PI / 2.0f, (FloatType) M_PI / 2.0f);
     this->showEntireScene();
@@ -1006,13 +1014,18 @@ void ViewerWidget::setUseDroneCamera(bool use_drone_camera) {
 void ViewerWidget::setImagePoseIndex(ImageId image_id) {
   const ImageColmap& image = sparse_recon_->getImages().at(image_id);
   setCameraPose(image.pose());
+  std::cout << "Selected image with id " << image_id << std::endl;
+  std::cout << "  Pose=" << image.pose().getWorldPosition().transpose() << std::endl;
+  std::cout << "  GPS=" << getGpsFromPose(image.pose()) << std::endl;
   update();
 }
 
 void ViewerWidget::setViewpointGraphSelectionIndex(const std::size_t index) {
   std::cout << "Selected viewpoint " << index << std::endl;
   std::unique_lock<std::mutex> lock(mutex_);
-//  const Pose& pose = std::get<1>(viewpoint_graph_copy_[index]);
+  const Pose& pose = std::get<1>(viewpoint_graph_copy_[index]);
+  std::cout << "  Pose=" << pose.getWorldPosition().transpose() << std::endl;
+  std::cout << "  GPS=" << getGpsFromPose(pose) << std::endl;
   const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = std::get<0>(viewpoint_graph_copy_[index]);
   std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
   const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[viewpoint_index];
@@ -1048,21 +1061,44 @@ void ViewerWidget::setViewpointPathBranchSelectionIndex(std::size_t index) {
   planner_panel_->setViewpointPathBranchSelection(index);
   // Set previous selection for combo box
   planner_panel_->setViewpointPathSelectionByItemIndex(path_selection_index);
+  // Show triangulated voxels
+  octree_drawer_.updateRaycastVoxels(viewpoint_path.observed_voxel_set);
 }
 
 void ViewerWidget::setViewpointPathSelectionIndex(std::size_t index) {
   const bool verbose = true;
 
   std::unique_lock<std::mutex> lock(mutex_);
-  //  const Pose& pose = std::get<1>(viewpoint_path_copy_[index]);
+  const Pose& pose = std::get<1>(viewpoint_path_copy_[index]);
+  std::cout << "  Pose=" << pose.getWorldPosition().transpose() << std::endl;
+  std::cout << "  GPS=" << getGpsFromPose(pose) << std::endl;
 //  const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = std::get<0>(viewpoint_path_copy_[index]);
   std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
 
   // Compute total and incremental voxel set and information of selected viewpoint
   const ViewpointPlanner::ViewpointPath& viewpoint_path = planner_->getViewpointPaths()[viewpoint_path_branch_index_];
+  const ViewpointPlanner::ViewpointPathComputationData& comp_data = planner_->getViewpointPathsComputationData()[viewpoint_path_branch_index_];
   const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = viewpoint_path.entries[index].viewpoint_index;
   const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[viewpoint_index];
-  const ViewpointPlanner::VoxelWithInformationSet& total_voxel_set = viewpoint_entry.voxel_set;
+  ViewpointPlanner::VoxelWithInformationSet total_voxel_set = viewpoint_entry.voxel_set;
+  // TODO: Broken. Only for triangulation mode,
+  if (!comp_data.triangulated_voxel_to_path_entries_map.empty()) {
+    for (const auto& entry : comp_data.triangulated_voxel_to_path_entries_map) {
+      auto it1 = std::find_if(total_voxel_set.begin(), total_voxel_set.end(),
+          [&](const ViewpointPlanner::VoxelWithInformation& vi) {
+        return vi.voxel == entry.first;
+      });
+      if (it1 != total_voxel_set.end()) {
+        auto it2 = std::find_if(entry.second.begin(), entry.second.end(),
+            [&](const std::pair<ViewpointPlanner::ViewpointEntryIndex, ViewpointPlanner::ViewpointEntryIndex>& p) {
+          return p.first == viewpoint_index || p.second == viewpoint_index;
+        });
+        if (it2 == entry.second.end()) {
+          total_voxel_set.erase(it1);
+        }
+      }
+    }
+  }
   ViewpointPlanner::VoxelWithInformationSet incremental_voxel_set = total_voxel_set;
   ViewpointPlanner::VoxelWithInformationSet accumulated_voxel_set = total_voxel_set;
   for (std::size_t i = 0; i < index; ++i) {
@@ -1297,11 +1333,12 @@ void ViewerWidget::keyPressEvent(QKeyEvent* event) {
   }
   else if (event->key() == Qt::Key_C) {
     const Pose pose = getCameraPose();
-    std::cout << "Camera pose: " << pose << std::endl;
+    std::cout << "Camera pose = " << pose << std::endl;
     std::cout << "Axis: " << std::endl;
     std::cout << " x = " << pose.quaternion().toRotationMatrix().col(0).transpose() << std::endl;
     std::cout << " y = " << pose.quaternion().toRotationMatrix().col(1).transpose() << std::endl;
     std::cout << " z = " << pose.quaternion().toRotationMatrix().col(2).transpose() << std::endl;
+    std::cout << "GPS = " << getGpsFromPose(pose) << std::endl;
   }
   else if (event->key() == Qt::Key_R) {
     captureRaycastWindow(15, 15);
@@ -1309,6 +1346,17 @@ void ViewerWidget::keyPressEvent(QKeyEvent* event) {
   else {
     QGLViewer::keyPressEvent(event);
   }
+}
+
+ViewerWidget::GpsCoordinateType ViewerWidget::getGpsFromPose(const Pose& pose) const {
+  using GpsFloatType = typename GpsCoordinateType::FloatType;
+  using GpsConverter = ait::GpsConverter<GpsFloatType>;
+  const GpsCoordinateType gps_reference = planner_->getReconstruction()->sfmGpsTransformation().gps_reference;
+  std::cout << "GPS reference: " << gps_reference << std::endl;
+  const GpsConverter gps_converter = GpsConverter::createWGS84(gps_reference);
+  const Vector3 enu = pose.getWorldPosition();
+  GpsCoordinateType gps = gps_converter.convertEnuToGps(enu.cast<GpsFloatType>());
+  return gps;
 }
 
 void ViewerWidget::saveScreenshot(const std::string& filename) {
@@ -1429,6 +1477,18 @@ void ViewerWidget::onLoadViewpointPath(const std::string& filename) {
   planner_->loadViewpointPath(filename);
   planner_thread_.updateViewpoints();
   showViewpointPath();
+}
+
+void ViewerWidget::onExportViewpointPathAsJson(const std::string& filename) {
+  if (viewpoint_path_branch_index_ != (std::size_t)-1 && viewpoint_path_branch_index_ < planner_->getViewpointPaths().size()) {
+    std::cout << "Exporting viewpoint path " << viewpoint_path_branch_index_ << std::endl;
+    planner_->exportViewpointPathAsJson(filename, planner_->getViewpointPaths()[viewpoint_path_branch_index_]);
+  }
+  else {
+    std::cout << "Exporting best viewpoint path" << std::endl;
+    planner_->exportViewpointPathAsJson(filename, planner_->getBestViewpointPath());
+  }
+  std::cout << "Done" << std::endl;
 }
 
 void ViewerWidget::signalViewpointsChanged() {

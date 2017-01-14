@@ -10,6 +10,7 @@
 #include <cmath>
 #include <QWidget>
 #include <QFileDialog>
+#include <QDateTime>
 #include <ait/common.h>
 #include "ui_viewer_planner_panel.h"
 
@@ -31,6 +32,7 @@ public:
       connect(ui.loadViewpointGraph, SIGNAL(clicked(void)), this, SLOT(loadViewpointGraphInternal()));
       connect(ui.saveViewpointPath, SIGNAL(clicked(void)), this, SLOT(saveViewpointPathInternal()));
       connect(ui.loadViewpointPath, SIGNAL(clicked(void)), this, SLOT(loadViewpointPathInternal()));
+      connect(ui.exportBestViewpointPathAsJson, SIGNAL(clicked(void)), this, SLOT(exportViewpointPathAsJsonInternal()));
       connect(ui.drawViewpointGraph, SIGNAL(stateChanged(int)), this, SLOT(setDrawViewpointGraphInternal(int)));
       connect(ui.viewpointGraphSelection, SIGNAL(activated(int)), this, SLOT(setViewpointGraphSelectionInternal(int)));
       connect(ui.drawViewpointMotions, SIGNAL(stateChanged(int)), this, SLOT(setDrawViewpointMotionsInternal(int)));
@@ -368,8 +370,11 @@ protected slots:
   }
 
   void saveViewpointPathInternal() {
+    const std::string format_ext = ".bs";
+    const std::string date_string = QDateTime::currentDateTime().toString("dd.MM.yy_hh.mm.ss").toStdString();
+    std::string suggested_filename = std::string("viewpoint_path_") + date_string + format_ext;
     QString filename = QFileDialog::getSaveFileName(this, tr("Save viewpoint path"),
-        "viewpoint_path.bs", tr("Boost Serialization File (*.bs);;All Files (*.*)"));
+        QString::fromStdString(suggested_filename), tr("Boost Serialization File (*.bs);;All Files (*.*)"));
     if (!filename.isNull()) {
       emit saveViewpointPath(filename.toStdString());
     }
@@ -380,6 +385,17 @@ protected slots:
         QString(), tr("Boost Serialization File (*.bs);;All Files (*.*)"));
     if (!filename.isNull()) {
       emit loadViewpointPath(filename.toStdString());
+    }
+  }
+
+  void exportViewpointPathAsJsonInternal() {
+    const std::string format_ext = ".json";
+    const std::string date_string = QDateTime::currentDateTime().toString("dd.MM.yy_hh.mm.ss").toStdString();
+    std::string suggested_filename = std::string("viewpoint_path_") + date_string + format_ext;
+    QString filename = QFileDialog::getSaveFileName(this, tr("Export viewpoint path as JSON"),
+        QString::fromStdString(suggested_filename), tr("JSON File (*.json);;All Files (*.*)"));
+    if (!filename.isNull()) {
+      emit exportViewpointPathAsJson(filename.toStdString());
     }
   }
 
@@ -420,6 +436,7 @@ signals:
   void loadViewpointGraph(const std::string& filename);
   void saveViewpointPath(const std::string& filename);
   void loadViewpointPath(const std::string& filename);
+  void exportViewpointPathAsJson(const std::string& filename);
   void alphaParameterChanged(double alpha);
   void betaParameterChanged(double beta);
   void minInformationFilterChanged(double min_information_filter);
