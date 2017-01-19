@@ -775,6 +775,9 @@ public:
   /// Find the next best viewpoint to add to the viewpoint paths and use parameters from options.
   bool findNextViewpointPathEntries();
 
+  /// Compute new information score of a new viewpoint for a given viewpoint path
+  FloatType computeNewInformation(const std::size_t viewpoint_path_index, const ViewpointEntryIndex new_viewpoint_index) const;
+
   /// Compute the connected components of the graph and return a pair of the component labels and the number of components.
   const std::pair<std::vector<std::size_t>, std::size_t>& getConnectedComponents() const;
 
@@ -872,10 +875,6 @@ private:
   /// Find motion paths from provided viewpoint to neighbors in the viewpoint graph.
   std::vector<ViewpointMotion> findViewpointMotions(const ViewpointEntryIndex from_index);
 
-  /// Compute new information score of a new viewpoint given a path
-  FloatType computeNewInformation(const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data,
-      const ViewpointEntryIndex new_viewpoint_index) const;
-
   /// Checks whether a voxel can be triangulated on the viewpoint path
   std::pair<bool, ViewpointEntryIndex> canVoxelBeTriangulated(const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data,
       const ViewpointEntry& new_viewpoint, const VoxelWithInformation& voxel) const;
@@ -892,11 +891,16 @@ private:
 
   /// Returns the best next viewpoint index.
   std::pair<ViewpointEntryIndex, FloatType> getBestNextViewpoint(
-      const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data) const;
+      const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data, const bool randomize) const;
 
   /// Find the next best viewpoint to add to a single viewpoint path.
   bool findNextViewpointPathEntry(
-      ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data, const FloatType alpha, const FloatType beta);
+      ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data,
+      const bool randomize, const FloatType alpha, const FloatType beta);
+
+  /// Compute new information score of a new viewpoint given a path
+  FloatType computeNewInformation(const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data,
+      const ViewpointEntryIndex new_viewpoint_index) const;
 
   /// Compute an upper bound on the information value of a given path
   FloatType computeViewpointPathInformationUpperBound(

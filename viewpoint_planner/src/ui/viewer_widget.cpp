@@ -1200,6 +1200,10 @@ void ViewerWidget::setViewpointGraphSelectionIndex(const std::size_t index) {
   const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = std::get<0>(viewpoint_graph_copy_[index]);
   std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
   const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[viewpoint_index];
+  const FloatType total_information = viewpoint_entry.total_information;
+  const FloatType new_information = planner_->computeNewInformation(viewpoint_path_branch_index_, viewpoint_index);
+  std::cout << "  Total information=" << total_information << std::endl;
+  std::cout << "  New information=" << new_information << std::endl;
   if (planner_panel_->isUpdateCameraOnSelectionChecked()) {
     setCameraPose(viewpoint_entry.viewpoint.pose());
   }
