@@ -41,6 +41,10 @@ public:
     clear();
   }
 
+  bool getDrawLines() const {
+    return draw_lines_;
+  }
+
   void setDrawLines(bool draw_lines) {
     draw_lines_ = draw_lines;
   }

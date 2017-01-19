@@ -51,6 +51,8 @@ public:
 
   void draw(const QMatrix4x4& pvm_matrix, const int width, const int height);
 
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
 private:
   void setColor(FloatType r, FloatType g, FloatType b, FloatType a);
 

@@ -17,10 +17,6 @@
 #include <QOpenGLFunctions_3_3_Core>
 #include "point_drawer.h"
 
-std::ostream& operator<<(std::ostream& out, const QVector3D& vec);
-
-std::ostream& operator<<(std::ostream& out, const QMatrix4x4& mat);
-
 struct OGLVoxelData
 {
   OGLVoxelData()
@@ -80,6 +76,8 @@ public:
 
   void draw(const QMatrix4x4& pvm_matrix, const QMatrix4x4& view_matrix, const QMatrix4x4& model_matrix);
 
+  void setVoxelSizeEps(const float voxel_size_eps);
+
   static std::vector<std::pair<std::string, ColorFlags>> getAvailableColorFlags();
 
   ColorFlags getColorFlags() const;
@@ -128,6 +126,7 @@ private:
   QOpenGLTexture voxel_info_tex_;
   QOpenGLShaderProgram program_;
 
+  float voxel_size_eps_;
   ColorFlags color_flags_;
   float weight_color_scale_;
   float weight_color_offset_;

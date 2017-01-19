@@ -61,6 +61,7 @@ void main() {
     float cos_alpha = clamp(dot(E, R), 0, 1);
     specular = pow(cos_alpha, u_specular_alpha);
   }
+  //specular = 0;
 
 //  float attenuated_light_power = u_light_power / (distance * distance);
   float attenuated_light_power = 1;

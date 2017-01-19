@@ -5,6 +5,7 @@ uniform mat4 u_view_matrix;
 uniform mat4 u_model_matrix;
 uniform mat4 u_pvm_matrix;
 
+uniform float u_voxel_size_eps;
 uniform uint u_color_mode;
 uniform float u_weight_color_scale;
 uniform float u_weight_color_offset;
@@ -43,7 +44,6 @@ out vec3 v_vertex_normal_cameraspace;
 //out vec3 v_light_position;
 flat out int v_keep_flag;
 
-const float VOXEL_SHRINK_EPS = 0;
 const int VERTICES_PER_VOXEL = 12 * 3;
 
 // Color flags
@@ -63,7 +63,7 @@ vec4 computeVoxelOffsetVertex(int voxel_index, int offset_index, out float voxel
   vec4 texel = texelFetch(u_pos_texture, voxel_index);
 
   vec3 voxel_position = texel.xyz;
-  voxel_size = texel.a - VOXEL_SHRINK_EPS;
+  voxel_size = texel.a + u_voxel_size_eps;
 
   vec3 vertex_offset = texelFetch(u_offset_normal_texture, offset_index).xyz;
 

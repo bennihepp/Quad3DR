@@ -9,24 +9,7 @@
 #include "voxel_drawer.h"
 #include <array>
 #include <boost/assign.hpp>
-
-inline std::ostream& operator<<(std::ostream& out, const QVector3D& vec) {
-  out << "(" << vec.x() << ", " << vec.y() << ", " << vec.z() << ")";
-  return out;
-}
-
-inline std::ostream& operator<<(std::ostream& out, const QMatrix4x4& mat) {
-  for (int i = 0; i < 4; ++i) {
-    for (int j = 0; j < 4; ++j) {
-      if (j > 0)
-        std::cout << ", ";
-      std::cout << mat(i, j);
-    }
-    std::cout << std::endl;
-  }
-  std::cout << std::endl;
-  return out;
-}
+#include <ait/qt_utils.h>
 
 inline std::ostream& operator<<(std::ostream& out, const OGLVoxelData& voxel) {
   out << voxel.vertex << " [" << voxel.size << "]";
@@ -39,6 +22,7 @@ VoxelDrawer::VoxelDrawer()
   vertex_offset_normal_tex_(QOpenGLTexture::TargetBuffer),
   color_tex_(QOpenGLTexture::TargetBuffer),
   voxel_info_tex_(QOpenGLTexture::TargetBuffer),
+  voxel_size_eps_(0),
   color_flags_(ColorFlags::Fixed),
   weight_color_scale_(1),
   weight_color_offset_(0),
@@ -47,7 +31,7 @@ VoxelDrawer::VoxelDrawer()
   information_color_scale_(1),
   information_color_offset_(0),
   alpha_override_(-1.0f),
-  light_position_(10, 0, 10),
+  light_position_(0, 0, 100),
   min_occupancy_(std::numeric_limits<float>::lowest()),
   max_occupancy_(std::numeric_limits<float>::max()),
   min_observations_(std::numeric_limits<float>::lowest()),
@@ -318,6 +302,8 @@ void VoxelDrawer::draw(const QMatrix4x4& pvm_matrix, const QMatrix4x4& view_matr
   program_.bind();
   vao_.bind();
 
+  program_.setUniformValue("u_voxel_size_eps", voxel_size_eps_);
+
   glUniform1ui(program_.uniformLocation("u_color_mode"), static_cast<uint32_t>(color_flags_));
   program_.setUniformValue("u_weight_color_scale", weight_color_scale_);
   program_.setUniformValue("u_weight_color_offset", weight_color_offset_);
@@ -371,6 +357,10 @@ void VoxelDrawer::draw(const QMatrix4x4& pvm_matrix, const QMatrix4x4& view_matr
 
   vao_.release();
   program_.release();
+}
+
+void VoxelDrawer::setVoxelSizeEps(const float voxel_size_eps) {
+  voxel_size_eps_ = voxel_size_eps;
 }
 
 std::vector<std::pair<std::string, VoxelDrawer::ColorFlags>> VoxelDrawer::getAvailableColorFlags() {
