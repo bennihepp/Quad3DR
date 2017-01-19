@@ -805,8 +805,14 @@ public:
     getRaycastHitVoxelsWithInformationScore(const Pose& pose) const;
 
   /// Returns the information score for a single hit voxel.
-  FloatType computeInformationScore(const ViewpointPlannerData::OccupiedTreeType::IntersectionResult& result) const;
   FloatType computeInformationScore(const VoxelType* node) const;
+
+  /// Returns the information score for a single hit voxel result.
+  FloatType computeInformationScore(const ViewpointPlannerData::OccupiedTreeType::IntersectionResult& result) const;
+
+  /// Returns the information score for a container of VoxelWithInformation objects.
+  template <typename Iterator>
+  FloatType computeInformationScore(Iterator first, Iterator last) const;
 
   // Matching score computation
 

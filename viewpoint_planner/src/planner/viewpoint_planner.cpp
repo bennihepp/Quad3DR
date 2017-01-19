@@ -357,7 +357,7 @@ rapidjson::Document ViewpointPlanner::getViewpointPathAsJson(const ViewpointPath
     json_viewpoint.AddMember("path", json_path_array, allocator);
     json_viewpoint.AddMember("camera_yaw", camera_yaw, allocator);
     json_viewpoint.AddMember("camera_pitch", camera_pitch, allocator);
-    std::cout << "i=" << *it << ", latitude=" << latitude << ", longitude" << longitude << std::endl;
+    std::cout << "i=" << *it << ", latitude=" << latitude << ", longitude=" << longitude << std::endl;
     return json_viewpoint;
   };
 
@@ -444,6 +444,7 @@ void ViewpointPlanner::addViewpointMotion(const ViewpointEntryIndex from_index, 
   viewpoint_graph_.addEdgeByNode(from_index, to_index, motion.distance);
   viewpoint_graph_components_valid_ = false;
   viewpoint_graph_motions_.emplace(ViewpointIndexPair(from_index, to_index), std::move(motion));
+  AIT_ASSERT(viewpoint_graph_.getWeightByNode(from_index, to_index) == motion.distance);
 }
 
 const ViewpointPlanner::ViewpointPath& ViewpointPlanner::getBestViewpointPath() const {
@@ -1416,6 +1417,7 @@ bool ViewpointPlanner::addMatchingStereoViewpointWithoutLock(
   };
 
   // Check if a matching viewpoint already exists
+  // TODO: Remove index
   std::size_t i = 0;
   for (const ViewpointPathEntry& other_path_entry : viewpoint_path->entries) {
     std::cout << "i=" << i << std::endl;
@@ -1434,24 +1436,27 @@ bool ViewpointPlanner::addMatchingStereoViewpointWithoutLock(
 
   const std::vector<std::size_t>& component = getConnectedComponents().first;
 
-  // Find best viewpoint in baseline range
-  // TODO: Should use a radius search??
+  // Find viewpoint in baseline range with highest information overlap
+  // TODO: Should use a radius or knn search
   ViewpointEntryIndex best_index = (ViewpointEntryIndex)-1;
-  FloatType best_information = std::numeric_limits<FloatType>::lowest();
+  FloatType best_overlap_information = std::numeric_limits<FloatType>::lowest();
   for (const auto& entry : comp_data->sorted_new_informations) {
     const ViewpointEntryIndex& stereo_index = entry.first;
-    const FloatType stereo_information = entry.second;
     const ViewpointEntry& stereo_viewpoint = viewpoint_entries_[stereo_index];
     const bool ignore_angular_deviation = true;
     if (is_stereo_pair_lambda(stereo_viewpoint, ignore_angular_deviation)) {
-      if (component[stereo_index] == component[path_entry.viewpoint_index] && stereo_information > best_information) {
+      // Compute overlap information
+      const VoxelWithInformationSet overlap_set = ait::computeSetIntersection(viewpoint_entry.voxel_set, stereo_viewpoint.voxel_set);
+      const FloatType overlap_information = computeInformationScore(overlap_set.begin(), overlap_set.end());
+      if (component[stereo_index] == component[path_entry.viewpoint_index] && overlap_information > best_overlap_information) {
         best_index = stereo_index;
-        best_information = stereo_information;
+        best_overlap_information = overlap_information;
       }
     }
   }
-  AIT_PRINT_VALUE(best_index);
-  AIT_PRINT_VALUE(best_information);
+  AIT_PRINT_VALUE(path_entry.local_information);
+  AIT_PRINT_VALUE(viewpoint_entry.total_information);
+  AIT_PRINT_VALUE(best_overlap_information);
   if (best_index == (ViewpointEntryIndex)-1) {
     if (verbose) {
       std::cout << "Could not find any stereo viewpoint in the right baseline and distance range" << std::endl;
@@ -1466,8 +1471,12 @@ bool ViewpointPlanner::addMatchingStereoViewpointWithoutLock(
       best_viewpoint_entry.viewpoint.pose().translation(),
       viewpoint_entry.viewpoint.pose().quaternion());
   const Viewpoint new_viewpoint(&viewpoint_entry.viewpoint.camera(), new_pose);
-  // TODO: Check if this really makes sense or if a new raycast should be done.
-  ViewpointEntry new_viewpoint_entry(new_viewpoint, viewpoint_entry.total_information, viewpoint_entry.voxel_set);
+  // Compute raycast for new viewpoint
+  std::pair<VoxelWithInformationSet, FloatType> raycast_result =
+      getRaycastHitVoxelsWithInformationScore(pose);
+  VoxelWithInformationSet& new_voxel_set = raycast_result.first;
+  const FloatType new_total_information = raycast_result.second;
+  ViewpointEntry new_viewpoint_entry(new_viewpoint, new_total_information, std::move(new_voxel_set));
   const std::size_t stereo_viewpoint_index = addViewpointEntryWithoutLock(std::move(new_viewpoint_entry));
 
   ViewpointPathEntry stereo_path_entry;
