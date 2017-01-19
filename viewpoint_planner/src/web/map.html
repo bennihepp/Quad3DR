@@ -91,7 +91,10 @@
                 <span class="label label-warning">Look-at</span>
             </label>
         </span>
-        <button onclick="downloadViewpointsAsJson();" aria-label="..." type="button" class="btn btn-sm">Download viewpoints as JSON</button>
+    </div>
+    <div>
+        <button onclick="downloadViewpointsAsJson();" aria-label="..." type="button" class="btn btn-sm">Download as JSON</button>
+        <button onclick="downloadViewpointsAsKml();" aria-label="..." type="button" class="btn btn-sm">Download as KML</button>
     </div>
 </div>
 
@@ -128,15 +131,16 @@
         <button onclick="clearStartPosition();" aria-label="..." type="button" class="btn btn-sm">Clear start position</button>
     </div>
     <div style="padding-top: 5px;">
-        <button onclick="downloadRegionsAsJson();" aria-label="..." type="button" class="btn btn-sm">Download region as JSON</button>
+        <button onclick="downloadRegionsAsJson();" aria-label="..." type="button" class="btn btn-sm">Download regions as JSON</button>
     </div>
 </div>
 
 <div id="map"></div>
 
 <!-- JQuery -->
-<script src="external/jquery-3.1.1.js"></script>
+<script src="external/jquery/3.1.1/jquery-3.1.1.min.js"></script>
 
+<script type="text/javascript" src="src/kml_utils.js"></script>
 <script>
     function stringifyJson(data) {
         return JSON.stringify(data, null, 2);
@@ -185,8 +189,8 @@
     }
 
     function latlngToXy(latlng1, latlng2) {
-        x = 111300 * (latlng2.lat - latlng1.lat);
-        y = 111300 * Math.cos(toRadians(latlng2.lat)) * (latlng2.long - latlng1.long);
+        x = 111300 * Math.cos(toRadians(latlng2.lat)) * (latlng2.long - latlng1.long);
+        y = 111300 * (latlng2.lat - latlng1.lat);
         return new Object({
             x: x,
             y: y
@@ -210,22 +214,26 @@
             pose.altitude = viewpoint.altitude;
             pose.yaw = viewpoint.yaw;
             path = [new Object()];
+            path[0].index = 0
             path[0].latitude = viewpoint.lat;
             path[0].longitude = viewpoint.long;
             path[0].altitude = viewpoint.altitude;
             path[0].yaw = viewpoint.yaw;
             if (doLookAt) {
-                diff = latlngToXy(viewpoint, lookAtPos)
-                yaw = toDegrees(Math.atan2(diff.y, diff.x))
-                pitch = toDegrees(Math.atan2(lookAtPos.altitude - viewpoint.altitude, Math.sqrt(diff.x * diff.x + diff.y * diff.y)))
+                diff = latlngToXy(viewpoint, lookAtPos);
+                console.log("diff = " + diff.x + ", " + diff.y);
+                yaw = toDegrees(Math.atan2(diff.y, diff.x));
+                pitch = toDegrees(Math.atan2(lookAtPos.altitude - viewpoint.altitude, Math.sqrt(diff.x * diff.x + diff.y * diff.y)));
                 console.log("yaw = " + yaw);
                 pose.yaw = -yaw;
                 path[0].yaw = -yaw;
                 viewpoint.pitch = pitch;
             }
             data.viewpoints.push(new Object({
+                index: i,
                 pose: pose,
                 path: path,
+                take_picture: true,
                 camera_yaw: 0,
                 camera_pitch: viewpoint.pitch
             }));
@@ -519,14 +527,277 @@
                 console.log("lat=" + lat + ", long=" + long);
             });
         });
+
+        var externalMarkerArray = null;
+//        var externalMarkerPolyline = [];
+        var externalMarkerPolyline = null;
+
+        var externalSelectedPositionMarker = null;
+
+//        // Debugging code
+//        var latlng_array = [
+////            new google.maps.LatLng(47.38535, 8.55569444444444),
+////            new google.maps.LatLng(47.3853, 8.55568611111111),
+////            new google.maps.LatLng(47.3852305555556, 8.55548611111111),
+////            new google.maps.LatLng(47.38525, 8.55542777777778),
+////            new google.maps.LatLng(47.3852666666667, 8.55539166666667),
+//
+//            // Hatt
+////            new google.maps.LatLng(47.37792560884583, 8.548982728668666),
+////            new google.maps.LatLng(47.3779077039981, 8.54911251531325),
+////            new google.maps.LatLng(47.37805958981851, 8.5490620046086),
+////            new google.maps.LatLng(47.37805846974858, 8.54909078273698),
+////            new google.maps.LatLng(47.3779914446434, 8.549199950328191),
+////            new google.maps.LatLng(47.377772316072310, 8.549602050595146),
+//
+//            // CNB test
+////            new google.maps.LatLng(47.377876472200001, 8.549503833330000), // ref
+////            new google.maps.LatLng(47.377456665039062, 8.549664497375488),
+////            new google.maps.LatLng(47.377456665027310, 8.549664497394152),
+//            new google.maps.LatLng(47.377258300789421, 8.548780441301499),
+//            new google.maps.LatLng(47.375909137780617, 8.545739641548636),
+////            new google.maps.LatLng(47.375781358167664, 8.545888560129711),
+////            new google.maps.LatLng(47.377456665039062, 8.549664497375488),
+////            new google.maps.LatLng(47.377761840820312, 8.549525260925293),
+////            new google.maps.LatLng(47.375909137780617, 8.545739641548636),
+////            new google.maps.LatLng(47.375781358167664, 8.545888560129711),
+//            new google.maps.LatLng(47.377695431791707, 8.549650095798665),
+////            new google.maps.LatLng(),
+////            new google.maps.LatLng(),
+////            new google.maps.LatLng(),
+////            new google.maps.LatLng(),
+////            new google.maps.LatLng(),
+////            new google.maps.LatLng(),
+//        ];
+//        for (var i = 0; i < latlng_array.length; ++i) {
+//            var latlng = latlng_array[i];
+//            var marker = new google.maps.Marker({
+//                position: latlng
+//            });
+//            if (i == 0) {
+//                marker.setIcon("http://maps.google.com/mapfiles/ms/icons/yellow-dot.png");
+//            }
+//            else if (i == 1) {
+//                marker.setIcon("http://maps.google.com/mapfiles/ms/icons/green-dot.png");
+//            }
+//            else if (i == 2) {
+//                marker.setIcon("http://maps.google.com/mapfiles/ms/icons/blue-dot.png");
+//            }
+//            else if (i == 3) {
+//                marker.setIcon("http://maps.google.com/mapfiles/ms/icons/red-dot.png");
+//            }
+//            else {
+//                marker.setIcon("http://maps.google.com/mapfiles/ms/icons/purple-dot.png");
+//            }
+//            console.log(i);
+//            marker.setMap(map);
+//            marker_array.push(marker);
+//            console.log("showing marker: " + latlng.lat() + ", " + latlng.lng());
+//        }
+
+        function setExternalSelectedPosition(gps) {
+            clearExternalSelectedPosition();
+            var latlng = new google.maps.LatLng(gps.latitude, gps.longitude);
+            externalSelectedPositionMarker = new google.maps.Marker({
+                position: latlng,
+                title: 'Selected position'
+            });
+            externalSelectedPositionMarker.setIcon("http://maps.google.com/mapfiles/ms/icons/yellow-dot.png");
+            externalSelectedPositionMarker.setMap(map);
+        }
+
+        function clearExternalSelectedPosition() {
+            if (externalSelectedPositionMarker != null) {
+                externalSelectedPositionMarker.setMap(null);
+                externalSelectedPositionMarker = null;
+            }
+        }
+
+        function clearExternalViewpointPath() {
+            if (externalMarkerArray != null) {
+                while (externalMarkerArray.length > 0) {
+                    var marker = externalMarkerArray.pop();
+                    marker.setMap(null);
+                }
+                externalMarkerArray = null;
+            }
+            if (externalMarkerPolyline != null) {
+                externalMarkerPolyline.setMap(null);
+                externalMarkerPolyline = null;
+            }
+        }
+
+        function showExternalViewpointPath(data) {
+            if (externalMarkerArray == null) {
+                externalMarkerArray = [];
+            }
+            if (externalMarkerPolyline == null) {
+                externalMarkerPolyline = new google.maps.Polyline({
+                    strokeColor: '#FFFF00',
+                    strokeOpacity: 1.0,
+                    strokeWeight: 2,
+                    geodesic: true,
+                    map: map,
+                    path: []
+                });
+            }
+            var viewpoints = data.viewpoints;
+            for (var i = 0; i < viewpoints.length; ++i) {
+                var viewpoint = viewpoints[i];
+                var pose = viewpoint.pose;
+                var latlong = new google.maps.LatLng(pose.latitude, pose.longitude);
+                var marker = new google.maps.Marker({
+                    position: latlong
+                });
+                if (i == 0) {
+                    marker.setIcon("http://maps.google.com/mapfiles/ms/icons/green-dot.png");
+                }
+                else if (i == viewpoints.length - 1) {
+                    marker.setIcon("http://maps.google.com/mapfiles/ms/icons/red-dot.png");
+                }
+                else {
+                    marker.setIcon("http://maps.google.com/mapfiles/ms/icons/blue-dot.png");
+                }
+                marker.setMap(map);
+                externalMarkerArray.push(marker);
+                var polyPath = externalMarkerPolyline.getPath();
+                for (var j = 0; j < viewpoint.path.length; ++j) {
+                    var path_entry = viewpoint.path[j];
+                    var latlong = new google.maps.LatLng(path_entry.latitude, path_entry.longitude);
+                    polyPath.push(latlong);
+                }
+                externalMarkerPolyline.setPath(polyPath);
+                console.log("showing marker: " + latlong.lat() + ", " + latlong.lng());
+            }
+        }
+
+        function readTextFile(filename, callback_fn) {
+            var file = new XMLHttpRequest();
+            file.open("GET", filename, true);
+            file.onreadystatechange = function () {
+                if (file.readyState === 4) {
+                    if (file.status === 200 || file.status == 0)  {
+                        var text = file.responseText;
+                        callback_fn(text);
+                    }
+                }
+            }
+            file.send(null);
+        }
+
+//        readTextFile("viewpoint_path.json", function (text) {
+//            var viewpoint_path = JSON.parse(text);
+//            showExternalViewpointPath(viewpoint_path);
+//        });
+
+        var wsUri = "ws://localhost:54321";
+        var socket = null;
+
+        function connectToQuad3DRApp() {
+            try {
+                if (typeof MozWebSocket == 'function') {
+                    WebSocket = MozWebSocket;
+                }
+                if (socket && socket.readyState == 1) {
+                    socket.close();
+                }
+                socket = new WebSocket(wsUri);
+                socket.onopen = function (evt) {
+                    console.debug("Socket connected");
+                };
+                socket.onclose = function (evt) {
+//                    console.debug("Socket closed");
+                };
+                socket.onmessage = function (evt) {
+                    var msg = evt.data;
+                    console.debug("Message: " + msg);
+                    var json_msg = JSON.parse(msg);
+                    if (json_msg.type == 'viewpoint_path') {
+                        var viewpoint_path = json_msg.payload;
+                        clearExternalViewpointPath(viewpoint_path);
+                        showExternalViewpointPath(viewpoint_path);
+                    }
+                    else if (json_msg.type == 'selected_position') {
+                        var selected_position = json_msg.payload;
+                        setExternalSelectedPosition(selected_position.gps);
+                    }
+                    else if (json_msg.type == 'clear_selected_position') {
+                        var selected_position = json_msg.payload;
+                        clearExternalSelectedPosition();
+                    }
+                    else {
+                        console.error("Received unknown message type: " + json_msg.type);
+                    }
+                };
+                socket.onerror = function (evt) {
+//                    console.debug("Error: " + evt.data);
+                };
+            }
+            catch (exception) {
+                console.debug("Error: " + exception);
+            }
+        }
+
+        function disconnectFromQuad3DRApp() {
+            if (socket) {
+                socket.close();
+            }
+        }
+
+        function isConnectedToQuad3DRApp() {
+            return socket && socket.readyState == 1;
+        }
+
+        function checkQuad3DRAppConnection() {
+            if (socket != null) {
+                var stateStr;
+                switch (socket.readyState) {
+                    case 0: {
+                        stateStr = "CONNECTING";
+                        break;
+                    }
+                    case 1: {
+                        stateStr = "OPEN";
+                        break;
+                    }
+                    case 2: {
+                        stateStr = "CLOSING";
+                        break;
+                    }
+                    case 3: {
+                        stateStr = "CLOSED";
+                        break;
+                    }
+                    default: {
+                        stateStr = "UNKNOW";
+                        break;
+                    }
+                }
+                console.debug("WebSocket state = " + socket.readyState + " ( " + stateStr + " )");
+            }
+            else {
+                console.debug("WebSocket is null");
+            }
+        }
+
+        setInterval(function() {
+            if (!isConnectedToQuad3DRApp()) {
+                console.log("Trying to connect to Quad3DR app");
+                connectToQuad3DRApp();
+            }
+        },
+            1000);
     }
+
+    //        viewpoint_path_json = JSON.parse(viewpoint_path_json_str);
+    //        showMarkers(viewpoint_path_json);
 </script>
 <!-- Google Maps API -->
 <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCu9XlP0cpxy1w66TrufWCcZUp-zsps-jM&libraries=drawing&callback=initMap"
         async defer></script>
 <!-- Bootstrap -->
-<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css" integrity="sha384-BVYiiSIFeK1dGmJRAkycuHAHRg32OmUcww7on3RYdg4Va+PmSTsz/K68vbdEjh4u" crossorigin="anonymous">
-<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap-theme.min.css" integrity="sha384-rHyoN1iRsVXV4nD0JutlnGaslCJuC7uwjduW9SVrLvRYooPp2bWYgmgJQIXwl/Sp" crossorigin="anonymous">
-<script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js" integrity="sha384-Tc5IQib027qvyjSMfHjOMaLkfuWVxZxUPnCJA7l2mCWNIpG9mGCD8wGNIcPD7Txa" crossorigin="anonymous"></script>
+<link rel="stylesheet" href="external/bootstrap/3.3.7/css/bootstrap.min.css" integrity="sha384-BVYiiSIFeK1dGmJRAkycuHAHRg32OmUcww7on3RYdg4Va+PmSTsz/K68vbdEjh4u" crossorigin="anonymous">
+<link rel="stylesheet" href="external/bootstrap/3.3.7/css/bootstrap-theme.min.css" integrity="sha384-rHyoN1iRsVXV4nD0JutlnGaslCJuC7uwjduW9SVrLvRYooPp2bWYgmgJQIXwl/Sp" crossorigin="anonymous">
+<script src="external/bootstrap/3.3.7/js/bootstrap.min.js" integrity="sha384-Tc5IQib027qvyjSMfHjOMaLkfuWVxZxUPnCJA7l2mCWNIpG9mGCD8wGNIcPD7Txa" crossorigin="anonymous"></script>
 </body>
 </html>
