@@ -62,11 +62,14 @@ private:
 
 }
 
-std::pair<std::vector<std::size_t>, std::size_t> ViewpointPlanner::getConnectedComponents() const {
-  // TODO: Cache connected components
-  std::vector<std::size_t> component(viewpoint_graph_.numVertices());
-  std::size_t num_components = boost::connected_components(viewpoint_graph_.boostGraph(), &component.front());
-  return std::make_pair(component, num_components);
+const std::pair<std::vector<std::size_t>, std::size_t>& ViewpointPlanner::getConnectedComponents() const {
+  if (!viewpoint_graph_components_valid_) {
+    std::vector<std::size_t> component(viewpoint_graph_.numVertices());
+    std::size_t num_components = boost::connected_components(viewpoint_graph_.boostGraph(), &component.front());
+    viewpoint_graph_components_.first = std::move(component);
+    viewpoint_graph_components_.second = num_components;
+  }
+  return viewpoint_graph_components_;
 }
 
 bool ViewpointPlanner::findAndAddShortestMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index) {
