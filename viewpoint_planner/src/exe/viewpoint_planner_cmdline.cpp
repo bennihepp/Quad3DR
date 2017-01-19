@@ -10,6 +10,7 @@
 #include <memory>
 #include <csignal>
 
+#include <ait/boost.h>
 #include <boost/program_options.hpp>
 #include <boost/filesystem.hpp>
 

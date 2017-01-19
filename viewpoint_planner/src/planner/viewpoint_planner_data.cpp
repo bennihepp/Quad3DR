@@ -7,13 +7,13 @@
 
 #include "viewpoint_planner_data.h"
 #include <boost/filesystem.hpp>
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
 #include <boost/property_tree/json_parser.hpp>
 #include <ait/common.h>
 #include <ait/gps.h>
 #include <ait/geometry.h>
 #include <Eigen/Core>
-
-const std::string NodeObject::kFileTag = "NodeObject";
 
 ViewpointPlannerData::ViewpointPlannerData(const Options* options)
 : options_(*options) {
@@ -562,11 +562,21 @@ void ViewpointPlannerData::generateBVHTree(const OccupancyMapType* octree) {
 }
 
 void ViewpointPlannerData::writeBVHTree(const std::string& filename) const {
-  occupied_bvh_.write(filename);
+  std::ofstream ofs(filename, std::ios::binary);
+  if (!ofs) {
+    throw AIT_EXCEPTION(std::string("Unable to open file for writing: ") + filename);
+  }
+  boost::archive::binary_oarchive oa(ofs);
+  oa << occupied_bvh_;
 }
 
 void ViewpointPlannerData::readCachedBVHTree(const std::string& filename) {
-  occupied_bvh_.read(filename);
+  std::ifstream ifs(filename, std::ios::binary);
+  if (!ifs) {
+    throw AIT_EXCEPTION(std::string("Unable to open file for reading: ") + filename);
+  }
+  boost::archive::binary_iarchive ia(ifs);
+  ia >> occupied_bvh_;
 }
 
 void ViewpointPlannerData::generateWeightGrid() {
@@ -586,7 +596,6 @@ void ViewpointPlannerData::generateWeightGrid() {
 void ViewpointPlannerData::generateDistanceField() {
   ml::Grid3f seed_grid(options_.grid_dimension, options_.grid_dimension, options_.grid_dimension);
   seed_grid.setValues(std::numeric_limits<float>::max());
-  const BoundingBoxType& bbox = occupied_bvh_.getRoot()->getBoundingBox();
   for (size_t i = 0; i < poisson_mesh_->m_FaceIndicesVertices.size(); ++i) {
     const MeshType::Indices::Face& face = poisson_mesh_->m_FaceIndicesVertices[i];
     AIT_ASSERT_STR(face.size() == 3, "Mesh faces need to have a valence of 3");

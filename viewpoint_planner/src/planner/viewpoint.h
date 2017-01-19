@@ -13,6 +13,7 @@
 #include <boost/serialization/access.hpp>
 #include <ait/common.h>
 #include <ait/eigen_utils.h>
+#include <ait/geometry.h>
 #include "../reconstruction/dense_reconstruction.h"
 
 using reconstruction::PinholeCamera;
@@ -20,34 +21,11 @@ using reconstruction::Point3DId;
 using reconstruction::Point3D;
 using reconstruction::SparseReconstruction;
 
-template <typename T>
-struct Ray {
-  using FloatType = T;
-  USE_FIXED_EIGEN_TYPES(FloatType)
-
-  Ray(const Vector3& origin, const Vector3& direction)
-  : origin_(origin), direction_(direction.normalized()) {}
-
-  const Vector3& origin() const {
-    return origin_;
-  }
-
-  const Vector3& direction() const {
-    return direction_;
-  }
-
-  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-
-private:
-  Vector3 origin_;
-  Vector3 direction_;
-};
-
 class Viewpoint {
 public:
   using FloatType = reconstruction::FloatType;
   USE_FIXED_EIGEN_TYPES(FloatType)
-  using RayType = Ray<FloatType>;
+  using RayType = ait::Ray<FloatType>;
   using Pose = reconstruction::Pose;
 
   static constexpr FloatType DEFAULT_PROJECTION_MARGIN = 10;
@@ -86,7 +64,7 @@ public:
 
   Vector2 projectWorldPointIntoImage(const Vector3& point_world) const;
 
-  Ray<FloatType> getCameraRay(FloatType x, FloatType y) const;
+  RayType getCameraRay(FloatType x, FloatType y) const;
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 

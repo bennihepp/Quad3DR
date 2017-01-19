@@ -49,6 +49,7 @@ std::pair<bool, boost::program_options::variables_map> process_commandline(int a
       ("lazy-eval", po::bool_switch()->default_value(true), "Only update inner nodes once at the end")
       ("dense", po::bool_switch()->default_value(true), "Make a dense tree by inserting unknown nodes")
       ("no-display", po::bool_switch()->default_value(false), "Do not show depth maps")
+      ("set-all-unknown", po::bool_switch()->default_value(false), "Set all occupied voxels to unknown voxels")
       ;
 
     po::options_description options;
@@ -158,6 +159,16 @@ int main(int argc, char** argv) {
       }
     }
     tree.insertPointCloud(pc, sensor_origin, max_range, vm["lazy-eval"].as<bool>());
+  }
+
+  if (vm["set-all-unknown"].as<bool>()) {
+    std::cout << "Setting all occupied nodes to unknown nodes" << std::endl;
+    for (auto it = tree.begin_tree(); it != tree.end_tree(); ++it) {
+      if (tree.isNodeOccupied(&(*it))) {
+        it->setObservationCount(0);
+        it->setOccupancy(0.5f);
+      }
+    }
   }
 
   if (vm["dense"].as<bool>()) {

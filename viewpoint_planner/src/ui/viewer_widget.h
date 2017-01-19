@@ -36,12 +36,17 @@
 #include <octomap/octomap.h>
 #include <qglviewer.h>
 #include <ait/thread.h>
+#include <ait/options.h>
+#include <QOpenGLFunctions>
+#include <QOpenGLFunctions_3_3_Core>
+
 #include "../planner/viewpoint_planner.h"
 #include "../rendering/octree_drawer.h"
 #include "../rendering/sparse_reconstruction_drawer.h"
 #include "../rendering/viewpoint_drawer.h"
 #include "viewer_settings_panel.h"
 #include "viewer_planner_panel.h"
+#include "../web/web_socket_server.h"
 
 class ViewerWidget;
 
@@ -117,7 +122,7 @@ private:
   qreal z_far_;
 };
 
-class ViewerWidget : public QGLViewer
+class ViewerWidget : public QGLViewer//, protected QOpenGLFunctions_3_3_Core
 {
   Q_OBJECT
 
@@ -135,11 +140,26 @@ class ViewerWidget : public QGLViewer
   const int kScreenshotQuality = 90;
 
 public:
+
+  struct Options : ait::ConfigOptions {
+    Options()
+    : ait::ConfigOptions("viewpoint_planner.gui", "ViewpointPlanner GUI options") {
+      addOption<bool>("websocket_enable", &websocket_enable);
+      addOption<uint16_t>("websocket_port", &websocket_port);
+    }
+
+    ~Options() override {}
+
+    // Websocket server options
+    bool websocket_enable = true;
+    uint16_t websocket_port = 54321;
+  };
+
   using FloatType = float;
   USE_FIXED_EIGEN_TYPES(FloatType);
   using Pose = ait::Pose<FloatType>;
 
-  static ViewerWidget* create(ViewpointPlanner* planner, ViewerSettingsPanel* settings_panel,
+  static ViewerWidget* create(const Options& options, ViewpointPlanner* planner, ViewerSettingsPanel* settings_panel,
       ViewerPlannerPanel* planner_panel, QWidget *parent = nullptr) {
     QGLFormat format;
     format.setVersion(3, 3);
@@ -147,10 +167,10 @@ public:
 
     format.setProfile(QGLFormat::CompatibilityProfile);
     format.setSampleBuffers(true);
-    return new ViewerWidget(format, planner, settings_panel, planner_panel, parent);
+    return new ViewerWidget(options, format, planner, settings_panel, planner_panel, parent);
   }
 
-  ViewerWidget(const QGLFormat& format, ViewpointPlanner* planner,
+  ViewerWidget(const Options& options, const QGLFormat& format, ViewpointPlanner* planner,
       ViewerSettingsPanel* settings_panel, ViewerPlannerPanel* planner_panel, QWidget *parent = nullptr);
 
   ~ViewerWidget();
@@ -160,6 +180,8 @@ public:
   void showOctree(const ViewpointPlanner::OccupancyMapType* octree);
   void showDensePoints(const ViewpointPlanner::PointCloudType* dense_points);
   void showPoissonMesh(const ViewpointPlanner::MeshType* poisson_mesh);
+  void showRegionOfInterest(const ViewpointPlanner::RegionType& roi);
+  void showBvhBbox(const ViewpointPlanner::BoundingBoxType& bvh_bbox);
   void showViewpointGraph(const std::size_t selected_index = (std::size_t)-1);
   void showViewpointGraphMotions(const std::size_t selected_index);
   void showViewpointPath(const std::size_t selected_index = (std::size_t)-1);
@@ -181,10 +203,11 @@ public slots:
   void setDrawRaycast(bool draw_raycast);
   void captureRaycast();
   void captureRaycastWindow(const std::size_t width, const std::size_t height);
+  void captureRaycastCenter();
   void setOccupancyBinThreshold(double occupancy_bin_threshold);
   void setColorFlags(uint32_t color_flags);
   void setDrawFreeVoxels(bool draw_free_voxels);
-  void setDisplayAxes(bool display_axes);
+  void setDrawAxes(bool draw_axes);
   void setVoxelAlpha(double voxel_alpha);
   void setDrawSingleBin(bool draw_single_bin);
   void setDrawOctree(bool draw_octree);
@@ -194,6 +217,8 @@ public slots:
   void setDrawViewpointPath(bool draw_viewpoint_path);
   void setDrawSparsePoints(bool draw_sparse_points);
   void setDrawDensePoints(bool draw_dense_points);
+  void setDrawRegionOfInterest(bool draw_region_of_interest);
+  void setDrawBvhBbox(bool draw_bvh_bbox);
   void setDrawPoissonMesh(bool draw_poisson_mesh);
   void setUseDroneCamera(bool use_drone_camera);
   void setImagePoseIndex(ImageId image_id);
@@ -243,6 +268,9 @@ public slots:
 protected slots:
   void updateViewpoints();
   void onPlannerThreadPaused();
+  void sendViewpointPathToWebSocketClients();
+  void sendClearSelectedPositionToWebSocketClients();
+  void sendSelectedPositionToWebSocketClients(const Vector3& position);
 
 signals:
   void viewpointsChanged();
@@ -266,6 +294,8 @@ protected:
     qglviewer::Quaternion eigenToQglviewer(const Quaternion& eig_quat) const;
     Quaternion qglviewerToEigen(const qglviewer::Quaternion& qgl_quat) const;
 
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
 private:
     friend class ViewpointPlannerThread;
 
@@ -276,6 +306,10 @@ private:
     };
 
     std::vector<std::pair<std::string, ViewerWidget::ViewpointColorMode>> getAvailableViewpointColorModes() const;
+
+    Options options_;
+
+    WebSocketServer* web_socket_server_;
 
     CustomCamera custom_camera_;
     double z_near_coefficient_;
@@ -289,16 +323,18 @@ private:
     const ViewpointPlanner::OccupancyMapType* octree_;
     const SparseReconstruction* sparse_recon_;
     const ViewpointPlanner::PointCloudType* dense_points_;
-    const ViewpointPlanner::MeshType* poisson_mesh_;
     FloatType dense_points_size_;
-    bool display_axes_;
+    const ViewpointPlanner::MeshType* poisson_mesh_;
 
+    FloatType aspect_ratio_;
     LineDrawer axes_drawer_;
     OcTreeDrawer octree_drawer_;
     SparseReconstructionDrawer sparce_recon_drawer_;
     PointDrawer dense_points_drawer_;
     TriangleDrawer poisson_mesh_drawer_;
-    FloatType aspect_ratio_;
+    LineDrawer region_of_interest_drawer_;
+    LineDrawer bvh_bbox_drawer_;
+    FloatType bbox_line_width_;
 
     ViewpointDrawer<FloatType> viewpoint_graph_drawer_;
     ViewpointDrawer<FloatType> viewpoint_path_drawer_;

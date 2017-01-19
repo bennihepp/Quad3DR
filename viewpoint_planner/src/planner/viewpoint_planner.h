@@ -16,15 +16,16 @@
 #include <boost/archive/binary_oarchive.hpp>
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/utility.hpp>
+#include <rapidjson/document.h>
 #include <ait/common.h>
 #include <ait/options.h>
 #include <ait/random.h>
 #include <ait/eigen_utils.h>
 #include <ait/serialization.h>
+#include <ait/graph_boost.h>
 #include "../mLib/mLib.h"
 #include "../octree/occupancy_map.h"
 #include "../reconstruction/dense_reconstruction.h"
-#include "../graph/graph_boost.h"
 #include "../ann/approximate_nearest_neighbor.h"
 #include "viewpoint.h"
 #include "viewpoint_planner_data.h"
@@ -46,7 +47,7 @@ public:
   USE_FIXED_EIGEN_TYPES(FloatType)
   using BoundingBoxType = ViewpointPlannerData::BoundingBoxType;
   using RegionType = ViewpointPlannerData::RegionType;
-  using RayType = Ray<FloatType>;
+  using RayType = ait::Ray<FloatType>;
   using Pose = ait::Pose<FloatType>;
 
   static constexpr FloatType kDotProdEqualTolerance = FloatType { 1e-5 };
@@ -638,17 +639,29 @@ public:
 
   void loadViewpointPath(const std::string& filename);
 
+  rapidjson::Document getViewpointPathAsJson(const ViewpointPath& viewpoint_path) const;
+
+  std::string getViewpointPathAsJsonString(const ViewpointPath& viewpoint_path) const;
+
   void exportViewpointPathAsJson(const std::string& filename, const ViewpointPath& viewpoint_path) const;
+
+  RegionType getRoi() const {
+    return data_->roi_;
+  }
 
   BoundingBoxType getRoiBbox() const {
     return data_->roi_.getBoundingBox();
+  }
+
+  BoundingBoxType getBvhBbox() const {
+    return data_->bvh_bbox_;
   }
 
   const OccupancyMapType* getOctree() const {
       return data_->octree_.get();
   }
 
-  const ViewpointPlannerData::OccupiedTreeType& getBVHTree() const {
+  const ViewpointPlannerData::OccupiedTreeType& getBvhTree() const {
     return data_->occupied_bvh_;
   }
 
@@ -688,6 +701,9 @@ public:
   const std::vector<ViewpointPathComputationData>& getViewpointPathsComputationData() const {
     return viewpoint_paths_data_;
   }
+
+  /// Returns whether a motion between two viewpoints exists.
+  bool hasViewpointMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index) const;
 
   /// Return the motion between two viewpoints.
   Motion getViewpointMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index) const;
@@ -763,18 +779,30 @@ public:
 
   /// Perform raycast on the BVH tree.
   /// Returns a vector of hit voxels with additional info.
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxelsBVH(
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxels(
       const Pose& pose) const;
 
   /// Perform raycast on the BVH tree on a limited window around the center.
   /// Returns a vector of hit voxels with additional info.
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxelsBVH(
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxels(
       const Pose& pose, const std::size_t width, const std::size_t height) const;
+
+#if WITH_CUDA
+  /// Perform raycast on the BVH tree.
+  /// Returns a vector of hit voxels with additional info.
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxelsCuda(
+      const Pose& pose) const;
+
+  /// Perform raycast on the BVH tree on a limited window around the center.
+  /// Returns a vector of hit voxels with additional info.
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxelsCuda(
+      const Pose& pose, const std::size_t width, const std::size_t height) const;
+#endif
 
   /// Perform raycast on the BVH tree.
   /// Returns the set of hit voxels with corresponding information + the total information of all voxels.
   std::pair<VoxelWithInformationSet, FloatType>
-    getRaycastHitVoxelsWithInformationScoreBVH(const Pose& pose) const;
+    getRaycastHitVoxelsWithInformationScore(const Pose& pose) const;
 
   /// Returns the information score for a single hit voxel.
   FloatType computeInformationScore(const ViewpointPlannerData::OccupiedTreeType::IntersectionResult& result) const;
@@ -794,9 +822,17 @@ public:
   std::unordered_set<Point3DId> computeVisibleMapPointsFiltered(const CameraId camera_id, const Pose& pose,
       FloatType projection_margin=Viewpoint::DEFAULT_PROJECTION_MARGIN) const;
 
+  /// Convert local ENU coordinates to GPS coordinates
+  using GpsCoordinateType = reconstruction::SfmToGpsTransformation::GpsCoordinate;
+  GpsCoordinateType convertPositionToGps(const Vector3& position) const;
+
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
 private:
+  /// Remove duplicate hit voxels from raycast results
+  void removeDuplicateRaycastHitVoxels(
+      std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult>* raycast_results) const;
+
   /// Remove points that are occluded from the given pose.
   /// A point needs to be dist_margin behind a voxel surface to be removed.
   void removeOccludedPoints(const Pose& pose, std::unordered_set<Point3DId>& point3D_ids, FloatType dist_margin) const;

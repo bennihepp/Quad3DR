@@ -27,7 +27,7 @@ public:
         connect(ui.occupancyBinThreshold, SIGNAL(currentIndexChanged(int)), this, SLOT(setOccupancyBinThresholdInternal(int)));
         connect(ui.colorFlags, SIGNAL(currentIndexChanged(int)), this, SLOT(setColorFlagsInternal(int)));
         connect(ui.voxelAlpha, SIGNAL(valueChanged(double)), this, SLOT(setVoxelAlphaInternal(double)));
-        connect(ui.displayAxes, SIGNAL(stateChanged(int)), this, SLOT(setDisplayAxesStateInternal(int)));
+        connect(ui.drawAxes, SIGNAL(stateChanged(int)), this, SLOT(setDrawAxesStateInternal(int)));
         connect(ui.drawFreeVoxels, SIGNAL(stateChanged(int)), this, SLOT(setDrawFreeVoxelsStateInternal(int)));
         connect(ui.drawSingleBin, SIGNAL(stateChanged(int)), this, SLOT(setDrawSingleBinStateInternal(int)));
         connect(ui.drawOctree, SIGNAL(stateChanged(int)), this, SLOT(setDrawOctreeInternal(int)));
@@ -35,6 +35,8 @@ public:
         connect(ui.drawSparsePoints, SIGNAL(stateChanged(int)), this, SLOT(setDrawSparsePointsInternal(int)));
         connect(ui.drawDensePoints, SIGNAL(stateChanged(int)), this, SLOT(setDrawDensePointsInternal(int)));
         connect(ui.drawPoissonMesh, SIGNAL(stateChanged(int)), this, SLOT(setDrawPoissonMeshInternal(int)));
+        connect(ui.drawRegionOfInterest, SIGNAL(stateChanged(int)), this, SLOT(setDrawRegionOfInterestInternal(int)));
+        connect(ui.drawBvhBbox, SIGNAL(stateChanged(int)), this, SLOT(setDrawBvhBboxInternal(int)));
         connect(ui.refreshTree, SIGNAL(clicked(void)), this, SLOT(signalRefreshTreeInternal()));
         connect(ui.drawRaycast, SIGNAL(stateChanged(int)), this, SLOT(setDrawRaycastInternal(int)));
         connect(ui.captureRaycast, SIGNAL(clicked(void)), this, SLOT(signalCaptureRaycastInternal()));
@@ -213,61 +215,69 @@ public:
 
 protected slots:
     void setOccupancyBinThresholdInternal(int index) {
-        bool ok;
-        double occupancy_threshold = ui.occupancyBinThreshold->itemData(index).toDouble(&ok);
-        if (!ok) {
-            throw AIT_EXCEPTION("Unable to convert occupancy threshold user data to double");
-        }
-        emit occupancyBinThresholdChanged(occupancy_threshold);
+      bool ok;
+      double occupancy_threshold = ui.occupancyBinThreshold->itemData(index).toDouble(&ok);
+      if (!ok) {
+          throw AIT_EXCEPTION("Unable to convert occupancy threshold user data to double");
+      }
+      emit occupancyBinThresholdChanged(occupancy_threshold);
     }
 
     void setColorFlagsInternal(int index) {
-        bool ok;
-        uint32_t color_flags = ui.colorFlags->itemData(index).toUInt(&ok);
-        if (!ok) {
-            throw AIT_EXCEPTION("Unable to convert color flags user data to uint");
-        }
-        emit colorFlagsChanged(color_flags);
+      bool ok;
+      uint32_t color_flags = ui.colorFlags->itemData(index).toUInt(&ok);
+      if (!ok) {
+          throw AIT_EXCEPTION("Unable to convert color flags user data to uint");
+      }
+      emit colorFlagsChanged(color_flags);
     }
 
     void setVoxelAlphaInternal(double voxel_alpha) {
-        emit voxelAlphaChanged(voxel_alpha);
+      emit voxelAlphaChanged(voxel_alpha);
     }
 
-    void setDisplayAxesStateInternal(int state)  {
-        emit displayAxesChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
+    void setDrawAxesStateInternal(int state)  {
+      emit drawAxesChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
     }
 
     void setDrawFreeVoxelsStateInternal(int state) {
-        emit drawFreeVoxelsChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
+      emit drawFreeVoxelsChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
     }
 
     void setDrawSingleBinStateInternal(int state) {
-        emit drawSingleBinChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
+      emit drawSingleBinChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
     }
 
     void setDrawOctreeInternal(int state) {
-        emit drawOctreeChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
+      emit drawOctreeChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
     }
 
     void setDrawCamerasInternal(int state) {
-        emit drawCamerasChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
+      emit drawCamerasChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
     }
 
     void setDrawSparsePointsInternal(int state) {
-        emit drawSparsePointsChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
+      emit drawSparsePointsChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
     }
 
     void setDrawDensePointsInternal(int state) {
-        emit drawDensePointsChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
+      emit drawDensePointsChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
     }
 
     void setDrawPoissonMeshInternal(int state) {
-        emit drawPoissonMeshChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
+      emit drawPoissonMeshChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
+    }
+
+    void setDrawRegionOfInterestInternal(int state) {
+      emit drawRegionOfInterestChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
+    }
+
+    void setDrawBvhBboxInternal(int state) {
+      emit drawBvhBboxChanged(state == Qt::PartiallyChecked || state == Qt::Checked);
     }
 
     void signalRefreshTreeInternal() {
-        emit refreshTree();
+      emit refreshTree();
     }
 
     void setDrawRaycastInternal(int state) {
@@ -346,7 +356,7 @@ signals:
   void occupancyBinThresholdChanged(double occupancy_threshold);
   void colorFlagsChanged(uint32_t color_flags);
   void voxelAlphaChanged(double voxel_alpha);
-  void displayAxesChanged(bool display_axes);
+  void drawAxesChanged(bool display_axes);
   void drawFreeVoxelsChanged(bool draw_free_voxels);
   void drawSingleBinChanged(bool draw_single_bin);
   void drawOctreeChanged(bool draw_octree);
@@ -354,6 +364,8 @@ signals:
   void drawSparsePointsChanged(bool draw_sparse_points);
   void drawDensePointsChanged(bool draw_dense_points);
   void drawPoissonMeshChanged(bool draw_poisson_mesh);
+  void drawRegionOfInterestChanged(bool draw_region_of_interest);
+  void drawBvhBboxChanged(bool draw_bvh_bbox);
   void useDroneCameraChanged(bool use_drone_camera);
   void refreshTree();
   void drawRaycastChanged(bool draw_raycast);

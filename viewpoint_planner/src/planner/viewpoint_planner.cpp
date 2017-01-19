@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <random>
+#include <ait/boost.h>
 #include <boost/filesystem.hpp>
 #include <boost/serialization/unordered_map.hpp>
 #include <rapidjson/document.h>
@@ -103,7 +104,7 @@ void ViewpointPlanner::reset() {
       ViewpointEntry& viewpoint_entry = viewpoint_entries_[i];
       // Compute observed voxels and information
       std::pair<VoxelWithInformationSet, FloatType> raycast_result =
-          getRaycastHitVoxelsWithInformationScoreBVH(viewpoint_entry.viewpoint.pose());
+          getRaycastHitVoxelsWithInformationScore(viewpoint_entry.viewpoint.pose());
       const VoxelWithInformationSet& voxel_set = raycast_result.first;
       viewpoint_entry.voxel_set = std::move(voxel_set);
     }
@@ -186,7 +187,7 @@ void ViewpointPlanner::loadViewpointGraph(const std::string& filename) {
       if (viewpoint_entry.voxel_set.empty()) {
         // Compute observed voxels and information
         std::pair<VoxelWithInformationSet, FloatType> raycast_result =
-            getRaycastHitVoxelsWithInformationScoreBVH(viewpoint_entry.viewpoint.pose());
+            getRaycastHitVoxelsWithInformationScore(viewpoint_entry.viewpoint.pose());
         const VoxelWithInformationSet& voxel_set = raycast_result.first;
         viewpoint_entry.voxel_set = std::move(voxel_set);
       }
@@ -274,7 +275,7 @@ void ViewpointPlanner::loadViewpointPath(const std::string& filename) {
       << " The best path has " << getBestViewpointPath().entries.size() << " viewpoints" << std::endl;
 }
 
-void ViewpointPlanner::exportViewpointPathAsJson(const std::string& filename, const ViewpointPath& viewpoint_path) const {
+rapidjson::Document ViewpointPlanner::getViewpointPathAsJson(const ViewpointPath& viewpoint_path) const {
   std::cout << "Converting viewpoint path to JSON" << std::endl;
 
   using GpsCoordinateType = reconstruction::SfmToGpsTransformation::GpsCoordinate;
@@ -283,23 +284,6 @@ void ViewpointPlanner::exportViewpointPathAsJson(const std::string& filename, co
   const GpsCoordinateType gps_reference = data_->reconstruction_->sfmGpsTransformation().gps_reference;
   std::cout << "GPS reference: " << gps_reference << std::endl;
   const GpsConverter gps_converter = GpsConverter::createWGS84(gps_reference);
-//  const FloatType ref_altitude = gps_reference.altitude();
-//  std::vector<GpsCoordinateType> gps_coordinates;
-//  for (const boost::property_tree::ptree::value_type& v : pt.get_child("latlong_vertices")) {
-//    gps_coordinates.push_back(GpsCoordinateType(v.second.get<FloatType>("latitude"), v.second.get<FloatType>("longitude"), ref_altitude));
-//  }
-//  std::vector<RegionType::Vector2> vertices;
-//  for (const GpsCoordinateType& gps : gps_coordinates) {
-//    const Vector3 enu = gps_converter.convertGpsToEnu(gps);
-//    if (verbose) {
-//      std::cout << "GPS: " << gps << ", ENU: " << enu.transpose() << std::endl;
-//    }
-//    vertices.emplace_back(enu(0), enu(1));
-//  }
-//  if (verbose) {
-//    std::cout << "Lower altitude: " << lower_altitude << ", upper_altitude: " << upper_altitude << std::endl;
-//  }
-//  const RegionType region(vertices, lower_altitude, upper_altitude);
 
   using rapidjson::Document;
   using rapidjson::Value;
@@ -308,9 +292,11 @@ void ViewpointPlanner::exportViewpointPathAsJson(const std::string& filename, co
   Document d;
   d.SetObject();
   auto& allocator = d.GetAllocator();
+
   Value viewpoints(kArrayType);
-  for (std::size_t i : viewpoint_path.order) {
-    const ViewpointPathEntry& path_entry = viewpoint_path.entries[i];
+  using IteratorType = typename std::vector<std::size_t>::const_iterator;
+  const auto generate_json_viewpoint_lambda = [&](IteratorType prev_it, IteratorType it) {
+    const ViewpointPathEntry& path_entry = viewpoint_path.entries[*it];
     const ViewpointEntry& viewpoint_entry = viewpoint_entries_[path_entry.viewpoint_index];
     const GpsCoordinateType gps = gps_converter.convertEnuToGps(viewpoint_entry.viewpoint.pose().getWorldPosition().cast<GpsFloatType>());
     Value json_pose(kObjectType);
@@ -328,24 +314,80 @@ void ViewpointPlanner::exportViewpointPathAsJson(const std::string& filename, co
     json_pose.AddMember("longitude", longitude, allocator);
     json_pose.AddMember("altitude", altitude, allocator);
     json_pose.AddMember("yaw", yaw, allocator);
-    Value json_path_entry(kObjectType);
-    json_path_entry.AddMember("index", 0, allocator);
-    json_path_entry.AddMember("latitude", latitude, allocator);
-    json_path_entry.AddMember("longitude", longitude, allocator);
-    json_path_entry.AddMember("altitude", altitude, allocator);
-    json_path_entry.AddMember("yaw", yaw, allocator);
     Value json_path_array(kArrayType);
-    json_path_array.PushBack(json_path_entry, allocator);
+    if (prev_it != it) {
+      const ViewpointEntryIndex prev_idx = viewpoint_path.entries[*prev_it].viewpoint_index;
+      const ViewpointEntryIndex idx = viewpoint_path.entries[*it].viewpoint_index;
+      if (!hasViewpointMotion(prev_idx, idx)) {
+        std::cout << "No viewpoint motion between " << prev_idx << " and " << idx << std::endl;
+      }
+      const Motion motion = getViewpointMotion(prev_idx, idx);
+      for (auto path_it = motion.poses.begin(); path_it != motion.poses.end(); ++path_it) {
+        const GpsCoordinateType path_gps = gps_converter.convertEnuToGps(path_it->getWorldPosition().cast<GpsFloatType>());
+        Value json_pose(kObjectType);
+        const GpsFloatType latitude = path_gps.latitude();
+        const GpsFloatType longitude = path_gps.longitude();
+        const GpsFloatType altitude = path_gps.altitude();
+        Value json_path_entry(kObjectType);
+        json_path_entry.AddMember("index", path_it - motion.poses.begin(), allocator);
+        json_path_entry.AddMember("latitude", latitude, allocator);
+        json_path_entry.AddMember("longitude", longitude, allocator);
+        json_path_entry.AddMember("altitude", altitude, allocator);
+        json_path_entry.AddMember("yaw", yaw, allocator);
+        json_path_array.PushBack(json_path_entry, allocator);
+      }
+    }
+    else {
+      Value json_path_entry(kObjectType);
+      json_path_entry.AddMember("index", 0, allocator);
+      json_path_entry.AddMember("latitude", latitude, allocator);
+      json_path_entry.AddMember("longitude", longitude, allocator);
+      json_path_entry.AddMember("altitude", altitude, allocator);
+      json_path_entry.AddMember("yaw", yaw, allocator);
+      json_path_array.PushBack(json_path_entry, allocator);
+    }
     Value json_viewpoint(kObjectType);
-    json_viewpoint.AddMember("index", i, allocator);
+    json_viewpoint.AddMember("index", *it, allocator);
     json_viewpoint.AddMember("pose", json_pose, allocator);
     json_viewpoint.AddMember("path", json_path_array, allocator);
     json_viewpoint.AddMember("camera_yaw", camera_yaw, allocator);
     json_viewpoint.AddMember("camera_pitch", camera_pitch, allocator);
-    std::cout << "i=" << i << ", latitude=" << latitude << ", longitude" << longitude << std::endl;
-    viewpoints.PushBack(json_viewpoint, allocator);
+    std::cout << "i=" << *it << ", latitude=" << latitude << ", longitude" << longitude << std::endl;
+    return json_viewpoint;
+  };
+
+  if (viewpoint_path.order.size() > 1) {
+    // TODO: Handle start position to first viewpoint
+    for (auto it = viewpoint_path.order.begin(); it != viewpoint_path.order.end(); ++it) {
+      auto prev_it = it - 1;
+      if (it == viewpoint_path.order.begin()) {
+        prev_it = it;
+      }
+      Value json_viewpoint = generate_json_viewpoint_lambda(prev_it, it);
+      const bool take_picture = true;
+      json_viewpoint.AddMember("take_picture", take_picture, allocator);
+      viewpoints.PushBack(json_viewpoint, allocator);
+    }
+    Value json_viewpoint = generate_json_viewpoint_lambda(
+        viewpoint_path.order.begin() + viewpoint_path.order.size() - 1, viewpoint_path.order.begin());
+    const bool take_picture = false;
+    json_viewpoint.AddMember("take_picture", take_picture, allocator);
   }
-  d.AddMember("viewpoints", viewpoints, d.GetAllocator());
+
+  d.AddMember("viewpoints", viewpoints, allocator);
+  return d;
+}
+
+std::string ViewpointPlanner::getViewpointPathAsJsonString(const ViewpointPath& viewpoint_path) const {
+  rapidjson::Document d = getViewpointPathAsJson(viewpoint_path);
+  rapidjson::StringBuffer buffer;
+  rapidjson::PrettyWriter<rapidjson::StringBuffer> writer(buffer);
+  d.Accept(writer);
+  return buffer.GetString();
+}
+
+void ViewpointPlanner::exportViewpointPathAsJson(const std::string& filename, const ViewpointPath& viewpoint_path) const {
+  rapidjson::Document d = getViewpointPathAsJson(viewpoint_path);
   std::cout << "Exporting viewpoint path as JSON to" << filename << std::endl;
   std::ofstream ofs(filename);
   rapidjson::OStreamWrapper osw(ofs);
@@ -372,6 +414,10 @@ std::pair<bool, ViewpointPlanner::Pose> ViewpointPlanner::samplePose(const Bound
   return std::make_pair(true, pose);
 }
 
+bool ViewpointPlanner::hasViewpointMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index) const {
+  return viewpoint_graph_motions_.count(ViewpointIndexPair(from_index, to_index)) > 0;
+}
+
 ViewpointPlanner::Motion ViewpointPlanner::getViewpointMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index) const {
   Motion motion = viewpoint_graph_motions_.at(ViewpointIndexPair(from_index, to_index));
   if (to_index < from_index) {
@@ -390,7 +436,7 @@ void ViewpointPlanner::addViewpointMotion(const ViewpointEntryIndex from_index, 
     std::reverse(motion.poses.begin(), motion.poses.end());
   }
   // TODO: Add symmetric edges? Currently graph is unidirectional
-  viewpoint_graph_.addEdgeByNode(from_index, to_index, motion.cost);
+  viewpoint_graph_.addEdgeByNode(from_index, to_index, motion.distance);
   viewpoint_graph_motions_.emplace(ViewpointIndexPair(from_index, to_index), std::move(motion));
 }
 
@@ -573,7 +619,16 @@ std::unordered_set<Point3DId> ViewpointPlanner::computeVisibleMapPointsFiltered(
   return proj_points;
 }
 
-std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> ViewpointPlanner::getRaycastHitVoxelsBVH(
+ViewpointPlanner::GpsCoordinateType ViewpointPlanner::convertPositionToGps(const Vector3& position) const {
+  using GpsFloatType = typename GpsCoordinateType::FloatType;
+  using GpsConverter = ait::GpsConverter<GpsFloatType>;
+  const GpsCoordinateType gps_reference = data_->reconstruction_->sfmGpsTransformation().gps_reference;
+  const GpsConverter gps_converter = GpsConverter::createWGS84(gps_reference);
+  const GpsCoordinateType gps = gps_converter.convertEnuToGps(position.cast<GpsFloatType>());
+  return gps;
+}
+
+std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> ViewpointPlanner::getRaycastHitVoxels(
     const Pose& pose) const {
   Viewpoint viewpoint(&virtual_camera_, pose);
   std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results;
@@ -593,11 +648,8 @@ std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> Viewpoin
       const RayType ray = viewpoint.getCameraRay(x, y);
       const FloatType min_range = options_.raycast_min_range;
       const FloatType max_range = options_.raycast_max_range;
-      ait::Ray bvh_ray;
-      bvh_ray.origin = ray.origin();
-      bvh_ray.direction = ray.direction();
       std::pair<bool, ViewpointPlannerData::OccupiedTreeType::IntersectionResult> result =
-          data_->occupied_bvh_.intersects(bvh_ray, min_range, max_range);
+          data_->occupied_bvh_.intersects(ray, min_range, max_range);
       if (result.first) {
 //        if (result.second.depth < octree_->getTreeDepth()) {
 //          continue;
@@ -613,33 +665,22 @@ std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> Viewpoin
       }
     }
   }
-  std::unordered_map<ViewpointPlannerData::OccupiedTreeType::NodeType*, ViewpointPlannerData::OccupiedTreeType::IntersectionResult>
-      raycast_map;
-  for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
-    if (it->node != nullptr) {
-      raycast_map.emplace(it->node, *it);
-    }
-  }
-  raycast_results.clear();
-  raycast_results.reserve(raycast_map.size());
-  for (auto it = raycast_map.cbegin(); it != raycast_map.cend(); ++it) {
-    raycast_results.emplace_back(it->second);
-  }
+  removeDuplicateRaycastHitVoxels(&raycast_results);
 //  std::cout << "Voxels: " << raycast_results.size() << std::endl;
-  timer.printTiming("getRaycastHitVoxelsBVH");
+  timer.printTiming("getRaycastHitVoxels");
   return raycast_results;
 }
 
-std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> ViewpointPlanner::getRaycastHitVoxelsBVH(
+std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> ViewpointPlanner::getRaycastHitVoxels(
     const Pose& pose, const std::size_t width, const std::size_t height) const {
   Viewpoint viewpoint(&virtual_camera_, pose);
   std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results;
   raycast_results.resize(width * height);
   ait::Timer timer;
   const std::size_t y_start = virtual_camera_.height() / 2 - height / 2;
-  const std::size_t y_end = virtual_camera_.height() / 2 + height / 2;
+  const std::size_t y_end = virtual_camera_.height() / 2 + height / 2 + 1;
   const std::size_t x_start = virtual_camera_.width() / 2 - width / 2;
-  const std::size_t x_end = virtual_camera_.width() / 2 + width / 2;
+  const std::size_t x_end = virtual_camera_.width() / 2 + width / 2 + 1;
   for (size_t y = y_start; y < y_end; ++y) {
 //  for (size_t y = virtual_camera_.height()/2-10; y < virtual_camera_.height()/2+10; ++y) {
 //  size_t y = virtual_camera_.height() / 2; {
@@ -654,11 +695,8 @@ std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> Viewpoin
       const RayType ray = viewpoint.getCameraRay(x, y);
       const FloatType min_range = options_.raycast_min_range;
       const FloatType max_range = options_.raycast_max_range;
-      ait::Ray bvh_ray;
-      bvh_ray.origin = ray.origin();
-      bvh_ray.direction = ray.direction();
       std::pair<bool, ViewpointPlannerData::OccupiedTreeType::IntersectionResult> result =
-          data_->occupied_bvh_.intersects(bvh_ray, min_range, max_range);
+          data_->occupied_bvh_.intersects(ray, min_range, max_range);
       if (result.first) {
 //        if (result.second.depth < octree_->getTreeDepth()) {
 //          continue;
@@ -674,28 +712,91 @@ std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> Viewpoin
       }
     }
   }
+  removeDuplicateRaycastHitVoxels(&raycast_results);
+//  std::cout << "Voxels: " << raycast_results.size() << std::endl;
+  timer.printTiming("getRaycastHitVoxels");
+  return raycast_results;
+}
+
+#if WITH_CUDA
+std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> ViewpointPlanner::getRaycastHitVoxelsCuda(
+    const Pose& pose) const {
+  Viewpoint viewpoint(&virtual_camera_, pose);
+  ait::Timer timer;
+
+  const std::size_t y_start = 0;
+  const std::size_t y_end = virtual_camera_.height();
+  const std::size_t x_start = 0;
+  const std::size_t x_end = virtual_camera_.width();
+
+  // Perform raycast
+  const FloatType min_range = options_.raycast_min_range;
+  const FloatType max_range = options_.raycast_max_range;
+  using ResultType = ViewpointPlannerData::OccupiedTreeType::IntersectionResult;
+  std::vector<ResultType> raycast_results =
+      data_->occupied_bvh_.raycastCuda(
+          virtual_camera_.intrinsics(),
+          pose.getTransformationImageToWorld(),
+          x_start, x_end,
+          y_start, y_end,
+          min_range, max_range);
+  removeDuplicateRaycastHitVoxels(&raycast_results);
+
+//  std::cout << "Voxels: " << raycast_results.size() << std::endl;
+  timer.printTiming("getRaycastHitVoxelsCuda");
+  return raycast_results;
+}
+
+std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> ViewpointPlanner::getRaycastHitVoxelsCuda(
+    const Pose& pose, const std::size_t width, const std::size_t height) const {
+  Viewpoint viewpoint(&virtual_camera_, pose);
+  ait::Timer timer;
+
+  const std::size_t y_start = virtual_camera_.height() / 2 - height / 2;
+  const std::size_t y_end = virtual_camera_.height() / 2 + height / 2 + 1;
+  const std::size_t x_start = virtual_camera_.width() / 2 - width / 2;
+  const std::size_t x_end = virtual_camera_.width() / 2 + width / 2 + 1;
+
+  // Perform raycast
+  const FloatType min_range = options_.raycast_min_range;
+  const FloatType max_range = options_.raycast_max_range;
+  using ResultType = ViewpointPlannerData::OccupiedTreeType::IntersectionResult;
+  std::vector<ResultType> raycast_results =
+      data_->occupied_bvh_.raycastCuda(
+          virtual_camera_.intrinsics(),
+          pose.getTransformationImageToWorld(),
+          x_start, x_end,
+          y_start, y_end,
+          min_range, max_range);
+  removeDuplicateRaycastHitVoxels(&raycast_results);
+
+//  std::cout << "Voxels: " << raycast_results.size() << std::endl;
+  timer.printTiming("getRaycastHitVoxelsCuda");
+  return raycast_results;
+}
+#endif
+
+void ViewpointPlanner::removeDuplicateRaycastHitVoxels(
+    std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult>* raycast_results) const {
   std::unordered_map<ViewpointPlannerData::OccupiedTreeType::NodeType*, ViewpointPlannerData::OccupiedTreeType::IntersectionResult>
       raycast_map;
-  for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
+  for (auto it = raycast_results->cbegin(); it != raycast_results->cend(); ++it) {
     if (it->node != nullptr) {
       raycast_map.emplace(it->node, *it);
     }
   }
-  raycast_results.clear();
-  raycast_results.reserve(raycast_map.size());
+  raycast_results->clear();
+  raycast_results->reserve(raycast_map.size());
   for (auto it = raycast_map.cbegin(); it != raycast_map.cend(); ++it) {
-    raycast_results.emplace_back(it->second);
+    raycast_results->emplace_back(it->second);
   }
-//  std::cout << "Voxels: " << raycast_results.size() << std::endl;
-  timer.printTiming("getRaycastHitVoxelsBVH");
-  return raycast_results;
 }
 
 std::pair<ViewpointPlanner::VoxelWithInformationSet, ViewpointPlanner::FloatType>
-ViewpointPlanner::getRaycastHitVoxelsWithInformationScoreBVH(
+ViewpointPlanner::getRaycastHitVoxelsWithInformationScore(
     const Pose& pose) const {
   std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results =
-      getRaycastHitVoxelsBVH(pose);
+      getRaycastHitVoxels(pose);
   VoxelWithInformationSet voxel_set;
   FloatType total_information = 0;
 //  std::vector<FloatType> informations;
@@ -911,7 +1012,7 @@ bool ViewpointPlanner::generateNextViewpointEntry() {
 
   // Compute observed voxels and information and discard if too few voxels or too little information
   std::pair<VoxelWithInformationSet, FloatType> raycast_result =
-      getRaycastHitVoxelsWithInformationScoreBVH(pose);
+      getRaycastHitVoxelsWithInformationScore(pose);
   VoxelWithInformationSet& voxel_set = raycast_result.first;
   FloatType total_information = raycast_result.second;
 //    if (verbose) {
@@ -1245,6 +1346,7 @@ ViewpointPlanner::FloatType ViewpointPlanner::computeViewpointPathInformationUpp
   return information_upper_bound;
 }
 
+// TODO
 #pragma GCC push_options
 #pragma GCC optimize("O0")
 bool ViewpointPlanner::addMatchingStereoViewpointWithoutLock(
@@ -1770,7 +1872,7 @@ void ViewpointPlanner::computeViewpointTour() {
   }
 
   // Improve solution with 2 Opt
-#pragma omp_parallel for
+#pragma omp parallel for
   for (std::size_t i = 0; i < viewpoint_paths_.size(); ++i) {
     ViewpointPath& viewpoint_path = viewpoint_paths_[i];
     ViewpointPathComputationData& comp_data = viewpoint_paths_data_[i];

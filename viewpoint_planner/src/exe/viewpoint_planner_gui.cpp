@@ -9,6 +9,7 @@
 #include <iostream>
 #include <memory>
 
+#include <ait/boost.h>
 #include <boost/program_options.hpp>
 #include <boost/filesystem.hpp>
 
@@ -41,6 +42,9 @@ public:
     config_options.emplace(std::piecewise_construct,
         std::forward_as_tuple("motion_planner"),
         std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlanner::MotionPlannerType::Options())));
+    config_options.emplace(std::piecewise_construct,
+        std::forward_as_tuple("viewpoint_planner.gui"),
+        std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewerWindow::Options())));
     return config_options;
   }
 
@@ -53,7 +57,9 @@ public:
           dynamic_cast<ViewpointPlanner::Options*>(config_options.at("viewpoint_planner").get()),
           dynamic_cast<ViewpointPlanner::MotionPlannerType::Options*>(config_options.at("motion_planner").get()),
           std::move(planner_data));
-      window_ptr_ = new ViewerWindow(planner_ptr_);
+      window_ptr_ = new ViewerWindow(
+          *dynamic_cast<ViewerWindow::Options*>(config_options.at("viewpoint_planner.gui").get()),
+          planner_ptr_);
     }
 
     ~ViewpointPlannerGui() {

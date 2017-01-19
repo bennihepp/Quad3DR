@@ -10,6 +10,8 @@
 #include <octomap/octomap.h>
 #include <qglviewer.h>
 #include <QMainWindow>
+#include <ait/options.h>
+
 #include "../planner/viewpoint_planner.h"
 #include "viewer_widget.h"
 #include "viewer_info_panel.h"
@@ -21,7 +23,9 @@ class ViewerWindow : public QMainWindow {
 
  public:
 
-  ViewerWindow(ViewpointPlanner* planner, QWidget *parent = nullptr);
+  using Options = ViewerWidget::Options;
+
+  ViewerWindow(const Options& options, ViewpointPlanner* planner, QWidget *parent = nullptr);
 
   ~ViewerWindow();
 

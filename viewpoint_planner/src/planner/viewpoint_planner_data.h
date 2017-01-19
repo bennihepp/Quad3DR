@@ -10,34 +10,42 @@
 #include <ait/eigen.h>
 #include <ait/mLib.h>
 #include <memory>
+#include <ait/boost.h>
+#include <boost/serialization/access.hpp>
+#include <boost/serialization/split_member.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/filesystem.hpp>
 #include <ait/common.h>
 #include <ait/options.h>
 #include <ait/geometry.h>
-#include <ait/serialization.h>
 #include "../octree/occupancy_map.h"
 #include "../reconstruction/dense_reconstruction.h"
 #include "../bvh/bvh.h"
 
-struct NodeObject : ait::Serializable {
-  const static std::string kFileTag;
-
-  void write(std::ostream& out) const override {
-    ait::writeToStream(out, occupancy);
-    ait::writeToStream(out, observation_count);
-    ait::writeToStream(out, weight);
-  }
-
-  void read(std::istream& in) override {
-    ait::readFromStream(in, &occupancy);
-    ait::readFromStream(in, &observation_count);
-    ait::readFromStream(in, &weight);
-  }
-
+struct NodeObject {
   float occupancy;
   uint16_t observation_count;
   float weight;
+
+private:
+  // Boost serialization
+  friend class boost::serialization::access;
+
+  template <typename Archive>
+  void save(Archive& ar, const unsigned int version) const {
+    ar & occupancy;
+    ar & observation_count;
+    ar & weight;
+  }
+
+  template <typename Archive>
+  void load(Archive& ar, const unsigned int version) {
+    ar & occupancy;
+    ar & observation_count;
+    ar & weight;
+  }
+
+  BOOST_SERIALIZATION_SPLIT_MEMBER()
 };
 
 class ViewpointPlanner;

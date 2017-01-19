@@ -326,6 +326,9 @@ std::vector<std::size_t> ViewpointPlanner::swap2Opt(
 }
 
 ViewpointPlanner::FloatType ViewpointPlanner::computeTourLength(const ViewpointPath& viewpoint_path, const std::vector<std::size_t>& order) const {
+  if (order.empty()) {
+    return 0;
+  }
   FloatType tour_length = 0;
   for (auto it = order.begin(); it != order.end(); ++it) {
     auto next_it = it + 1;

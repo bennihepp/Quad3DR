@@ -10,12 +10,16 @@
 #include <iostream>
 #include <algorithm>
 #include <utility>
+#include <boost/serialization/access.hpp>
 #include <boost/iterator_adaptors.hpp>
 #include <ait/common.h>
 #include <ait/eigen.h>
 #include <ait/geometry.h>
 #include <ait/utilities.h>
-#include <ait/serialization.h>
+#if WITH_CUDA
+  #include <ait/cuda_utils.h>
+  #include "bvh.cuh"
+#endif
 
 namespace bvh {
 
@@ -23,8 +27,10 @@ using ait::Ray;
 using ait::RayData;
 using ait::BoundingBox3D;
 
-#pragma GCC push_options
-#pragma GCC optimize ("fast-math")
+#if __GNUC__ && !__CUDACC__
+  #pragma GCC push_options
+  #pragma GCC optimize ("fast-math")
+#endif
 
 template <typename FloatType = float>
 class BoundingBox3DInterface {
@@ -120,6 +126,13 @@ public:
   USE_FIXED_EIGEN_TYPES(FloatType)
   using NodeType = Node<ObjectType, FloatType>;
   using BoundingBoxType = BoundingBox3D<FloatType>;
+  using RayType = ait::Ray<FloatType>;
+  using RayDataType = ait::RayData<FloatType>;
+#if WITH_CUDA
+  using CudaNodeType = CudaNode<FloatType>;
+  using CudaTreeType = CudaTree<FloatType>;
+  using CudaRayType = CudaRay<FloatType>;
+#endif
 
   struct ObjectWithBoundingBox {
     BoundingBoxType bounding_box;
@@ -133,7 +146,7 @@ public:
     Vector3 intersection;
     NodeType* node;
     std::size_t depth;
-    float dist_sq;
+    FloatType dist_sq;
 
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   };
@@ -151,8 +164,8 @@ public:
   };
 
   struct IntersectionData {
-    RayData ray;
-    float min_range_sq;
+    RayDataType ray;
+    FloatType min_range_sq;
 
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   };
@@ -204,8 +217,18 @@ public:
   using ConstIterator = _Iterator<const NodeType>;
 
   Tree()
-  : root_(nullptr), stored_as_vector_(false), owns_objects_(false), depth_(0), num_nodes_(0), num_leaf_nodes_(0) {}
+  : root_(nullptr), stored_as_vector_(false), owns_objects_(false), depth_(0), num_nodes_(0), num_leaf_nodes_(0) {
+#if WITH_CUDA
+    cuda_tree_ = nullptr;
+    cuda_stack_size_ = 16 * 1024;
+#endif
+  }
 
+#if WITH_CUDA
+  void setCudaStackSize(const std::size_t cuda_stack_size) {
+    cuda_stack_size_ = cuda_stack_size;
+  }
+#endif
 //  Tree(const Node*, bool copy = true) {
 //    root_ = nullptr;
 //    build(map, copy);
@@ -215,6 +238,11 @@ public:
 
   ~Tree() {
     clear();
+#if WITH_CUDA
+    if (cuda_tree_ != nullptr) {
+      delete cuda_tree_;
+    }
+#endif
   }
 
   Iterator begin() {
@@ -318,7 +346,7 @@ public:
   }
 
   // Cannot be const because BBoxIntersectionResult contains a non-const pointer to a node
-  std::pair<bool, IntersectionResult> intersects(const Ray& ray, FloatType min_range = 0, FloatType max_range = -1) {
+  std::pair<bool, IntersectionResult> intersects(const RayType& ray, FloatType min_range = 0, FloatType max_range = -1) {
     IntersectionData data;
     data.ray.origin = ray.origin;
     data.ray.direction = ray.direction;
@@ -335,6 +363,86 @@ public:
     return std::make_pair(does_intersect, result);
   }
 
+#if WITH_CUDA
+  // Cannot be const because BBoxIntersectionResult contains a non-const pointer to a node
+  std::vector<IntersectionResult> raycastCuda(
+      const Matrix4x4& intrinsics,
+      const Matrix3x4& extrinsics,
+      const std::size_t x_start, const std::size_t x_end,
+      const std::size_t y_start, const std::size_t y_end,
+      FloatType min_range = 0, FloatType max_range = -1) {
+    ensureCudaTreeIsInitialized();
+    CudaMatrix4x4<FloatType> cuda_intrinsics;
+    cuda_intrinsics.copyFrom(intrinsics.data(), CudaMatrix4x4<FloatType>::ColumnMajor);
+    CudaMatrix3x4<FloatType> cuda_extrinsics;
+    cuda_extrinsics.copyFrom(extrinsics.data(), CudaMatrix3x4<FloatType>::ColumnMajor);
+//    std::cout << "intrinsics: " << intrinsics << std::endl;
+//    cuda_intrinsics.print();
+//    std::cout << "extrinsics: " << extrinsics << std::endl;
+//    cuda_extrinsics.print();
+    using CudaResultType = typename CudaTreeType::CudaIntersectionResult;
+    const std::vector<CudaResultType> cuda_results =
+        cuda_tree_->raycastRecursive(
+            cuda_intrinsics,
+            cuda_extrinsics,
+            x_start, x_end,
+            y_start, y_end,
+            min_range, max_range);
+//    const std::vector<CudaResultType> cuda_results =
+//        cuda_tree_->raycastIterative(
+//            cuda_intrinsics,
+//            cuda_extrinsics,
+//            x_start, x_end,
+//            y_start, y_end,
+//            min_range, max_range);
+    std::vector<IntersectionResult> results(cuda_results.size());
+#pragma omp parallel for
+    for (std::size_t i = 0; i < cuda_results.size(); ++i) {
+      const CudaResultType& cuda_result = cuda_results[i];
+      IntersectionResult& result = results[i];
+      result.depth = cuda_result.depth;
+      result.dist_sq = cuda_result.dist_sq;
+      result.intersection(0) = cuda_result.intersection(0);
+      result.intersection(1) = cuda_result.intersection(1);
+      result.intersection(2) = cuda_result.intersection(2);
+      result.node = reinterpret_cast<NodeType*>(cuda_result.node);
+    }
+    return results;
+  }
+
+  // Cannot be const because BBoxIntersectionResult contains a non-const pointer to a node
+  std::vector<IntersectionResult> intersectsCuda(
+      const std::vector<RayType>& rays, FloatType min_range = 0, FloatType max_range = -1) {
+    ensureCudaTreeIsInitialized();
+    std::vector<CudaRayType> cuda_rays(rays.size());
+#pragma omp parallel for
+    for (std::size_t i = 0; i < rays.size(); ++i) {
+      const RayType& ray = rays[i];
+      CudaRayType& cuda_ray = cuda_rays[i];
+      cuda_ray.origin.copyFrom(ray.origin.data());
+      cuda_ray.direction.copyFrom(ray.direction.data());
+    }
+    using CudaResultType = typename CudaTreeType::CudaIntersectionResult;
+    const std::vector<CudaResultType> cuda_results =
+        cuda_tree_->intersectsRecursive(cuda_rays, min_range, max_range);
+//    const std::vector<CudaResultType> cuda_results =
+//        cuda_tree_->intersectsIterative(cuda_rays, min_range, max_range);
+    std::vector<IntersectionResult> results(cuda_results.size());
+#pragma omp parallel for
+    for (std::size_t i = 0; i < cuda_results.size(); ++i) {
+      const CudaResultType& cuda_result = cuda_results[i];
+      IntersectionResult& result = results[i];
+      result.depth = cuda_result.depth;
+      result.dist_sq = cuda_result.dist_sq;
+      result.intersection(0) = cuda_result.intersection(0);
+      result.intersection(1) = cuda_result.intersection(1);
+      result.intersection(2) = cuda_result.intersection(2);
+      result.node = reinterpret_cast<NodeType*>(cuda_result.node);
+    }
+    return results;
+  }
+#endif
+
   std::vector<BBoxIntersectionResult> intersects(const BoundingBoxType& bbox) {
     std::vector<BBoxIntersectionResult> results;
     intersectsRecursive<BBoxIntersectionResult>(bbox, getRoot(), 0, &results);
@@ -347,158 +455,121 @@ public:
     return results;
   }
 
-  void read(const std::string& filename) {
-    std::ifstream in(filename, std::ios::binary);
-    if (in) {
-      read(in);
-    }
-    else {
-      throw AIT_EXCEPTION(std::string("Unable to open file for reading: ") + filename);
-    }
-  }
-
-  void read(std::istream& in) {
-    clear();
-    Reader reader;
-    reader.read(in, this);
-  }
-
-  void write(const std::string& filename) const {
-    std::ofstream out(filename, std::ios::binary);
-    if (out) {
-      write(out);
-    }
-    else {
-      throw AIT_EXCEPTION(std::string("Unable to open file for writing: ") + filename);
-    }
-  }
-
-  void write(std::ostream& out) const {
-    Writer writer;
-    writer.write(out, this);
-  }
-
 private:
-  const static std::string kFileTag;
+  // Boost serialization
+  friend class boost::serialization::access;
 
-  struct Writer {
-    Writer()
-    : node_counter_(0) {}
-
-    void write(std::ostream& out, const Tree* tree) {
-      // Write some metadata
-      out << kFileTag << std::endl;
-      out << ObjectType::kFileTag << std::endl;
-      ait::writeToStream<std::size_t>(out, tree->getDepth());
-      ait::writeToStream<std::size_t>(out, tree->getNumOfNodes());
-      ait::writeToStream<std::size_t>(out, tree->getNumOfLeafNodes());
-      // Write out all nodes
-      std::deque<const NodeType*> node_queue;
-      node_queue.push_front(tree->getRoot());
-      while (!node_queue.empty()) {
-        const NodeType* node = node_queue.back();
-        node_queue.pop_back();
-        // Write child indices to disk and push childs into writing list
-        if (node->hasLeftChild()) {
-          node_queue.push_front(node->getLeftChild());
-          ait::writeToStream<std::size_t>(out, node_counter_ + node_queue.size());
-        }
-        else {
-          ait::writeToStream<std::size_t>(out, 0);
-        }
-        if (node->getRightChild()) {
-          node_queue.push_front(node->getRightChild());
-          ait::writeToStream<std::size_t>(out, node_counter_ + node_queue.size());
-        }
-        else {
-          ait::writeToStream<std::size_t>(out, 0);
-        }
-        node->getBoundingBox().write(out);
-        if (node->getObject() != nullptr) {
-          ait::writeToStream<bool>(out, true);
-          node->getObject()->write(out);
-        }
-        else {
-          ait::writeToStream<bool>(out, false);
-        }
-        ++node_counter_;
+  template <typename Archive>
+  void save(Archive& ar, const unsigned int version) const {
+    // Write some metadata
+    ar & getDepth();
+    ar & getNumOfNodes();
+    ar & getNumOfLeafNodes();
+    // Write out all nodes
+    std::deque<const NodeType*> node_queue;
+    node_queue.push_front(getRoot());
+    std::size_t node_counter = 0;
+    while (!node_queue.empty()) {
+      const NodeType* node = node_queue.back();
+      node_queue.pop_back();
+      // Write child indices to disk and push childs into writing list
+      if (node->hasLeftChild()) {
+        node_queue.push_front(node->getLeftChild());
+        const std::size_t left_child_index = node_counter + node_queue.size();
+        ar & left_child_index;
       }
+      else {
+        const std::size_t left_child_index = 0;
+        ar & left_child_index;
+      }
+      if (node->hasRightChild()) {
+        node_queue.push_front(node->getRightChild());
+        std::size_t right_child_index = node_counter + node_queue.size();
+        ar & right_child_index;
+      }
+      else {
+        const std::size_t right_child_index = 0;
+        ar & right_child_index;
+      }
+      ar & node->getBoundingBox();
+      if (node->getObject() != nullptr) {
+        ar & true;
+        ar & (*node->getObject());
+      }
+      else {
+        ar & false;
+      }
+      ++node_counter;
     }
+  }
 
-    std::size_t node_counter_;
-  };
-
-  struct Reader {
-    Reader() {}
-
-    void read(std::istream& in, Tree* tree) {
-      // Read some metadata
-      std::string tree_tag;
-      std::getline(in, tree_tag);
-      if (tree_tag != kFileTag) {
-        throw AIT_EXCEPTION(std::string("Found unexpected tree tag: ") + tree_tag);
-      }
-      std::string object_tag;
-      std::getline(in, object_tag);
-      if (object_tag != ObjectType::kFileTag) {
-        throw AIT_EXCEPTION(std::string("Found unexpected object tag: ") + object_tag);
-      }
-      std::size_t depth = ait::readFromStream<std::size_t>(in);
-      std::size_t num_of_nodes = ait::readFromStream<std::size_t>(in);
-      std::size_t num_of_leaf_nodes = ait::readFromStream<std::size_t>(in);
-      std::cout << "Tree has depth " << depth << ", " << num_of_nodes << " nodes " << " and " << num_of_leaf_nodes << " leaf nodes" << std::endl;
-      // Read nodes from disk
-      std::vector<NodeType> nodes;
-      std::size_t leaf_counter = 0;
-      nodes.resize(num_of_nodes);
-      for (auto it = nodes.begin(); it != nodes.end(); ++it) {
+  template <typename Archive>
+  void load(Archive& ar, const unsigned int version) {
+    std::size_t depth;
+    std::size_t num_of_nodes;
+    std::size_t num_of_leaf_nodes;
+    ar & depth;
+    ar & num_of_nodes;
+    ar & num_of_leaf_nodes;
+    std::cout << "Tree has depth " << depth << ", " << num_of_nodes << " nodes " << " and " << num_of_leaf_nodes << " leaf nodes" << std::endl;
+    // Read nodes from disk
+    std::vector<NodeType> nodes;
+    std::size_t leaf_counter = 0;
+    nodes.resize(num_of_nodes);
+    for (auto it = nodes.begin(); it != nodes.end(); ++it) {
 //        std::cout << "Reading node " << (it - nodes.begin()) << " of " << nodes.size() << std::endl;
-        std::size_t left_child_index = ait::readFromStream<std::size_t>(in);
-        std::size_t right_child_index = ait::readFromStream<std::size_t>(in);
-        NodeType& node = *it;
-        if (left_child_index == 0) {
-          node.left_child_ = nullptr;
-        }
-        else {
-          node.left_child_ = &nodes[left_child_index];
-        }
-        if (right_child_index == 0) {
-          node.right_child_ = nullptr;
-        }
-        else {
-          node.right_child_ = &nodes[right_child_index];
-        }
-        node.bounding_box_.read(in);
-        bool has_object = ait::readFromStream<bool>(in);
-        if (has_object) {
-          node.object_ = new ObjectType();
-          node.object_->read(in);
-        }
-        else {
-          node.object_ = nullptr;
-        }
-        if (node.isLeaf()) {
-          ++leaf_counter;
-        }
+      std::size_t left_child_index;
+      std::size_t right_child_index;
+      ar & left_child_index;
+      ar & right_child_index;
+      AIT_ASSERT(left_child_index < num_of_nodes);
+      AIT_ASSERT(right_child_index < num_of_nodes);
+      NodeType& node = *it;
+      if (left_child_index == 0) {
+        node.left_child_ = nullptr;
       }
-      std::cout << "leaf nodes: " << leaf_counter << std::endl;
-
-      // Update tree
-//      tree->depth_ = depth;
-//      tree->num_nodes_ = num_of_nodes;
-//      tree->num_leaf_nodes_ = num_of_leaf_nodes;
-      tree->nodes_ = std::move(nodes);
-      tree->root_ = &tree->nodes_.front();
-      tree->stored_as_vector_ = true;
-      tree->owns_objects_ = true;
-      tree->computeInfo();
-      tree->printInfo();
-      AIT_ASSERT_STR(tree->getDepth() == depth
-          && tree->getNumOfNodes() == num_of_nodes
-          && tree->getNumOfLeafNodes() == num_of_leaf_nodes,
-          "The tree properties are not as expected");
+      else {
+        node.left_child_ = &nodes[left_child_index];
+      }
+      if (right_child_index == 0) {
+        node.right_child_ = nullptr;
+      }
+      else {
+        node.right_child_ = &nodes[right_child_index];
+      }
+      ar & node.bounding_box_;
+      bool has_object;
+      ar & has_object;
+      if (has_object) {
+        node.object_ = new ObjectType();
+        ar & (*node.object_);
+      }
+      else {
+        node.object_ = nullptr;
+      }
+      if (node.isLeaf()) {
+        ++leaf_counter;
+      }
     }
-  };
+    std::cout << "leaf nodes: " << leaf_counter << std::endl;
+
+    // Update tree
+//      depth_ = depth;
+//      num_nodes_ = num_of_nodes;
+//      num_leaf_nodes_ = num_of_leaf_nodes;
+    nodes_ = std::move(nodes);
+    root_ = &nodes_.front();
+    stored_as_vector_ = true;
+    owns_objects_ = true;
+    computeInfo();
+    printInfo();
+    AIT_ASSERT_STR(getDepth() == depth
+        && getNumOfNodes() == num_of_nodes
+        && getNumOfLeafNodes() == num_of_leaf_nodes,
+        "The tree properties are not as expected");
+  }
+
+  BOOST_SERIALIZATION_SPLIT_MEMBER()
 
   void computeInfo() {
     num_nodes_ = 0;
@@ -761,6 +832,17 @@ private:
     delete node;
   }
 
+#if WITH_CUDA
+  void ensureCudaTreeIsInitialized() {
+    if (cuda_tree_ == nullptr) {
+      std::cout << "Previous CUDA stack size: " << ait::CudaManager::getStackSize() << std::endl;
+      ait::CudaManager::setStackSize(cuda_stack_size_);
+      CudaNodeType* cuda_root = reinterpret_cast<CudaNodeType*>(getRoot());
+      cuda_tree_ = CudaTreeType::createCopyFromHostTree(cuda_root, getNumOfNodes(), getDepth());
+    }
+  }
+#endif
+
 //  std::vector<NodeType> nodes_;
   NodeType* root_;
   std::vector<NodeType> nodes_;
@@ -772,11 +854,15 @@ private:
 
   mutable std::unordered_map<std::size_t, const NodeType*> index_voxel_map_;
   mutable std::unordered_map<const NodeType*, std::size_t> voxel_index_map_;
+
+#if WITH_CUDA
+  CudaTreeType* cuda_tree_;
+  std::size_t cuda_stack_size_;
+#endif
 };
 
-template <typename ObjectType, typename FloatType>
-const std::string Tree<ObjectType, FloatType>::kFileTag = "BVHTree";
-
-#pragma GCC pop_options
+#if __GNUC__ && !__CUDACC__
+  #pragma GCC pop_options
+#endif
 
 }  // namespace bvh

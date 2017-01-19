@@ -12,7 +12,7 @@
 
 using namespace std;
 
-ViewerWindow::ViewerWindow(ViewpointPlanner* planner, QWidget *parent)
+ViewerWindow::ViewerWindow(const Options& options, ViewpointPlanner* planner, QWidget *parent)
     : QMainWindow(parent), planner_(planner), viewer_widget_(nullptr) {
     // Info panel at the right side
     info_panel_ = new ViewerInfoPanel(this);
@@ -30,7 +30,7 @@ ViewerWindow::ViewerWindow(ViewpointPlanner* planner, QWidget *parent)
     tab_dock->setWidget(panel_tab_);
     this->addDockWidget(Qt::RightDockWidgetArea, tab_dock);
 
-    viewer_widget_ = ViewerWidget::create(planner_, settings_panel_, planner_panel_, this);
+    viewer_widget_ = ViewerWidget::create(options, planner_, settings_panel_, planner_panel_, this);
     this->setCentralWidget(viewer_widget_);
     viewer_widget_->showOctree(planner_->getOctree());
     viewer_widget_->showSparseReconstruction(planner_->getReconstruction());

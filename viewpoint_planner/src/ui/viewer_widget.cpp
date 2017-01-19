@@ -36,16 +36,23 @@
 #include <cmath>
 #include <algorithm>
 #include <boost/assign.hpp>
+#include <rapidjson/document.h>
+#include <rapidjson/prettywriter.h>
+#include <rapidjson/stringbuffer.h>
 #include <manipulatedCameraFrame.h>
+#include <ait/qt_utils.h>
 #include <ait/utilities.h>
 #include <ait/pose.h>
 #include <ait/color.h>
 
 using namespace std;
 
-ViewerWidget::ViewerWidget(const QGLFormat& format, ViewpointPlanner* planner, ViewerSettingsPanel* settings_panel,
+ViewerWidget::ViewerWidget(const Options& options, const QGLFormat& format,
+    ViewpointPlanner* planner, ViewerSettingsPanel* settings_panel,
     ViewerPlannerPanel* planner_panel, QWidget *parent)
     : QGLViewer(format, parent),
+      options_(options),
+      web_socket_server_(nullptr),
       custom_camera_(0.5, 1e5),
       z_near_coefficient_(0.01),
       planner_(planner), initialized_(false),
@@ -53,7 +60,8 @@ ViewerWidget::ViewerWidget(const QGLFormat& format, ViewpointPlanner* planner, V
       octree_(nullptr), sparse_recon_(nullptr),
       dense_points_(nullptr), dense_points_size_(1),
       poisson_mesh_(nullptr),
-      display_axes_(true), aspect_ratio_(-1),
+      aspect_ratio_(-1),
+      bbox_line_width_(5),
       viewpoint_motion_line_width_(5),
       min_information_filter_(0),
       viewpoint_color_mode_(Fixed),
@@ -70,12 +78,14 @@ ViewerWidget::ViewerWidget(const QGLFormat& format, ViewpointPlanner* planner, V
     connect(settings_panel_, SIGNAL(colorFlagsChanged(uint32_t)), this, SLOT(setColorFlags(uint32_t)));
     connect(settings_panel_, SIGNAL(voxelAlphaChanged(double)), this, SLOT(setVoxelAlpha(double)));
     connect(settings_panel_, SIGNAL(drawFreeVoxelsChanged(bool)), this, SLOT(setDrawFreeVoxels(bool)));
-    connect(settings_panel_, SIGNAL(displayAxesChanged(bool)), this, SLOT(setDisplayAxes(bool)));
+    connect(settings_panel_, SIGNAL(drawAxesChanged(bool)), this, SLOT(setDrawAxes(bool)));
     connect(settings_panel_, SIGNAL(drawSingleBinChanged(bool)), this, SLOT(setDrawSingleBin(bool)));
     connect(settings_panel_, SIGNAL(drawCamerasChanged(bool)), this, SLOT(setDrawCameras(bool)));
     connect(settings_panel_, SIGNAL(drawSparsePointsChanged(bool)), this, SLOT(setDrawSparsePoints(bool)));
     connect(settings_panel_, SIGNAL(drawDensePointsChanged(bool)), this, SLOT(setDrawDensePoints(bool)));
     connect(settings_panel_, SIGNAL(drawPoissonMeshChanged(bool)), this, SLOT(setDrawPoissonMesh(bool)));
+    connect(settings_panel_, SIGNAL(drawRegionOfInterestChanged(bool)), this, SLOT(setDrawRegionOfInterest(bool)));
+    connect(settings_panel_, SIGNAL(drawBvhBboxChanged(bool)), this, SLOT(setDrawBvhBbox(bool)));
     connect(settings_panel_, SIGNAL(refreshTree(void)), this, SLOT(refreshTree(void)));
     connect(settings_panel_, SIGNAL(drawRaycastChanged(bool)), this, SLOT(setDrawRaycast(bool)));
     connect(settings_panel_, SIGNAL(captureRaycast(void)), this, SLOT(captureRaycast(void)));
@@ -162,6 +172,10 @@ ViewerWidget::ViewerWidget(const QGLFormat& format, ViewpointPlanner* planner, V
     planner_thread_.setOperation(ViewpointPlannerThread::Operation::VIEWPOINT_UPDATE);
     planner_thread_.start();
     continuePlannerThread();
+
+    if (options_.websocket_enable) {
+      web_socket_server_ = new WebSocketServer(options_.websocket_port, this);
+    }
 }
 
 ViewerWidget::~ViewerWidget() {
@@ -219,6 +233,10 @@ void ViewerWidget::init() {
   dense_points_drawer_.setDrawPoints(false);
   poisson_mesh_drawer_.init();
   poisson_mesh_drawer_.setDrawTriangles(false);
+  region_of_interest_drawer_.init();
+  region_of_interest_drawer_.setDrawLines(false);
+  bvh_bbox_drawer_.init();
+  bvh_bbox_drawer_.setDrawLines(false);
   viewpoint_path_drawer_.init();
   viewpoint_graph_drawer_.init();
   viewpoint_motion_line_drawer_.init();
@@ -234,13 +252,15 @@ void ViewerWidget::init() {
   if (poisson_mesh_ != nullptr) {
     showPoissonMesh(poisson_mesh_);
   }
+  showRegionOfInterest(planner_->getRoi());
+  showBvhBbox(planner_->getBvhBbox());
 }
 
 void ViewerWidget::initAxesDrawer() {
   axes_drawer_.init();
   std::vector<OGLLineData> line_data;
-  FloatType axes_length = 5;
-  OGLVertexData axes_origin(5, 5, 20);
+  FloatType axes_length = 1;
+  OGLVertexData axes_origin(0, 0, 0);
   OGLVertexData axes_end_x(axes_origin);
   axes_end_x.x += axes_length;
   OGLVertexData axes_end_y(axes_origin);
@@ -280,14 +300,14 @@ void ViewerWidget::showOctree(const ViewpointPlanner::OccupancyMapType* octree) 
     double minX, minY, minZ, maxX, maxY, maxZ;
     minX = minY = minZ = -10; // min bbx for drawing
     maxX = maxY = maxZ = 10;  // max bbx for drawing
-    double sizeX, sizeY, sizeZ;
-    sizeX = sizeY = sizeZ = 0.;
+//    double sizeX, sizeY, sizeZ;
+//    sizeX = sizeY = sizeZ = 0.;
     size_t memoryUsage = 0;
     size_t num_nodes = 0;
 
     ait::Timer timer;
     // get map bbx
-    double lminX, lminY, lminZ, lmaxX, lmaxY, lmaxZ;
+//    double lminX, lminY, lminZ, lmaxX, lmaxY, lmaxZ;
     for (auto it = octree_->begin_leafs(); it != octree_->end_leafs(); ++it) {
       if (it->getObservationCount() == 0) {
         continue;
@@ -372,7 +392,7 @@ void ViewerWidget::showDensePoints(const ViewpointPlanner::PointCloudType* dense
 //  }
 //  // End of debuggin code
 //  // Debugging code for visualizing BVH bounding box
-//  const auto bbox = planner_->getBVHTree().getRoot()->getBoundingBox();
+//  const auto bbox = planner_->getBvhTree().getRoot()->getBoundingBox();
 //  for (std::size_t ix = 0; ix <= 100; ++ix) {
 //    for (std::size_t iy = 0; iy <= 100; ++iy) {
 //      for (std::size_t iz = 0; iz <= 100; ++iz) {
@@ -423,6 +443,88 @@ void ViewerWidget::showPoissonMesh(const ViewpointPlanner::MeshType* poisson_mes
   }
   std::cout << "Uploading " << triangle_data.size() << " triangles" << std::endl;
   poisson_mesh_drawer_.upload(triangle_data);
+}
+
+void ViewerWidget::showRegionOfInterest(const ViewpointPlanner::RegionType& roi) {
+  std::cout << "Showing region of interest" << std::endl;
+  std::vector<OGLLineData> line_data;
+  const ViewpointPlanner::RegionType::Polygon2DType& polygon = roi.getPolygon2D();
+  line_data.reserve(polygon.getVertexCount() * 3);
+  const ait::Color4<FloatType> c(1, 1, 0, 1);
+  for (size_t i = 0; i < polygon.getVertexCount(); ++i) {
+    std::size_t prev_i;
+    if (i == 0) {
+      prev_i = polygon.getVertexCount() - 1;
+    }
+    else {
+      prev_i = i - 1;
+    }
+    const auto v1 = polygon.getVertex(prev_i);
+    const auto v2 = polygon.getVertex(i);
+    OGLLineData line;
+    line.vertex1 = OGLVertexDataRGBA(v1(0), v1(1), roi.getLowerPlaneZ(), c.r(), c.g(), c.b(), c.a());
+    line.vertex2 = OGLVertexDataRGBA(v2(0), v2(1), roi.getLowerPlaneZ(), c.r(), c.g(), c.b(), c.a());
+    line_data.push_back(line);
+    line.vertex1 = OGLVertexDataRGBA(v1(0), v1(1), roi.getUpperPlaneZ(), c.r(), c.g(), c.b(), c.a());
+    line.vertex2 = OGLVertexDataRGBA(v2(0), v2(1), roi.getUpperPlaneZ(), c.r(), c.g(), c.b(), c.a());
+    line_data.push_back(line);
+    line.vertex1 = OGLVertexDataRGBA(v1(0), v1(1), roi.getLowerPlaneZ(), c.r(), c.g(), c.b(), c.a());
+    line.vertex2 = OGLVertexDataRGBA(v1(0), v1(1), roi.getUpperPlaneZ(), c.r(), c.g(), c.b(), c.a());
+    line_data.push_back(line);
+  }
+  std::cout << "Uploading " << line_data.size() << " lines" << std::endl;
+  region_of_interest_drawer_.upload(line_data);
+}
+
+void ViewerWidget::showBvhBbox(const ViewpointPlanner::BoundingBoxType& bvh_bbox) {
+  std::cout << "Showing BVH bounding box" << std::endl;
+  std::vector<OGLLineData> line_data;
+  line_data.reserve(4 * 3);
+  const ait::Color4<FloatType> c(1, 0, 0, 1);
+  OGLLineData line;
+  const Vector3 min = bvh_bbox.getMinimum();
+  const Vector3 max = bvh_bbox.getMaximum();
+  // Draw lower rectangle
+  line.vertex1 = OGLVertexDataRGBA(min(0), min(1), min(2), c.r(), c.g(), c.b(), c.a());
+  line.vertex2 = OGLVertexDataRGBA(max(0), min(1), min(2), c.r(), c.g(), c.b(), c.a());
+  line_data.push_back(line);
+  line.vertex1 = OGLVertexDataRGBA(max(0), min(1), min(2), c.r(), c.g(), c.b(), c.a());
+  line.vertex2 = OGLVertexDataRGBA(max(0), max(1), min(2), c.r(), c.g(), c.b(), c.a());
+  line_data.push_back(line);
+  line.vertex1 = OGLVertexDataRGBA(max(0), max(1), min(2), c.r(), c.g(), c.b(), c.a());
+  line.vertex2 = OGLVertexDataRGBA(min(0), max(1), min(2), c.r(), c.g(), c.b(), c.a());
+  line_data.push_back(line);
+  line.vertex1 = OGLVertexDataRGBA(min(0), max(1), min(2), c.r(), c.g(), c.b(), c.a());
+  line.vertex2 = OGLVertexDataRGBA(min(0), min(1), min(2), c.r(), c.g(), c.b(), c.a());
+  line_data.push_back(line);
+  // Draw upper rectangle
+  line.vertex1 = OGLVertexDataRGBA(min(0), min(1), max(2), c.r(), c.g(), c.b(), c.a());
+  line.vertex2 = OGLVertexDataRGBA(max(0), min(1), max(2), c.r(), c.g(), c.b(), c.a());
+  line_data.push_back(line);
+  line.vertex1 = OGLVertexDataRGBA(max(0), min(1), max(2), c.r(), c.g(), c.b(), c.a());
+  line.vertex2 = OGLVertexDataRGBA(max(0), max(1), max(2), c.r(), c.g(), c.b(), c.a());
+  line_data.push_back(line);
+  line.vertex1 = OGLVertexDataRGBA(max(0), max(1), max(2), c.r(), c.g(), c.b(), c.a());
+  line.vertex2 = OGLVertexDataRGBA(min(0), max(1), max(2), c.r(), c.g(), c.b(), c.a());
+  line_data.push_back(line);
+  line.vertex1 = OGLVertexDataRGBA(min(0), max(1), max(2), c.r(), c.g(), c.b(), c.a());
+  line.vertex2 = OGLVertexDataRGBA(min(0), min(1), max(2), c.r(), c.g(), c.b(), c.a());
+  line_data.push_back(line);
+  // Draw sides
+  line.vertex1 = OGLVertexDataRGBA(min(0), min(1), min(2), c.r(), c.g(), c.b(), c.a());
+  line.vertex2 = OGLVertexDataRGBA(min(0), min(1), max(2), c.r(), c.g(), c.b(), c.a());
+  line_data.push_back(line);
+  line.vertex1 = OGLVertexDataRGBA(max(0), min(1), min(2), c.r(), c.g(), c.b(), c.a());
+  line.vertex2 = OGLVertexDataRGBA(max(0), min(1), max(2), c.r(), c.g(), c.b(), c.a());
+  line_data.push_back(line);
+  line.vertex1 = OGLVertexDataRGBA(min(0), max(1), min(2), c.r(), c.g(), c.b(), c.a());
+  line.vertex2 = OGLVertexDataRGBA(min(0), max(1), max(2), c.r(), c.g(), c.b(), c.a());
+  line_data.push_back(line);
+  line.vertex1 = OGLVertexDataRGBA(max(0), max(1), min(2), c.r(), c.g(), c.b(), c.a());
+  line.vertex2 = OGLVertexDataRGBA(max(0), max(1), max(2), c.r(), c.g(), c.b(), c.a());
+  line_data.push_back(line);
+  std::cout << "Uploading " << line_data.size() << " lines" << std::endl;
+  bvh_bbox_drawer_.upload(line_data);
 }
 
 void ViewerWidget::showViewpointGraph(const std::size_t selected_index /*= (std::size_t)-1*/) {
@@ -488,7 +590,7 @@ void ViewerWidget::showViewpointGraph(const std::size_t selected_index /*= (std:
   std::vector<typename ViewpointDrawer<FloatType>::Color4> colors;
   const ait::ColorMapHot<FloatType> cmap;
   for (const auto& entry : viewpoint_graph_copy_) {
-    if (viewpoint_selected_component_ >= 0 && components[std::get<0>(entry)] != viewpoint_selected_component_) {
+    if (viewpoint_selected_component_ >= 0 && components[std::get<0>(entry)] != (std::size_t)viewpoint_selected_component_) {
       continue;
     }
     FloatType total_information = std::get<2>(entry);
@@ -634,7 +736,6 @@ void ViewerWidget::showViewpointGraphMotions(const std::size_t selected_index) {
   std::vector<OGLLineData> lines;
 //  const OGLColorData line_color(0.7f, 0.1f, 0.0f, 1.0f);
   const ait::ColorMapHot<FloatType> cmap;
-  const ViewpointPlanner::ViewpointEntryVector& viewpoint_entries = planner_->getViewpointEntries();
   ViewpointPlanner::ViewpointGraph& viewpoint_graph = planner_->getViewpointGraph();
   auto edges = viewpoint_graph.getEdgesByNode(selected_index);
   for (auto it = edges.begin(); it != edges.end(); ++it) {
@@ -808,8 +909,17 @@ void ViewerWidget::captureRaycast() {
   Pose camera_pose = getCameraPose();
 //  std::cout << "raycast pose: " << camera_pose << std::endl;
 //  std::vector<std::pair<ViewpointPlanner::ConstTreeNavigatorType, FloatType>> raycast_results = planner_->getRaycastHitVoxels(camera_pose);
-  std::cout << "BVH bounding box: " << planner_->getBVHTree().getRoot()->getBoundingBox() << std::endl;
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results = planner_->getRaycastHitVoxelsBVH(camera_pose);
+  std::cout << "BVH bounding box: " << planner_->getBvhTree().getRoot()->getBoundingBox() << std::endl;
+#if WITH_CUDA
+//  // Test code for Cuda raycast
+//  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results_non_cuda
+//    = planner_->getRaycastHitVoxels(camera_pose);
+//  std::cout << "Non-cuda raycast hit " << raycast_results_non_cuda.size() << " voxels" << std::endl;
+//  // End of test code
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results = planner_->getRaycastHitVoxelsCuda(camera_pose);
+#else
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results = planner_->getRaycastHitVoxels(camera_pose);
+#endif
   std::cout << "Raycast hit " << raycast_results.size() << " voxels" << std::endl;
   std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, FloatType>> tmp;
   tmp.reserve(raycast_results.size());
@@ -824,12 +934,19 @@ void ViewerWidget::captureRaycast() {
 void ViewerWidget::captureRaycastWindow(const std::size_t width, const std::size_t height) {
   Pose camera_pose = getCameraPose();
 //  std::cout << "raycast pose: " << camera_pose << std::endl;
-//  std::vector<std::pair<ViewpointPlanner::ConstTreeNavigatorType, FloatType>> raycast_results = planner_->getRaycastHitVoxels(camera_pose);
+#if WITH_CUDA
+//  // Test code for Cuda raycast
+//  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results_non_cuda
+//    = planner_->getRaycastHitVoxels(camera_pose, width, height);
+//  std::cout << "Non-cuda raycast hit " << raycast_results_non_cuda.size() << " voxels" << std::endl;
+//  // End of test code
   std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results
-  = planner_->getRaycastHitVoxelsBVH(camera_pose, width, height);
+    = planner_->getRaycastHitVoxelsCuda(camera_pose, width, height);
+#else
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results
+    = planner_->getRaycastHitVoxels(camera_pose, width, height);
+#endif
   std::cout << "Raycast hit " << raycast_results.size() << " voxels" << std::endl;
-  std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, FloatType>> tmp;
-  tmp.reserve(raycast_results.size());
   std::cout << "Nodes:" << std::endl;
   for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
     std::cout << "  position=" << it->node->getBoundingBox().getCenter().transpose() << std::endl;
@@ -837,16 +954,60 @@ void ViewerWidget::captureRaycastWindow(const std::size_t width, const std::size
 //  std::cout << "Node with weight > 0.5" << std::endl;
 //  for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
 //    if (it->node->getObject()->weight > 0.5) {
-//      std::cout << "  &node_idx=" << planner_->getBVHTree().getVoxelIndexMap().at(it->node)
+//      std::cout << "  &node_idx=" << planner_->getBvhTree().getVoxelIndexMap().at(it->node)
 //          << ", weight=" << it->node->getObject()->weight
 //          << ", obs_count=" << it->node->getObject()->observation_count << std::endl;
 //    }
 //  }
+  std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, FloatType>> tmp;
+  tmp.reserve(raycast_results.size());
   for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
     FloatType information = planner_->computeInformationScore(*it);
     tmp.push_back(std::make_pair(*it, information));
   }
   octree_drawer_.updateRaycastVoxels(tmp);
+  update();
+}
+
+void ViewerWidget::captureRaycastCenter() {
+  const std::size_t width = 0;
+  const std::size_t height = 0;
+  Pose camera_pose = getCameraPose();
+//  std::cout << "raycast pose: " << camera_pose << std::endl;
+#if WITH_CUDA
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results
+    = planner_->getRaycastHitVoxelsCuda(camera_pose, width, height);
+#else
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results
+    = planner_->getRaycastHitVoxels(camera_pose, width, height);
+#endif
+  AIT_ASSERT(raycast_results.size() <= 1);
+  std::cout << "Raycast hit " << raycast_results.size() << " voxels" << std::endl;
+  std::cout << "Nodes:" << std::endl;
+  for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
+    std::cout << "  position=" << it->node->getBoundingBox().getCenter().transpose() << std::endl;
+  }
+//  std::cout << "Node with weight > 0.5" << std::endl;
+//  for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
+//    if (it->node->getObject()->weight > 0.5) {
+//      std::cout << "  &node_idx=" << planner_->getBvhTree().getVoxelIndexMap().at(it->node)
+//          << ", weight=" << it->node->getObject()->weight
+//          << ", obs_count=" << it->node->getObject()->observation_count << std::endl;
+//    }
+//  }
+  std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, FloatType>> tmp;
+  tmp.reserve(raycast_results.size());
+  for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
+    FloatType information = planner_->computeInformationScore(*it);
+    tmp.push_back(std::make_pair(*it, information));
+  }
+  octree_drawer_.updateRaycastVoxels(tmp);
+  if (raycast_results.empty()) {
+    sendClearSelectedPositionToWebSocketClients();
+  }
+  else {
+    sendSelectedPositionToWebSocketClients(raycast_results.front().node->getBoundingBox().getCenter());
+  }
   update();
 }
 
@@ -935,9 +1096,9 @@ void ViewerWidget::setDrawFreeVoxels(bool draw_free_voxels)
     update();
 }
 
-void ViewerWidget::setDisplayAxes(bool display_axes)
+void ViewerWidget::setDrawAxes(bool draw_axes)
 {
-  display_axes_ = display_axes;
+  axes_drawer_.setDrawLines(draw_axes);
   update();
 }
 
@@ -989,6 +1150,16 @@ void ViewerWidget::setDrawDensePoints(bool draw_dense_points) {
 
 void ViewerWidget::setDrawPoissonMesh(bool draw_poisson_mesh) {
   poisson_mesh_drawer_.setDrawTriangles(draw_poisson_mesh);
+  update();
+}
+
+void ViewerWidget::setDrawRegionOfInterest(bool draw_region_of_interest) {
+  region_of_interest_drawer_.setDrawLines(draw_region_of_interest);
+  update();
+}
+
+void ViewerWidget::setDrawBvhBbox(bool draw_bvh_bbox) {
+  bvh_bbox_drawer_.setDrawLines(draw_bvh_bbox);
   update();
 }
 
@@ -1256,13 +1427,29 @@ void ViewerWidget::draw() {
   sparce_recon_drawer_.draw(pvm_matrix, width(), height());
   dense_points_drawer_.draw(pvm_matrix, dense_points_size_);
   poisson_mesh_drawer_.draw(pvm_matrix);
+  region_of_interest_drawer_.draw(pvm_matrix, width(), height(), bbox_line_width_);
+  bvh_bbox_drawer_.draw(pvm_matrix, width(), height(), bbox_line_width_);
   // Draw path before graph so that the graph is hidden
   viewpoint_path_drawer_.draw(pvm_matrix, width(), height());
   viewpoint_motion_line_drawer_.draw(pvm_matrix, width(), height(), viewpoint_motion_line_width_);
   viewpoint_graph_drawer_.draw(pvm_matrix, width(), height());
 
-  if (display_axes_) {
-    axes_drawer_.draw(pvm_matrix, width(), height(), 5.0f);
+  // Draw coordinate axes
+  if (axes_drawer_.getDrawLines()) {
+    glDisable(GL_DEPTH_TEST);
+    const std::size_t axes_viewport_width = width() / 8;
+    const std::size_t axes_viewport_height = height() / 8;
+    glViewport(0, 0, axes_viewport_width, axes_viewport_height);
+    QMatrix4x4 mv_matrix;
+    camera()->getModelViewMatrix(mv_matrix.data());
+    mv_matrix.setColumn(3, QVector4D(0, 0, -5, 1));
+    camera()->getProjectionMatrix(pvm_matrix.data());
+    pvm_matrix.setToIdentity();
+    pvm_matrix.ortho(-1.5f, 1.5f, -1.5f, 1.5f, 0.1f, 10.0f);
+    pvm_matrix *= mv_matrix;
+    axes_drawer_.draw(pvm_matrix, width(), height(), 40.0f);
+    glViewport(0, 0, width(), height());
+    glEnable(GL_DEPTH_TEST);
   }
 }
 
@@ -1340,7 +1527,11 @@ void ViewerWidget::keyPressEvent(QKeyEvent* event) {
     std::cout << " z = " << pose.quaternion().toRotationMatrix().col(2).transpose() << std::endl;
     std::cout << "GPS = " << getGpsFromPose(pose) << std::endl;
   }
+  else if (event->key() == Qt::Key_T) {
+    captureRaycast();
+  }
   else if (event->key() == Qt::Key_R) {
+    captureRaycastCenter();
     captureRaycastWindow(15, 15);
   }
   else {
@@ -1539,6 +1730,76 @@ void ViewerWidget::setViewpointGraphComponent(int component) {
 void ViewerWidget::updateViewpoints() {
   showViewpointGraph();
   showViewpointPath();
+  sendViewpointPathToWebSocketClients();
+}
+
+void ViewerWidget::sendViewpointPathToWebSocketClients() {
+  if (web_socket_server_ == nullptr) {
+    return;
+  }
+  const ViewpointPlanner::ViewpointPath* viewpoint_path;
+  if (viewpoint_path_branch_index_ != (std::size_t)-1 && viewpoint_path_branch_index_ < planner_->getViewpointPaths().size()) {
+    std::cout << "Exporting viewpoint path " << viewpoint_path_branch_index_ << std::endl;
+    viewpoint_path = &planner_->getViewpointPaths()[viewpoint_path_branch_index_];
+  }
+  else {
+    std::cout << "Exporting best viewpoint path" << std::endl;
+    viewpoint_path = &planner_->getBestViewpointPath();
+  }
+  std::cout << "Done" << std::endl;
+  rapidjson::Document json_message;
+  json_message.SetObject();
+  auto& allocator = json_message.GetAllocator();
+  json_message.AddMember("type", "viewpoint_path", allocator);
+  const rapidjson::Document json_viewpoint_path = planner_->getViewpointPathAsJson(*viewpoint_path);
+  rapidjson::Value json_path;
+  json_path.CopyFrom(json_viewpoint_path, allocator);
+  json_message.AddMember("payload", json_path, allocator);
+  rapidjson::StringBuffer buffer;
+  rapidjson::PrettyWriter<rapidjson::StringBuffer> writer(buffer);
+  json_message.Accept(writer);
+  web_socket_server_->sendTextMessage(buffer.GetString());
+}
+
+void ViewerWidget::sendClearSelectedPositionToWebSocketClients() {
+  if (web_socket_server_ == nullptr) {
+    return;
+  }
+  rapidjson::Document json_message;
+  json_message.SetObject();
+  auto& allocator = json_message.GetAllocator();
+  json_message.AddMember("type", "clear_selected_position", allocator);
+  rapidjson::StringBuffer buffer;
+  rapidjson::PrettyWriter<rapidjson::StringBuffer> writer(buffer);
+  json_message.Accept(writer);
+  web_socket_server_->sendTextMessage(buffer.GetString());
+}
+
+void ViewerWidget::sendSelectedPositionToWebSocketClients(const ViewpointPlanner::Vector3& position) {
+  if (web_socket_server_ == nullptr) {
+    return;
+  }
+  ViewpointPlanner::GpsCoordinateType gps = planner_->convertPositionToGps(position);
+  rapidjson::Document json_message;
+  json_message.SetObject();
+  auto& allocator = json_message.GetAllocator();
+  json_message.AddMember("type", "selected_position", allocator);
+  rapidjson::Value json_enu(rapidjson::kObjectType);
+  json_enu.AddMember("x", position(0), allocator);
+  json_enu.AddMember("y", position(1), allocator);
+  json_enu.AddMember("z", position(2), allocator);
+  rapidjson::Value json_gps(rapidjson::kObjectType);
+  json_gps.AddMember("latitude", gps.latitude(), allocator);
+  json_gps.AddMember("longitude", gps.longitude(), allocator);
+  json_gps.AddMember("altitude", gps.altitude(), allocator);
+  rapidjson::Value selected_position(rapidjson::kObjectType);
+  selected_position.AddMember("enu", json_enu, allocator);
+  selected_position.AddMember("gps", json_gps, allocator);
+  json_message.AddMember("payload", selected_position, allocator);
+  rapidjson::StringBuffer buffer;
+  rapidjson::PrettyWriter<rapidjson::StringBuffer> writer(buffer);
+  json_message.Accept(writer);
+  web_socket_server_->sendTextMessage(buffer.GetString());
 }
 
 ViewpointPlannerThread::ViewpointPlannerThread(ViewpointPlanner* planner, ViewerWidget* viewer_widget)
