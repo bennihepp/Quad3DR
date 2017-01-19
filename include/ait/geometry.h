@@ -9,33 +9,84 @@
 #pragma once
 
 #include <cmath>
+#include <boost/serialization/access.hpp>
+#include <boost/serialization/split_member.hpp>
 #include <ait/eigen.h>
-#include <ait/serialization.h>
 
 namespace ait {
 
-#pragma GCC push_options
-#pragma GCC optimize ("fast-math")
+#if __GNUC__ && !__CUDACC__
+  #pragma GCC push_options
+  #pragma GCC optimize ("fast-math")
+#endif
 
+//template <typename T>
+//struct Ray {
+//  using FloatType = T;
+//  USE_FIXED_EIGEN_TYPES(FloatType)
+//
+//  Ray(const Vector3& origin, const Vector3& direction)
+//  : origin_(origin), direction_(direction.normalized()) {}
+//
+//  const Vector3& origin() const {
+//    return origin_;
+//  }
+//
+//  const Vector3& direction() const {
+//    return direction_;
+//  }
+//
+//  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+//
+//private:
+//  Vector3 origin_;
+//  Vector3 direction_;
+//};
+
+template <typename FloatT>
 struct Ray {
-  Eigen::Vector3f origin;
-  Eigen::Vector3f direction;
+  using FloatType = FloatT;
+  USE_FIXED_EIGEN_TYPES(FloatType)
+
+  Ray()
+  : origin(Vector3::Zero()), direction(Vector3::UnitX()) {}
+
+  Ray(const Vector3& origin, const Vector3& direction)
+  : origin(origin), direction(direction.normalized()) {}
+
+  void setOrigin(const Vector3& origin) {
+    this->origin = origin;
+  }
+
+  void setDirection(const Vector3& direction) {
+    this->direction = direction.normalized();
+  }
+
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+  Vector3 origin;
+  Vector3 direction;
+};
+
+template <typename FloatT>
+struct RayData : public Ray<FloatT> {
+  using FloatType = FloatT;
+  USE_FIXED_EIGEN_TYPES(FloatType)
+
+  Vector3 inv_direction;
+  FloatType min_range_sq;
+  FloatType max_range_sq;
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 };
 
-struct RayData : public Ray {
-  Eigen::Vector3f inv_direction;
-  float min_range_sq;
-  float max_range_sq;
-
-  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-};
-
-template <typename FloatType = float>
-class BoundingBox3D : public ait::Serializable {
+template <typename FloatT = float>
+class BoundingBox3D {
 public:
-  using Vector3 = Eigen::Matrix<FloatType, 3, 1>;
+  using FloatType = FloatT;
+  USE_FIXED_EIGEN_TYPES(FloatType)
+  using RayType = Ray<FloatType>;
+  using RayDataType = RayData<FloatType>;
 
   static BoundingBox3D createFromCenterAndExtent(const Vector3& center, const Vector3& extent) {
     const Vector3 min = center - extent / 2;
@@ -54,7 +105,7 @@ public:
   BoundingBox3D(const Vector3& min, const Vector3& max)
   : min_(min), max_(max) {}
 
-  ~BoundingBox3D() override {}
+  ~BoundingBox3D() {}
 
   bool operator==(const BoundingBox3D& other) const {
     return min_ == other.min_ && max_ == other.max_;
@@ -164,13 +215,13 @@ public:
     return true;
   }
 
-  bool intersects(const Ray& ray, Vector3* intersection = nullptr) const {
-    RayData ray_data(ray);
+  bool intersects(const RayType& ray, Vector3* intersection = nullptr) const {
+    RayDataType ray_data(ray);
     ray_data.inv_direction = ray.direction.cwiseInverse();
     return intersects(ray_data, intersection);
   }
 
-  bool intersects(const RayData& ray_data, Vector3* intersection = nullptr) const {
+  bool intersects(const RayDataType& ray_data, Vector3* intersection = nullptr) const {
   //  std::cout << "  intersecting node at depth " << cur_depth << " with size " << node_size_half * 2 << std::endl;
     float t_min = -std::numeric_limits<FloatType>::max();
     float t_max = std::numeric_limits<FloatType>::max();
@@ -230,19 +281,26 @@ public:
     max_ = max_.array().min(bbox.max_.array());
   }
 
-  void write(std::ostream& out) const override {
-    ait::writeToStream(out, min_);
-    ait::writeToStream(out, max_);
-  }
-
-  void read(std::istream& in) override {
-    ait::readFromStream(in, &min_);
-    ait::readFromStream(in, &max_);
-  }
-
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
 private:
+  // Boost serialization
+  friend class boost::serialization::access;
+
+  template <typename Archive>
+  void load(Archive& ar, const unsigned int version) {
+    ar & min_;
+    ar & max_;
+  }
+
+  template <typename Archive>
+  void save(Archive& ar, const unsigned int version) const {
+    ar & min_;
+    ar & max_;
+  }
+
+  BOOST_SERIALIZATION_SPLIT_MEMBER()
+
   Vector3 min_;
   Vector3 max_;
 };
@@ -503,6 +561,8 @@ private:
   FloatType upper_plane_z_;
 };
 
-#pragma GCC pop_options
+#if __GNUC__ && !__CUDACC__
+  #pragma GCC pop_options
+#endif
 
 }
