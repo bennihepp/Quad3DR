@@ -14,7 +14,6 @@
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/unordered_map.hpp>
 #include <ait/common.h>
-#include <ait/eigen.h>
 
 template <typename NodeT, typename WeightT>
 class Graph {
