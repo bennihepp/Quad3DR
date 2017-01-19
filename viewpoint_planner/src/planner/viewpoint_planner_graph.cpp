@@ -119,22 +119,23 @@ bool ViewpointPlanner::findAndAddShortestMotion(const ViewpointEntryIndex from_i
     }
     AIT_ASSERT(reverse_viewpoint_indices_path.back() == from_index);
     AIT_ASSERT(reverse_viewpoint_indices_path.front() == to_index);
-    Motion motion;
-    motion.distance = 0;
-    motion.cost = 0;
-    for (auto it = reverse_viewpoint_indices_path.rbegin() + 1; it < reverse_viewpoint_indices_path.rend(); ++it) {
-      const ViewpointEntryIndex idx1 = *(it - 1);
-      const ViewpointEntryIndex idx2 = *it;
-      const Motion& sub_motion = getViewpointMotion(idx1, idx2);
-      motion.distance += sub_motion.distance;
-      motion.cost += sub_motion.cost;
-      for (const Pose& pose : sub_motion.poses) {
-        motion.poses.push_back(pose);
+    // Densify viewpoint graph motions (add all shortest paths that were found to the graph)
+    for (auto from_it = reverse_viewpoint_indices_path.rbegin(); from_it < reverse_viewpoint_indices_path.rend(); ++from_it) {
+      Motion motion;
+      motion.distance = 0;
+      motion.cost = 0;
+      for (auto to_it = from_it + 1; to_it < reverse_viewpoint_indices_path.rend(); ++to_it) {
+        const ViewpointEntryIndex idx1 = *(to_it - 1);
+        const ViewpointEntryIndex idx2 = *to_it;
+        const Motion& sub_motion = getViewpointMotion(idx1, idx2);
+        motion.distance += sub_motion.distance;
+        motion.cost += sub_motion.cost;
+        for (const Pose& pose : sub_motion.poses) {
+          motion.poses.push_back(pose);
+        }
+        addViewpointMotion(*from_it, idx2, motion);
       }
-      // TODO: Not sure if this helps to speed up later searches
-      addViewpointMotion(from_index, idx2, motion);
     }
-//    addViewpointMotion(from_index, to_index, std::move(motion));
     AIT_ASSERT(viewpoint_graph_.numEdges() == viewpoint_graph_motions_.size());
   }
   if (verbose && !found_goal) {
