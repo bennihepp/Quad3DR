@@ -1393,18 +1393,18 @@ bool ViewpointPlanner::addMatchingStereoViewpointWithoutLock(
     const FloatType baseline_square = baseline_vector.squaredNorm();
 //      const FloatType other_dist_deviation_ratio = std::abs(other_dist_to_voxel_sq - dist_to_voxel_sq) / dist_to_voxel_sq;
     const FloatType angular_deviation = other_pose.quaternion().angularDistance(pose.quaternion());
-    AIT_PRINT_VALUE(rel_pose_vector.transpose());
-    AIT_PRINT_VALUE(mid_point_to_voxel_center_norm.transpose());
-    AIT_PRINT_VALUE(dist_deviation);
-    AIT_PRINT_VALUE(dist_deviation_ratio);
-    AIT_PRINT_VALUE(baseline_square);
-    AIT_PRINT_VALUE(angular_deviation);
+//    AIT_PRINT_VALUE(rel_pose_vector.transpose());
+//    AIT_PRINT_VALUE(mid_point_to_voxel_center_norm.transpose());
+//    AIT_PRINT_VALUE(dist_deviation);
+//    AIT_PRINT_VALUE(dist_deviation_ratio);
+//    AIT_PRINT_VALUE(baseline_square);
+//    AIT_PRINT_VALUE(angular_deviation);
     const bool is_dist_deviation_valid = dist_deviation_ratio <= options_.triangulation_max_dist_deviation_ratio;
     const bool is_baseline_valid = baseline_square >= min_baseline_square && baseline_square <= max_baseline_square;
     bool is_angular_deviation_valid = angular_deviation <= triangulation_max_angular_deviation_;
-    AIT_PRINT_VALUE(is_dist_deviation_valid);
-    AIT_PRINT_VALUE(is_angular_deviation_valid);
-    AIT_PRINT_VALUE(is_baseline_valid);
+//    AIT_PRINT_VALUE(is_dist_deviation_valid);
+//    AIT_PRINT_VALUE(is_angular_deviation_valid);
+//    AIT_PRINT_VALUE(is_baseline_valid);
     if (ignore_angular_deviation) {
       is_angular_deviation_valid = true;
     }
@@ -1416,47 +1416,58 @@ bool ViewpointPlanner::addMatchingStereoViewpointWithoutLock(
     }
   };
 
+  const std::vector<std::size_t>& component = getConnectedComponents().first;
+
   // Check if a matching viewpoint already exists
-  // TODO: Remove index
-  std::size_t i = 0;
+  // TODO: Remove index output.
+//  std::size_t i = 0;
   for (const ViewpointPathEntry& other_path_entry : viewpoint_path->entries) {
-    std::cout << "i=" << i << std::endl;
-    ++i;
+//    std::cout << "i=" << i << std::endl;
+//    ++i;
     // TODO: Check shouldn't be necessary
     if (other_path_entry.viewpoint_index != path_entry.viewpoint_index) {
       const ViewpointEntryIndex& other_index = other_path_entry.viewpoint_index;
-      std::cout << "other_index=" << other_index << std::endl;
+//      std::cout << "other_index=" << other_index << std::endl;
       const ViewpointEntry& other_viewpoint = viewpoint_entries_[other_index];
       const bool ignore_angular_deviation = false;
       if (is_stereo_pair_lambda(other_viewpoint, ignore_angular_deviation)) {
-        return true;
+        // Compute overlap information
+        const VoxelWithInformationSet overlap_set = ait::computeSetIntersection(viewpoint_entry.voxel_set, other_viewpoint.voxel_set);
+        const FloatType overlap_information = computeInformationScore(overlap_set.begin(), overlap_set.end());
+        const FloatType overlap_ratio = overlap_information / viewpoint_entry.total_information;
+        AIT_PRINT_VALUE(overlap_ratio);
+        if (component[other_index] == component[path_entry.viewpoint_index]
+            && overlap_ratio > options_.triangulation_min_overlap_ratio) {
+          return true;
+        }
       }
     }
   }
 
-  const std::vector<std::size_t>& component = getConnectedComponents().first;
-
   // Find viewpoint in baseline range with highest information overlap
   // TODO: Should use a radius or knn search
+  const std::size_t knn = options_.triangulation_knn;
+  static std::vector<ViewpointANN::IndexType> knn_indices;
+  static std::vector<ViewpointANN::DistanceType> knn_distances;
+  knn_indices.resize(knn);
+  knn_distances.resize(knn);
+  viewpoint_ann_.knnSearch(pose.getWorldPosition(), knn, &knn_indices, &knn_distances);
   ViewpointEntryIndex best_index = (ViewpointEntryIndex)-1;
   FloatType best_overlap_information = std::numeric_limits<FloatType>::lowest();
-  for (const auto& entry : comp_data->sorted_new_informations) {
-    const ViewpointEntryIndex& stereo_index = entry.first;
-    const ViewpointEntry& stereo_viewpoint = viewpoint_entries_[stereo_index];
+  for (ViewpointANN::IndexType other_index : knn_indices) {
+    const ViewpointEntry& other_viewpoint = viewpoint_entries_[other_index];
     const bool ignore_angular_deviation = true;
-    if (is_stereo_pair_lambda(stereo_viewpoint, ignore_angular_deviation)) {
+    if (is_stereo_pair_lambda(other_viewpoint, ignore_angular_deviation)) {
       // Compute overlap information
-      const VoxelWithInformationSet overlap_set = ait::computeSetIntersection(viewpoint_entry.voxel_set, stereo_viewpoint.voxel_set);
+      const VoxelWithInformationSet overlap_set = ait::computeSetIntersection(viewpoint_entry.voxel_set, other_viewpoint.voxel_set);
       const FloatType overlap_information = computeInformationScore(overlap_set.begin(), overlap_set.end());
-      if (component[stereo_index] == component[path_entry.viewpoint_index] && overlap_information > best_overlap_information) {
-        best_index = stereo_index;
+      if (component[other_index] == component[path_entry.viewpoint_index] && overlap_information > best_overlap_information) {
+        best_index = other_index;
         best_overlap_information = overlap_information;
       }
     }
   }
-  AIT_PRINT_VALUE(path_entry.local_information);
-  AIT_PRINT_VALUE(viewpoint_entry.total_information);
-  AIT_PRINT_VALUE(best_overlap_information);
+
   if (best_index == (ViewpointEntryIndex)-1) {
     if (verbose) {
       std::cout << "Could not find any stereo viewpoint in the right baseline and distance range" << std::endl;
@@ -1466,7 +1477,6 @@ bool ViewpointPlanner::addMatchingStereoViewpointWithoutLock(
 
   // Add viewpoint candidate with same translation as best found stereo viewpoint and same orientation as reference viewpoint.
   const ViewpointEntry& best_viewpoint_entry = viewpoint_entries_[best_index];
-  AIT_PRINT_VALUE(best_viewpoint_entry.total_information);
   const Pose new_pose = Pose::createFromImageToWorldTransformation(
       best_viewpoint_entry.viewpoint.pose().translation(),
       viewpoint_entry.viewpoint.pose().quaternion());
@@ -1488,14 +1498,6 @@ bool ViewpointPlanner::addMatchingStereoViewpointWithoutLock(
 //  if (stereo_path_entry.local_objective <= 0) {
 //    if (verbose) {
 //      std::cout << "No improvement in objective in stereo viewpoint" << std::endl;
-//    }
-//    return false;
-//  }
-
-  // Make sure stereo viewpoints can be connected
-//  if (!findAndAddShortestMotion(path_entry.viewpoint_index, stereo_path_entry.viewpoint_index)) {
-//    if (verbose) {
-//      std::cout << "Could not find connection between stereo pair" << std::endl;
 //    }
 //    return false;
 //  }

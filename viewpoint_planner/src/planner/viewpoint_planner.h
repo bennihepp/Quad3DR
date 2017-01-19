@@ -77,6 +77,8 @@ public:
       addOption<FloatType>("triangulation_max_angle_degrees", &triangulation_max_angle_degrees);
       addOption<FloatType>("triangulation_max_dist_deviation_ratio", &triangulation_max_dist_deviation_ratio);
       addOption<FloatType>("triangulation_max_angular_deviation_degrees", &triangulation_max_angular_deviation_degrees);
+      addOption<FloatType>("triangulation_min_overlap_ratio", &triangulation_min_overlap_ratio);
+      addOption<std::size_t>("triangulation_knn", &triangulation_knn);
       addOption<std::size_t>("triangulation_min_count", &triangulation_min_count);
       addOption<std::size_t>("viewpoint_discard_dist_knn", &viewpoint_discard_dist_knn);
       addOption<FloatType>("viewpoint_discard_dist_thres_square", &viewpoint_discard_dist_thres_square);
@@ -143,6 +145,10 @@ public:
     FloatType triangulation_max_dist_deviation_ratio = (FloatType)0.1;
     // Maximum angular deviation between stereo viewpoints
     FloatType triangulation_max_angular_deviation_degrees = 20;
+    // Minimum ratio of information overlap for a viewpoint to be used for a stereo pair
+    FloatType triangulation_min_overlap_ratio = 0.8f;
+    // Number of nearest neighbors to consider for stereo pair search
+    std::size_t triangulation_knn = 50;
     // Minimum number of viewpairs that can triangulate a voxel to be observed
     std::size_t triangulation_min_count = 2;
 
