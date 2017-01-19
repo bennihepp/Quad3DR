@@ -10,15 +10,16 @@
 #include <iostream>
 #include <sstream>
 #include <unordered_map>
+#include <ait/boost.h>
 #include <boost/functional.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/filesystem.hpp>
 #include <ait/eigen.h>
 #include <ait/eigen_utils.h>
 #include <ait/common.h>
+#include <ait/filesystem.h>
 #include <ait/utilities.h>
 #include <ait/string_utils.h>
-#include <ait/boost_utilities.h>
 
 // Representations for a sparse reconstruction from Colmap.
 // File input adapted from Colmap.

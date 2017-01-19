@@ -6,8 +6,8 @@
 //  Created on: Dec 11, 2016
 //==================================================
 
+#include <ait/filesystem.h>
 #include <iostream>
-#include <ait/boost_utilities.h>
 #include "dense_reconstruction.h"
 
 using namespace reconstruction;
