@@ -12,6 +12,32 @@ find_package(ompl REQUIRED)
 #find_package(PkgConfig REQUIRED)
 #pkg_search_module(GLFW REQUIRED glfw3)
 
+# CUDA
+find_package(CUDA REQUIRED)
+# Set nvcc flags
+#set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} --compiler-options -fno-strict-aliasing -use_fast_math")
+#set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -lineinfo")
+#set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -Xptxas -dlcm=cg")
+list(APPEND CUDA_NVCC_FLAGS --compiler-options -fno-strict-aliasing -use_fast_math)
+list(APPEND CUDA_NVCC_FLAGS -lineinfo)
+if(CUDA_VERSION_MAJOR LESS 7)
+    list(APPEND CUDA_NVCC_FLAGS -gencode arch=compute_11,code=sm_11)
+    list(APPEND CUDA_NVCC_FLAGS -gencode arch=compute_12,code=sm_12)
+    list(APPEND CUDA_NVCC_FLAGS -gencode arch=compute_13,code=sm_13)
+elseif(CUDA_VERSION_MAJOR EQUAL 7)
+    list(APPEND CUDA_NVCC_FLAGS -gencode arch=compute_20,code=sm_20)
+    list(APPEND CUDA_NVCC_FLAGS -gencode arch=compute_30,code=sm_30)
+    list(APPEND CUDA_NVCC_FLAGS -gencode arch=compute_35,code=sm_35)
+    list(APPEND CUDA_NVCC_FLAGS -gencode arch=compute_50,code=sm_50)
+elseif(CUDA_VERSION_MAJOR GREATER 7)
+    list(APPEND CUDA_NVCC_FLAGS -gencode arch=compute_61,code=sm_61)
+endif()
+add_definitions(-DWITH_CUDA=1)
+
+
+# Enable debugger breaking on AIT_ASSERT macros
+add_definitions(-DAIT_ASSERT_BREAK=1)
+
 # Qt settings
 # Instruct CMake to run moc automatically when needed.
 set(CMAKE_AUTOMOC ON)
@@ -26,6 +52,7 @@ find_package(Qt5Core REQUIRED)
 find_package(Qt5Widgets REQUIRED)
 find_package(Qt5OpenGL REQUIRED)
 find_package(Qt5Xml REQUIRED)
+find_package(Qt5WebSockets REQUIRED)
 
 # Qt4 was built with -reduce-relocations.
 if(Qt5_POSITION_INDEPENDENT_CODE)
@@ -86,6 +113,20 @@ target_link_libraries(occupancy_map_from_colmap
   ${OpenCV_LIBRARIES}
 )
 
+add_executable(clip_point_cloud WIN32
+  # Executable
+  src/exe/clip_point_cloud.cpp
+  # AIT
+  ../src/common.cpp
+  ../src/utilities.cpp
+  # mLib
+  src/mLib/mLib.h
+  src/mLib/mLib.cpp
+)
+target_link_libraries(clip_point_cloud
+  ${Boost_LIBRARIES}
+)
+
 set(VIEWPOINT_PLANNER_SOURCES_COMMON
   # AIT
   ../src/common.cpp
@@ -95,6 +136,8 @@ set(VIEWPOINT_PLANNER_SOURCES_COMMON
   src/mLib/mLib.cpp
   # BVH
   src/bvh/bvh.h
+  src/bvh/bvh.cu
+  src/bvh/bvh.cuh
   # Graph
   #src/graph/graph.h
   src/graph/graph_boost.h
@@ -123,7 +166,7 @@ set(VIEWPOINT_PLANNER_SOURCES_COMMON
   src/reconstruction/dense_reconstruction.cpp
 )
 
-add_executable(viewpoint_planner_cmdline WIN32
+cuda_add_executable(viewpoint_planner_cmdline WIN32
   # Executable
   src/exe/viewpoint_planner_cmdline.cpp
   ${VIEWPOINT_PLANNER_SOURCES_COMMON}
@@ -136,27 +179,13 @@ target_link_libraries(viewpoint_planner_cmdline
   ${OMPL_LIBRARIES}
 )
 
-add_executable(clip_point_cloud WIN32
-  # Executable
-  src/exe/clip_point_cloud.cpp
-  # AIT
-  ../src/common.cpp
-  ../src/utilities.cpp
-  # mLib
-  src/mLib/mLib.h
-  src/mLib/mLib.cpp
-)
-target_link_libraries(clip_point_cloud
-  ${Boost_LIBRARIES}
-)
-
 QT5_WRAP_UI(viewpoint_planner_gui_UIS_H 
 	src/ui/viewer_info_panel.ui
 	src/ui/viewer_settings_panel.ui
 	src/ui/viewer_planner_panel.ui
 )
 
-add_executable(viewpoint_planner_gui WIN32
+cuda_add_executable(viewpoint_planner_gui WIN32
   # Executable
   src/exe/viewpoint_planner_gui.cpp
   # UI
@@ -167,6 +196,9 @@ add_executable(viewpoint_planner_gui WIN32
   src/ui/viewer_info_panel.h
   src/ui/viewer_settings_panel.h
   src/ui/viewer_planner_panel.h
+  # Web
+  src/web/web_socket_server.h
+  src/web/web_socket_server.cpp
   # Rendering
   src/rendering/octree_drawer.h
   src/rendering/octree_drawer.cpp
@@ -189,5 +221,5 @@ target_link_libraries(viewpoint_planner_gui
   ${OMPL_LIBRARIES}
 )
 #target_link_libraries(viewpoint_planner_gui Qt4::QtCore Qt4::QtXml Qt4::QtGui Qt4::QtOpenGL)
-target_link_libraries(viewpoint_planner_gui Qt5::Core Qt5::Xml Qt5::Gui Qt5::OpenGL)
+target_link_libraries(viewpoint_planner_gui Qt5::Core Qt5::Xml Qt5::Gui Qt5::OpenGL Qt5::WebSockets)
 #target_link_libraries(viewpoint_planner_gui /home/bhepp/Projects/Libraries/libQGLViewer-2.6.4/lib/libQGLViewer-qt5.so)
