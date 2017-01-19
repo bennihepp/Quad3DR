@@ -21,7 +21,7 @@ CMAKE_SOURCE_DIR=..
 
 #CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0 -fno-strict-aliasing -march=native -msse2 -mavx"
 CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0 -O2 -g3"
-#CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0 -g -pg"
+#CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0 -O0 -g -pg"
 C_FLAGS="$CXX_FLAGS"
 
 rm -rf CMakeCache.txt CMakeFiles
@@ -37,6 +37,7 @@ cmake \
     -DBUILD_STEREO=OFF \
     -DBUILD_QUAD_PLANNER=OFF \
     -DBUILD_VIDEO=OFF \
+    -DEIGEN3_INCLUDE_DIR=$HOME/Projects/Libraries/eigen-3.3.1 \
     -DBOOST_ROOT=$HOME/Projects/Libraries/boost_1_60_0/ \
     -Doctomap_DIR=$HOME/Projects/Libraries/octomap/lib/cmake/octomap \
     -Doctovis_DIR=$HOME/Projects/Libraries/octomap/lib/cmake/octovis \

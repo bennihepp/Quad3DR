@@ -7,10 +7,16 @@ include("cmake/CheckC11.cmake")
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules/;${CMAKE_MODULE_PATH}")
 #set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
 
+option(AIT_DEBUG "Build with debug support" OFF)
+
 # Set compiler warning flags
 if(CMAKE_COMPILER_IS_GNUCC)
     set(CMAKE_C_FLAGS "-Wall ${CMAKE_C_FLAGS}")
     set(CMAKE_CXX_FLAGS "-Wall ${CMAKE_CXX_FLAGS}")
+    if(NOT AIT_DEBUG)
+      set(CMAKE_C_FLAGS "-march=corei7 -mavx -mavx2 -msse4 ${CMAKE_C_FLAGS}")
+      set(CMAKE_CXX_FLAGS "-march=corei7 -mavx -mavx2 -msse4 ${CMAKE_CXX_FLAGS}")
+    endif()
 endif()
 if ( MSVC )
     # This is untested
@@ -61,7 +67,7 @@ else()
   endif()
 endif()
 
-if(!WIN32)
+if(NOT WIN32)
   find_package(ZLIB REQUIRED)
 endif()
 
