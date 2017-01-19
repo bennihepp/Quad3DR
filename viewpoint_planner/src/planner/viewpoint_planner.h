@@ -770,7 +770,7 @@ public:
   bool findNextViewpointPathEntries();
 
   /// Compute the connected components of the graph and return a pair of the component labels and the number of components.
-  std::pair<std::vector<std::size_t>, std::size_t> getConnectedComponents() const;
+  const std::pair<std::vector<std::size_t>, std::size_t>& getConnectedComponents() const;
 
   /// Compute a viewpoint tour for all paths
   void computeViewpointTour();
@@ -951,6 +951,10 @@ private:
   ViewpointANN viewpoint_ann_;
   // Graph of tentative viewpoints with motion distances
   ViewpointGraph viewpoint_graph_;
+  // Connected components of viewpoint graph
+  mutable std::pair<std::vector<std::size_t>, std::size_t> viewpoint_graph_components_;
+  // Flag indicating whether connected components are valid
+  mutable bool viewpoint_graph_components_valid_;
   // Motion description of the connections in the viewpoint graph (indexed by viewpoint id pair)
   std::unordered_map<ViewpointIndexPair, Motion, ViewpointIndexPair::Hash> viewpoint_graph_motions_;
   // Current viewpoint paths
