@@ -203,7 +203,6 @@ public slots:
   void setDrawRaycast(bool draw_raycast);
   void captureRaycast();
   void captureRaycastWindow(const std::size_t width, const std::size_t height);
-  void captureRaycastCenter();
   void setOccupancyBinThreshold(double occupancy_bin_threshold);
   void setColorFlags(uint32_t color_flags);
   void setDrawFreeVoxels(bool draw_free_voxels);
@@ -332,6 +331,7 @@ private:
     SparseReconstructionDrawer sparce_recon_drawer_;
     PointDrawer dense_points_drawer_;
     TriangleDrawer poisson_mesh_drawer_;
+    LineDrawer poisson_mesh_normal_drawer_;
     LineDrawer region_of_interest_drawer_;
     LineDrawer bvh_bbox_drawer_;
     FloatType bbox_line_width_;

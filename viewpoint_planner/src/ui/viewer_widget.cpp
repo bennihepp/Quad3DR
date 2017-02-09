@@ -233,6 +233,8 @@ void ViewerWidget::init() {
   dense_points_drawer_.setDrawPoints(false);
   poisson_mesh_drawer_.init();
   poisson_mesh_drawer_.setDrawTriangles(false);
+  poisson_mesh_normal_drawer_.init();
+  poisson_mesh_normal_drawer_.setDrawLines(false);
   region_of_interest_drawer_.init();
   region_of_interest_drawer_.setDrawLines(false);
   bvh_bbox_drawer_.init();
@@ -443,6 +445,26 @@ void ViewerWidget::showPoissonMesh(const ViewpointPlanner::MeshType* poisson_mes
   }
   std::cout << "Uploading " << triangle_data.size() << " triangles" << std::endl;
   poisson_mesh_drawer_.upload(triangle_data);
+
+  std::vector<OGLLineData> line_data;
+  const ait::Color4<FloatType> c(1, 0, 0, 1);
+  for (size_t i = 0; i < poisson_mesh_->m_FaceIndicesVertices.size(); ++i) {
+    const ViewpointPlanner::MeshType::Indices::Face& face = poisson_mesh_->m_FaceIndicesVertices[i];
+    AIT_ASSERT_STR(face.size() == 3, "Mesh faces need to have a valence of 3");
+    const ml::vec3f& ml_v1 = poisson_mesh_->m_Vertices[face[0]];
+    const ml::vec3f& ml_v2 = poisson_mesh_->m_Vertices[face[1]];
+    const ml::vec3f& ml_v3 = poisson_mesh_->m_Vertices[face[2]];
+    const Vector3 v1(ml_v1.x, ml_v1.y, ml_v1.z);
+    const Vector3 v2(ml_v2.x, ml_v2.y, ml_v2.z);
+    const Vector3 v3(ml_v3.x, ml_v3.y, ml_v3.z);
+    const Vector3 centroid = (v1 + v2 + v3) / 3;
+    const Vector3 normal = FloatType(0.5) * (v1 - v2).cross(v2 - v3).normalized();
+    OGLLineData line;
+    line.vertex1 = OGLVertexDataRGBA(centroid.x(), centroid.y(), centroid.z(), c.r(), c.g(), c.b(), c.a());
+    line.vertex2 = OGLVertexDataRGBA(centroid.x() + normal.x(), centroid.y() + normal.y(), centroid.z() + normal.z(), c.r(), c.g(), c.b(), c.a());
+    line_data.push_back(line);
+  }
+  poisson_mesh_normal_drawer_.upload(line_data);
 }
 
 void ViewerWidget::showRegionOfInterest(const ViewpointPlanner::RegionType& roi) {
@@ -906,7 +928,8 @@ void ViewerWidget::setDrawRaycast(bool draw_raycast) {
 }
 
 void ViewerWidget::captureRaycast() {
-  Pose camera_pose = getCameraPose();
+  const Pose camera_pose = getCameraPose();
+  const Viewpoint viewpoint = planner_->getVirtualViewpoint(camera_pose);
 //  std::cout << "raycast pose: " << camera_pose << std::endl;
 //  std::vector<std::pair<ViewpointPlanner::ConstTreeNavigatorType, FloatType>> raycast_results = planner_->getRaycastHitVoxels(camera_pose);
   std::cout << "BVH bounding box: " << planner_->getBvhTree().getRoot()->getBoundingBox() << std::endl;
@@ -916,15 +939,15 @@ void ViewerWidget::captureRaycast() {
 //    = planner_->getRaycastHitVoxels(camera_pose);
 //  std::cout << "Non-cuda raycast hit " << raycast_results_non_cuda.size() << " voxels" << std::endl;
 //  // End of test code
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results = planner_->getRaycastHitVoxelsCuda(camera_pose);
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results = planner_->getRaycastHitVoxelsCuda(viewpoint);
 #else
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results = planner_->getRaycastHitVoxels(camera_pose);
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results = planner_->getRaycastHitVoxels(viewpoint);
 #endif
   std::cout << "Raycast hit " << raycast_results.size() << " voxels" << std::endl;
   std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, FloatType>> tmp;
   tmp.reserve(raycast_results.size());
   for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
-    FloatType information = planner_->computeInformationScore(*it);
+    FloatType information = planner_->computeInformationScore(viewpoint, *it);
     tmp.push_back(std::make_pair(*it, information));
   }
   octree_drawer_.updateRaycastVoxels(tmp);
@@ -932,7 +955,8 @@ void ViewerWidget::captureRaycast() {
 }
 
 void ViewerWidget::captureRaycastWindow(const std::size_t width, const std::size_t height) {
-  Pose camera_pose = getCameraPose();
+  const Pose camera_pose = getCameraPose();
+  const Viewpoint viewpoint = planner_->getVirtualViewpoint(camera_pose);
 //  std::cout << "raycast pose: " << camera_pose << std::endl;
 #if WITH_CUDA
 //  // Test code for Cuda raycast
@@ -941,7 +965,7 @@ void ViewerWidget::captureRaycastWindow(const std::size_t width, const std::size
 //  std::cout << "Non-cuda raycast hit " << raycast_results_non_cuda.size() << " voxels" << std::endl;
 //  // End of test code
   std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results
-    = planner_->getRaycastHitVoxelsCuda(camera_pose, width, height);
+    = planner_->getRaycastHitVoxelsCuda(viewpoint, width, height);
 #else
   std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results
     = planner_->getRaycastHitVoxels(camera_pose, width, height);
@@ -950,6 +974,7 @@ void ViewerWidget::captureRaycastWindow(const std::size_t width, const std::size
   std::cout << "Nodes:" << std::endl;
   for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
     std::cout << "  position=" << it->node->getBoundingBox().getCenter().transpose() << std::endl;
+    std::cout << "  normal=" << it->node->getObject()->normal.transpose() << std::endl;
   }
 //  std::cout << "Node with weight > 0.5" << std::endl;
 //  for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
@@ -962,51 +987,17 @@ void ViewerWidget::captureRaycastWindow(const std::size_t width, const std::size
   std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, FloatType>> tmp;
   tmp.reserve(raycast_results.size());
   for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
-    FloatType information = planner_->computeInformationScore(*it);
+    FloatType information = planner_->computeInformationScore(viewpoint, *it);
     tmp.push_back(std::make_pair(*it, information));
   }
   octree_drawer_.updateRaycastVoxels(tmp);
-  update();
-}
-
-void ViewerWidget::captureRaycastCenter() {
-  const std::size_t width = 0;
-  const std::size_t height = 0;
-  Pose camera_pose = getCameraPose();
-//  std::cout << "raycast pose: " << camera_pose << std::endl;
-#if WITH_CUDA
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results
-    = planner_->getRaycastHitVoxelsCuda(camera_pose, width, height);
-#else
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results
-    = planner_->getRaycastHitVoxels(camera_pose, width, height);
-#endif
-  AIT_ASSERT(raycast_results.size() <= 1);
-  std::cout << "Raycast hit " << raycast_results.size() << " voxels" << std::endl;
-  std::cout << "Nodes:" << std::endl;
-  for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
-    std::cout << "  position=" << it->node->getBoundingBox().getCenter().transpose() << std::endl;
-  }
-//  std::cout << "Node with weight > 0.5" << std::endl;
-//  for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
-//    if (it->node->getObject()->weight > 0.5) {
-//      std::cout << "  &node_idx=" << planner_->getBvhTree().getVoxelIndexMap().at(it->node)
-//          << ", weight=" << it->node->getObject()->weight
-//          << ", obs_count=" << it->node->getObject()->observation_count << std::endl;
-//    }
-//  }
-  std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, FloatType>> tmp;
-  tmp.reserve(raycast_results.size());
-  for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
-    FloatType information = planner_->computeInformationScore(*it);
-    tmp.push_back(std::make_pair(*it, information));
-  }
-  octree_drawer_.updateRaycastVoxels(tmp);
-  if (raycast_results.empty()) {
-    sendClearSelectedPositionToWebSocketClients();
-  }
-  else {
-    sendSelectedPositionToWebSocketClients(raycast_results.front().node->getBoundingBox().getCenter());
+  if (width == 0 && height == 0) {
+    if (raycast_results.empty()) {
+      sendClearSelectedPositionToWebSocketClients();
+    }
+    else {
+      sendSelectedPositionToWebSocketClients(raycast_results.front().node->getBoundingBox().getCenter());
+    }
   }
   update();
 }
@@ -1150,6 +1141,7 @@ void ViewerWidget::setDrawDensePoints(bool draw_dense_points) {
 
 void ViewerWidget::setDrawPoissonMesh(bool draw_poisson_mesh) {
   poisson_mesh_drawer_.setDrawTriangles(draw_poisson_mesh);
+  poisson_mesh_normal_drawer_.setDrawLines(draw_poisson_mesh);
   update();
 }
 
@@ -1201,8 +1193,16 @@ void ViewerWidget::setViewpointGraphSelectionIndex(const std::size_t index) {
   std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
   const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[viewpoint_index];
   const FloatType total_information = viewpoint_entry.total_information;
-  const FloatType new_information = planner_->computeNewInformation(viewpoint_path_branch_index_, viewpoint_index);
+  const ViewpointPlanner::ViewpointPath& viewpoint_path = planner_->getViewpointPaths()[viewpoint_path_branch_index_];
+  ViewpointPlanner::VoxelWithInformationSet difference_set = ait::computeSetDifference(viewpoint_entry.voxel_set, viewpoint_path.observed_voxel_set);
+  FloatType new_information = std::accumulate(difference_set.cbegin(), difference_set.cend(),
+      FloatType { 0 }, [](const FloatType& value, const ViewpointPlanner::VoxelWithInformation& voxel) {
+        return value + voxel.information;
+  });
+//  const FloatType new_information = planner_->computeNewInformation(viewpoint_path_branch_index_, viewpoint_index);
+  std::cout << "  Total voxels=" << viewpoint_entry.voxel_set.size() << std::endl;
   std::cout << "  Total information=" << total_information << std::endl;
+  std::cout << "  New voxels=" << difference_set.size() << std::endl;
   std::cout << "  New information=" << new_information << std::endl;
   if (planner_panel_->isUpdateCameraOnSelectionChecked()) {
     setCameraPose(viewpoint_entry.viewpoint.pose());
@@ -1426,11 +1426,12 @@ void ViewerWidget::draw() {
   QMatrix4x4 model_matrix; // Identity
   model_matrix.setToIdentity();
 
-  // draw drawable objects:
+  // Draw drawable objects:
   octree_drawer_.draw(pvm_matrix, view_matrix, model_matrix);
   sparce_recon_drawer_.draw(pvm_matrix, width(), height());
   dense_points_drawer_.draw(pvm_matrix, dense_points_size_);
   poisson_mesh_drawer_.draw(pvm_matrix);
+  poisson_mesh_normal_drawer_.draw(pvm_matrix, width(), height(), 0.2);
   region_of_interest_drawer_.draw(pvm_matrix, width(), height(), bbox_line_width_);
   bvh_bbox_drawer_.draw(pvm_matrix, width(), height(), bbox_line_width_);
   // Draw path before graph so that the graph is hidden
@@ -1443,7 +1444,8 @@ void ViewerWidget::draw() {
     glDisable(GL_DEPTH_TEST);
     const std::size_t axes_viewport_width = width() / 8;
     const std::size_t axes_viewport_height = height() / 8;
-    glViewport(0, 0, axes_viewport_width, axes_viewport_height);
+    const std::size_t axes_viewport_size = std::min(axes_viewport_width, axes_viewport_height);
+    glViewport(0, 0, axes_viewport_size, axes_viewport_size);
     QMatrix4x4 mv_matrix;
     camera()->getModelViewMatrix(mv_matrix.data());
     mv_matrix.setColumn(3, QVector4D(0, 0, -5, 1));
@@ -1451,7 +1453,7 @@ void ViewerWidget::draw() {
     pvm_matrix.setToIdentity();
     pvm_matrix.ortho(-1.5f, 1.5f, -1.5f, 1.5f, 0.1f, 10.0f);
     pvm_matrix *= mv_matrix;
-    axes_drawer_.draw(pvm_matrix, width(), height(), 40.0f);
+    axes_drawer_.draw(pvm_matrix, axes_viewport_size, axes_viewport_size, 5.0f);
     glViewport(0, 0, width(), height());
     glEnable(GL_DEPTH_TEST);
   }
@@ -1535,7 +1537,7 @@ void ViewerWidget::keyPressEvent(QKeyEvent* event) {
     captureRaycast();
   }
   else if (event->key() == Qt::Key_R) {
-    captureRaycastCenter();
+    captureRaycastWindow(0, 0);
     captureRaycastWindow(15, 15);
   }
   else {
@@ -1738,9 +1740,10 @@ void ViewerWidget::updateViewpoints() {
 }
 
 void ViewerWidget::sendViewpointPathToWebSocketClients() {
-  if (web_socket_server_ == nullptr) {
+  if (web_socket_server_ == nullptr || planner_->getViewpointPaths().empty()) {
     return;
   }
+  std::unique_lock<std::mutex> lock(mutex_);
   const ViewpointPlanner::ViewpointPath* viewpoint_path;
   if (viewpoint_path_branch_index_ != (std::size_t)-1 && viewpoint_path_branch_index_ < planner_->getViewpointPaths().size()) {
     std::cout << "Exporting viewpoint path " << viewpoint_path_branch_index_ << std::endl;
@@ -1879,11 +1882,14 @@ void ViewpointPlannerThread::updateViewpointsInternal() {
         viewpoint_index, viewpoint_entry.viewpoint.pose(), viewpoint_entry.total_information));
   }
   viewer_widget_->viewpoint_path_copy_.clear();
-  const std::size_t path_index = viewer_widget_->viewpoint_path_branch_index_;
-  for (const ViewpointPlanner::ViewpointPathEntry& path_entry : planner_->getViewpointPaths()[path_index].entries) {
-    const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[path_entry.viewpoint_index];
-    viewer_widget_->viewpoint_path_copy_.push_back(std::make_tuple(
-        path_entry.viewpoint_index, viewpoint_entry.viewpoint.pose(), path_entry.local_information));
+  viewer_widget_->viewpoint_path_order_copy_.clear();
+  if (!planner_->getViewpointPaths().empty()) {
+    const std::size_t path_index = viewer_widget_->viewpoint_path_branch_index_;
+    for (const ViewpointPlanner::ViewpointPathEntry& path_entry : planner_->getViewpointPaths()[path_index].entries) {
+      const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[path_entry.viewpoint_index];
+      viewer_widget_->viewpoint_path_copy_.push_back(std::make_tuple(
+          path_entry.viewpoint_index, viewpoint_entry.viewpoint.pose(), path_entry.local_information));
+    }
+    viewer_widget_->viewpoint_path_order_copy_ = planner_->getViewpointPaths()[path_index].order;
   }
-  viewer_widget_->viewpoint_path_order_copy_ = planner_->getViewpointPaths()[path_index].order;
 }
