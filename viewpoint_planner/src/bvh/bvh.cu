@@ -490,11 +490,16 @@ void CudaTree<FloatT>::reserveDeviceRaysAndResults(const std::size_t num_of_rays
     d_rays_size_ = num_of_rays;
   }
   if (num_of_rays > d_results_size_) {
-    ait::CudaUtils::deallocate(&d_results_);
+    if (d_results_ != nullptr) {
+      ait::CudaUtils::deallocate(&d_results_);
+    }
+    d_results_ = ait::CudaUtils::template allocate<CudaIntersectionResult>(num_of_rays);
+    d_results_size_ = num_of_rays;
   }
-  d_results_ = ait::CudaUtils::template allocate<CudaIntersectionResult>(num_of_rays);
-  d_results_size_ = num_of_rays;
   if (num_of_rays > d_stacks_size_) {
+    if (d_stacks_ != nullptr) {
+      ait::CudaUtils::deallocate(&d_stacks_);
+    }
     d_stacks_ = ait::CudaUtils::template allocate<CudaIntersectionIterativeStackEntry>(num_of_rays * (tree_depth_ + 1));
     d_stacks_size_ = num_of_rays;
   }
