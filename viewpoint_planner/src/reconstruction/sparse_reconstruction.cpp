@@ -80,6 +80,38 @@ Vector2 PinholeCamera::projectPoint(const Vector3& hom_point_camera) const {
   return point_image;
 }
 
+FloatType PinholeCamera::computeSizeOnSensorHorizontal(const FloatType size_x, const FloatType distance) const {
+  const FloatType size_on_sensor = intrinsics_(0, 0) * size_x / distance;
+  return size_on_sensor;
+}
+
+FloatType PinholeCamera::computeSizeOnSensorVertical(const FloatType size_y, const FloatType distance) const {
+  const FloatType size_on_sensor = intrinsics_(1, 1) * size_y / distance;
+  return size_on_sensor;
+}
+
+FloatType PinholeCamera::computeAreaOnSensor(const FloatType size_x, const FloatType size_y, const FloatType distance) const {
+  const FloatType distance_square = distance * distance;
+  const FloatType area_on_sensor = intrinsics_(0, 0) * size_x * intrinsics_(1, 1) * size_y / distance_square;
+  return area_on_sensor;
+}
+
+FloatType PinholeCamera::computeRelativeSizeOnSensorHorizontal(const FloatType size_x, const FloatType distance) const {
+  const FloatType size_on_sensor = intrinsics_(0, 0) * size_x / distance / width();
+  return size_on_sensor;
+}
+
+FloatType PinholeCamera::computeRelativeSizeOnSensorVertical(const FloatType size_y, const FloatType distance) const {
+  const FloatType size_on_sensor = intrinsics_(1, 1) * size_y / distance / height();
+  return size_on_sensor;
+}
+
+FloatType PinholeCamera::computeRelativeAreaOnSensor(const FloatType size_x, const FloatType size_y, const FloatType distance) const {
+  const FloatType distance_square = distance * distance;
+  const FloatType area_on_sensor = intrinsics_(0, 0) * size_x * intrinsics_(1, 1) * size_y / distance_square / width() / height();
+  return area_on_sensor;
+}
+
 Vector3 PinholeCamera::getCameraRay(FloatType x, FloatType y) const {
   Vector3 camera_ray;
   camera_ray(0) = (x - intrinsics_(0, 2)) / intrinsics_(0, 0);

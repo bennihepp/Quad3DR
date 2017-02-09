@@ -26,7 +26,7 @@ bool ViewpointPlanner::findAndAddShortestMotions(const ViewpointEntryIndex from_
 }
 
 template <typename Iterator>
-ViewpointPlanner::FloatType ViewpointPlanner::computeInformationScore(Iterator first, Iterator last) const {
+ViewpointPlanner::FloatType ViewpointPlanner::computeInformationScore(const Viewpoint& viewpoint, Iterator first, Iterator last) const {
   FloatType total_information = std::accumulate(first, last,
       FloatType { 0 }, [](const FloatType& value, const VoxelWithInformation& voxel) {
         return value + voxel.information;

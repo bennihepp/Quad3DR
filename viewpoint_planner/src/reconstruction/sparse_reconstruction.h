@@ -65,6 +65,18 @@ public:
 
   Vector2 projectPoint(const Vector3& hom_point_camera) const;
 
+  FloatType computeSizeOnSensorHorizontal(const FloatType size_x, const FloatType distance) const;
+
+  FloatType computeSizeOnSensorVertical(const FloatType size_y, const FloatType distance) const;
+
+  FloatType computeAreaOnSensor(const FloatType size_x, const FloatType size_y, const FloatType distance) const;
+
+  FloatType computeRelativeSizeOnSensorHorizontal(const FloatType size_x, const FloatType distance) const;
+
+  FloatType computeRelativeSizeOnSensorVertical(const FloatType size_y, const FloatType distance) const;
+
+  FloatType computeRelativeAreaOnSensor(const FloatType size_x, const FloatType size_y, const FloatType distance) const;
+
   Vector3 getCameraRay(FloatType x, FloatType y) const;
 
   Vector3 getCameraRay(const Vector2& point_image) const;

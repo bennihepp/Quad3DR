@@ -140,7 +140,7 @@ set(VIEWPOINT_PLANNER_SOURCES_COMMON
   src/bvh/bvh.cuh
   # Graph
   #src/graph/graph.h
-  src/graph/graph_boost.h
+  #src/graph/graph_boost.h
   # Octree
   src/octree/occupancy_map.h
   src/octree/occupancy_map.hxx

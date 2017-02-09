@@ -11,6 +11,8 @@
 #include <ait/common.h>
 #include <ait/eigen.h>
 
+namespace ait {
+
 template <typename FloatT, std::size_t dimension, typename NormT = flann::L2<FloatT>>
 class ApproximateNearestNeighbor {
 public:
@@ -254,3 +256,5 @@ private:
   std::vector<FlannElementType> init_points_;
   std::vector<FlannElementType*> points_;
 };
+
+}

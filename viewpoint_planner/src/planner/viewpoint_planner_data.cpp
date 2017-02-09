@@ -13,6 +13,7 @@
 #include <ait/common.h>
 #include <ait/gps.h>
 #include <ait/geometry.h>
+#include <ait/nn/approximate_nearest_neighbor.h>
 #include <Eigen/Core>
 
 ViewpointPlannerData::ViewpointPlannerData(const Options* options)
@@ -257,6 +258,8 @@ void ViewpointPlannerData::readPoissonMesh(const std::string& mesh_filename) {
   poisson_mesh_.reset(new ViewpointPlannerData::MeshType);
   ViewpointPlannerData::MeshIOType::loadFromFile(mesh_filename, *poisson_mesh_.get());
   std::cout << "Number of triangles in mesh: " << poisson_mesh_->m_FaceIndicesVertices.size() << std::endl;
+  std::cout << "Number of vertices in mesh: " << poisson_mesh_->m_Vertices.size() << std::endl;
+  std::cout << "Number of normals in mesh: " << poisson_mesh_->m_Normals.size() << std::endl;
 }
 
 bool ViewpointPlannerData::readBVHTree(std::string bvh_filename, const std::string& octree_filename) {
@@ -531,29 +534,100 @@ bool ViewpointPlannerData::isTreeConsistent(const TreeT& tree) {
 }
 
 void ViewpointPlannerData::generateBVHTree(const OccupancyMapType* octree) {
-  std::vector<typename OccupiedTreeType::ObjectWithBoundingBox> objects;
-  for (auto it = octree->begin_tree(); it != octree->end_tree(); ++it) {
-    if (it.isLeaf()) {
-//      if (octree->isNodeFree(&(*it)) || octree->isNodeUnknown(&(*it))) {
-      if (octree->isNodeFree(&(*it)) && octree->isNodeKnown(&(*it))) {
-        continue;
-      }
-      typename OccupiedTreeType::ObjectWithBoundingBox object_with_bbox;
-      octomap::point3d center_octomap = it.getCoordinate();
-      Eigen::Vector3f center;
-      center << center_octomap.x(), center_octomap.y(), center_octomap.z();
-      const float size = it.getSize();
-      object_with_bbox.bounding_box = typename OccupiedTreeType::BoundingBoxType(center, size);
-      object_with_bbox.object = new NodeObject();
-      object_with_bbox.object->occupancy = it->getOccupancy();
-      object_with_bbox.object->observation_count = it->getObservationCount();
-      object_with_bbox.object->weight = it->getWeight();
-      object_with_bbox.bounding_box.constrainTo(bvh_bbox_);
-      if (object_with_bbox.bounding_box.isEmpty()) {
-        continue;
-      }
-      objects.push_back(object_with_bbox);
+  // Initialize nearest neighbor index for mesh faces
+  using MeshAnn = ait::ApproximateNearestNeighbor<FloatType, 3>;
+  MeshAnn mesh_ann;
+  std::vector<Vector3> triangle_centers;
+  triangle_centers.resize(poisson_mesh_->m_FaceIndicesVertices.size());
+#pragma omp parallel for
+  for (size_t i = 0; i < poisson_mesh_->m_FaceIndicesVertices.size(); ++i) {
+    const MeshType::Indices::Face& face = poisson_mesh_->m_FaceIndicesVertices[i];
+    AIT_ASSERT_STR(face.size() == 3, "Mesh faces need to have a valence of 3");
+    const ml::vec3f& v1 = poisson_mesh_->m_Vertices[face[0]];
+    const ml::vec3f& v2 = poisson_mesh_->m_Vertices[face[1]];
+    const ml::vec3f& v3 = poisson_mesh_->m_Vertices[face[2]];
+    Vector3 triangle_center(v1.x + v2.x + v3.x, v1.y + v2.y + v3.y, v1.z + v2.z + v3.z);
+    triangle_center /= 3;
+    triangle_centers[i] = triangle_center;
+  }
+  mesh_ann.initIndex(triangle_centers.begin(), triangle_centers.end());
+
+  const std::size_t mesh_knn = options_.bvh_normal_mesh_knn;
+  const FloatType max_dist_square = options_.bvh_normal_mesh_max_dist * options_.bvh_normal_mesh_max_dist;
+
+  std::vector<std::vector<typename OccupiedTreeType::ObjectWithBoundingBox>> objects_vector;
+#pragma omp parallel
+  {
+    const std::size_t thread_index = (std::size_t)omp_get_thread_num();
+    const std::size_t num_threads = (std::size_t)omp_get_num_threads();
+#pragma omp single
+    {
+      objects_vector.resize(num_threads);
     }
+    static std::vector<MeshAnn::IndexType> knn_indices;
+    static std::vector<MeshAnn::DistanceType> knn_distances;
+    std::vector<typename OccupiedTreeType::ObjectWithBoundingBox>& local_objects = objects_vector[thread_index];
+    std::size_t i = 0;
+    for (auto it = octree->begin_tree(); it != octree->end_tree(); ++it, ++i) {
+      if (i % num_threads != thread_index) {
+        continue;
+      }
+      if (it.isLeaf()) {
+  //      if (octree->isNodeFree(&(*it)) || octree->isNodeUnknown(&(*it))) {
+        if (octree->isNodeFree(&(*it)) && octree->isNodeKnown(&(*it))) {
+          continue;
+        }
+        typename OccupiedTreeType::ObjectWithBoundingBox object_with_bbox;
+        octomap::point3d center_octomap = it.getCoordinate();
+        Eigen::Vector3f center;
+        center << center_octomap.x(), center_octomap.y(), center_octomap.z();
+        const float size = it.getSize();
+        object_with_bbox.bounding_box = typename OccupiedTreeType::BoundingBoxType(center, size);
+        object_with_bbox.object = new NodeObjectType();
+        object_with_bbox.object->occupancy = it->getOccupancy();
+        object_with_bbox.object->observation_count = it->getObservationCount();
+        object_with_bbox.object->weight = it->getWeight();
+        object_with_bbox.bounding_box.constrainTo(bvh_bbox_);
+        if (object_with_bbox.bounding_box.isEmpty()) {
+          continue;
+        }
+        object_with_bbox.object->normal.setZero();
+        // Find nearest neighbor faces to compute normal of voxel/node
+        knn_indices.resize(mesh_knn);
+        knn_distances.resize(mesh_knn);
+        mesh_ann.knnSearch(center, mesh_knn, &knn_indices, &knn_distances);
+        for (std::size_t i = 0; i < knn_distances.size(); ++i) {
+          const MeshAnn::DistanceType dist_square = knn_distances[i];
+          const MeshAnn::IndexType index = knn_indices[i];
+          if (dist_square <= max_dist_square) {
+            const MeshType::Indices::Face& face = poisson_mesh_->m_FaceIndicesVertices[index];
+            const ml::vec3f& ml_v1 = poisson_mesh_->m_Vertices[face[0]];
+            const ml::vec3f& ml_v2 = poisson_mesh_->m_Vertices[face[1]];
+            const ml::vec3f& ml_v3 = poisson_mesh_->m_Vertices[face[2]];
+            const Vector3 v1(ml_v1.x, ml_v1.y, ml_v1.z);
+            const Vector3 v2(ml_v2.x, ml_v2.y, ml_v2.z);
+            const Vector3 v3(ml_v3.x, ml_v3.y, ml_v3.z);
+  //          Vector3 triangle_center(v1.x + v2.x + v3.x, v1.y + v2.y + v3.y, v1.z + v2.z + v3.z);
+  //          triangle_center /= 3;
+            const Vector3 normal = (v1 - v2).cross(v2 - v3).normalized();
+            const FloatType normal_weight = 1 / dist_square;
+            object_with_bbox.object->normal += normal_weight * normal;
+          }
+        }
+        if (object_with_bbox.object->normal != Vector3::Zero()) {
+          object_with_bbox.object->normal.normalize();
+        }
+
+//        objects.push_back(object_with_bbox);
+        local_objects.push_back(object_with_bbox);
+      }
+    }
+  }
+  std::cout << "Merging local object vectors" << std::endl;
+  std::vector<typename OccupiedTreeType::ObjectWithBoundingBox> objects;
+  for (auto& local_objects : objects_vector) {
+    objects.insert(std::end(objects), std::begin(local_objects), std::end(local_objects));
+    local_objects.clear();
   }
   std::cout << "Building BVH tree with " << objects.size() << " objects" << std::endl;
   ait::Timer timer;

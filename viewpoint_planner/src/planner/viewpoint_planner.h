@@ -23,10 +23,10 @@
 #include <ait/eigen_utils.h>
 #include <ait/serialization.h>
 #include <ait/graph_boost.h>
+#include <ait/nn/approximate_nearest_neighbor.h>
 #include "../mLib/mLib.h"
 #include "../octree/occupancy_map.h"
 #include "../reconstruction/dense_reconstruction.h"
-#include "../ann/approximate_nearest_neighbor.h"
 #include "viewpoint.h"
 #include "viewpoint_planner_data.h"
 #include "motion_planner.h"
@@ -93,6 +93,7 @@ public:
       addOption<FloatType>("objective_parameter_alpha", &objective_parameter_alpha);
       addOption<FloatType>("objective_parameter_beta", &objective_parameter_beta);
       addOption<FloatType>("voxel_information_lambda", &voxel_information_lambda);
+      addOption<FloatType>("voxel_min_sensor_size_ratio", &voxel_min_sensor_size_ratio);
       addOption<std::size_t>("viewpoint_path_2opt_max_k_length", &viewpoint_path_2opt_max_k_length);
       addOption<std::string>("viewpoint_graph_filename", &viewpoint_graph_filename);
       // TODO:
@@ -142,7 +143,7 @@ public:
     // Maximum angle between two views so that a voxel can be triangulated
     FloatType triangulation_max_angle_degrees = 15;
     // Maximum deviation ratio of distances between stereo pair
-    FloatType triangulation_max_dist_deviation_ratio = (FloatType)0.1;
+    FloatType triangulation_max_dist_deviation_ratio = FloatType(0.1);
     // Maximum angular deviation between stereo viewpoints
     FloatType triangulation_max_angular_deviation_degrees = 20;
     // Minimum ratio of information overlap for a viewpoint to be used for a stereo pair
@@ -183,6 +184,8 @@ public:
     FloatType objective_parameter_beta = 0;
     // Factor in the exponential of the voxel information
     FloatType voxel_information_lambda = FloatType(0.1);
+    // Threshold for projected sensor size that gives full information
+    FloatType voxel_min_sensor_size_ratio = FloatType(0.005);
 
     // Maximum segment length that is reversed by 2 Opt
     std::size_t viewpoint_path_2opt_max_k_length = 15;
@@ -612,7 +615,7 @@ public:
   };
 
   using ViewpointGraph = Graph<ViewpointEntryIndex, FloatType>;
-  using ViewpointANN = ApproximateNearestNeighbor<FloatType, 3>;
+  using ViewpointANN = ait::ApproximateNearestNeighbor<FloatType, 3>;
   using FeatureViewpointMap = std::unordered_map<std::size_t, std::vector<const Viewpoint*>>;
 
 
@@ -727,10 +730,11 @@ public:
   // Pose and viewpoint sampling
 
   template <typename IteratorT>
-  std::pair<bool, Pose> sampleSurroundingPose(IteratorT first, IteratorT last) const;
+  std::tuple<bool, ViewpointPlanner::Pose, std::size_t>
+  sampleSurroundingPose(IteratorT first, IteratorT last) const;
 
-  template <typename IteratorT>
-  std::pair<bool, Pose> sampleSurroundingPoseFromEntries(IteratorT first, IteratorT last) const;
+//  template <typename IteratorT>
+//  std::pair<bool, Pose> sampleSurroundingPoseFromEntries(IteratorT first, IteratorT last) const;
 
   std::pair<bool, Pose> sampleSurroundingPose(const Pose& pose) const;
 
@@ -763,7 +767,7 @@ public:
   /// Generate a new viewpoint entry and add it to the graph.
   bool generateNextViewpointEntry();
 
-  // Compute motions between viewpoints and update the graph with their cost.
+  /// Compute motions between viewpoints and update the graph with their cost.
   void computeViewpointMotions();
 
   /// Find the next best viewpoint to add to the viewpoint paths.
@@ -786,42 +790,46 @@ public:
 
   // Raycasting and information computation
 
+  /// Return viewpoint with virtual camera
+  Viewpoint getVirtualViewpoint(const Pose& pose) const;
+
   /// Perform raycast on the BVH tree.
   /// Returns a vector of hit voxels with additional info.
   std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxels(
-      const Pose& pose) const;
+      const Viewpoint& viewpoint) const;
 
   /// Perform raycast on the BVH tree on a limited window around the center.
   /// Returns a vector of hit voxels with additional info.
   std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxels(
-      const Pose& pose, const std::size_t width, const std::size_t height) const;
+      const Viewpoint& viewpoint, const std::size_t width, const std::size_t height) const;
 
 #if WITH_CUDA
   /// Perform raycast on the BVH tree.
   /// Returns a vector of hit voxels with additional info.
   std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxelsCuda(
-      const Pose& pose) const;
+      const Viewpoint& viewpoint) const;
 
   /// Perform raycast on the BVH tree on a limited window around the center.
   /// Returns a vector of hit voxels with additional info.
   std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxelsCuda(
-      const Pose& pose, const std::size_t width, const std::size_t height) const;
+      const Viewpoint& viewpoint, const std::size_t width, const std::size_t height) const;
 #endif
 
   /// Perform raycast on the BVH tree.
   /// Returns the set of hit voxels with corresponding information + the total information of all voxels.
   std::pair<VoxelWithInformationSet, FloatType>
-    getRaycastHitVoxelsWithInformationScore(const Pose& pose) const;
+    getRaycastHitVoxelsWithInformationScore(const Viewpoint& viewpoint) const;
 
   /// Returns the information score for a single hit voxel.
-  FloatType computeInformationScore(const VoxelType* node) const;
+  FloatType computeInformationScore(const Viewpoint& viewpoint, const VoxelType* node) const;
 
   /// Returns the information score for a single hit voxel result.
-  FloatType computeInformationScore(const ViewpointPlannerData::OccupiedTreeType::IntersectionResult& result) const;
+  FloatType computeInformationScore(const Viewpoint& viewpoint,
+      const ViewpointPlannerData::OccupiedTreeType::IntersectionResult& result) const;
 
   /// Returns the information score for a container of VoxelWithInformation objects.
   template <typename Iterator>
-  FloatType computeInformationScore(Iterator first, Iterator last) const;
+  FloatType computeInformationScore(const Viewpoint& viewpoint, Iterator first, Iterator last) const;
 
   // Matching score computation
 
@@ -855,6 +863,12 @@ private:
   /// Compute information factor based on observation count (i.e. exp(-theta * observation_count)
   WeightType computeObservationInformationFactor(CounterType observation_count) const;
 
+  /// Compute resolution information factor based on distance to voxel
+  WeightType computeResolutionInformationFactor(const Viewpoint& viewpoint, const VoxelType* node) const;
+
+  /// Compute incidence information factor based on incidence angle
+  WeightType computeIncidenceInformationFactor(const Viewpoint& viewpoint, const VoxelType* node) const;
+
   /// Add a viewpoint entry to the graph.
   void addViewpointEntry(ViewpointEntry&& viewpoint_entry);
 
@@ -864,9 +878,14 @@ private:
   /// Add a viewpoint entry without acquiring a lock. Returns the index of the new viewpoint entry.
   ViewpointEntryIndex addViewpointEntryWithoutLock(ViewpointEntry&& viewpoint_entry);
 
-  /// Find a matching viewpoint for stereo matching and add it. If a suitable viewpoint already is on the path no viewpoint is
-  /// added. Returns whether a suitable viewpoint was found. Must be called with lock.
-  bool addMatchingStereoViewpointWithoutLock(
+  /// Add a path entry to a viewpoint path
+  void addViewpointPathEntry(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data,
+      const ViewpointPathEntry& new_path_entry);
+
+  /// Find a matching viewpoint for stereo matching. If no suitable viewpoint with enough overlap is already in the graph
+  /// a new viewpoint is added. Returns a pair indicating whether the stereo viewpoint is already on the path (true) or not (false)
+  /// and the index of the corresponding viewpoint entry. Must be called with lock.
+  std::pair<bool, ViewpointEntryIndex> findMatchingStereoViewpointWithoutLock(
       ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data, const ViewpointPathEntry& path_entry);
 
   /// Find motion paths from provided viewpoint to neighbors in the viewpoint graph.

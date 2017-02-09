@@ -22,10 +22,12 @@
 #include "../reconstruction/dense_reconstruction.h"
 #include "../bvh/bvh.h"
 
+template <typename FloatType>
 struct NodeObject {
-  float occupancy;
+  FloatType occupancy;
   uint16_t observation_count;
-  float weight;
+  FloatType weight;
+  Eigen::Matrix<FloatType, 3, 1> normal;
 
 private:
   // Boost serialization
@@ -36,6 +38,7 @@ private:
     ar & occupancy;
     ar & observation_count;
     ar & weight;
+    ar & normal;
   }
 
   template <typename Archive>
@@ -43,6 +46,7 @@ private:
     ar & occupancy;
     ar & observation_count;
     ar & weight;
+    ar & normal;
   }
 
   BOOST_SERIALIZATION_SPLIT_MEMBER()
@@ -87,6 +91,8 @@ public:
       addOption<FloatType>("roi_bbox_max_x", +50);
       addOption<FloatType>("roi_bbox_max_y", +50);
       addOption<FloatType>("roi_bbox_max_z", +50);
+      addOption<std::size_t>("bvh_normal_mesh_knn", &bvh_normal_mesh_knn);
+      addOption<FloatType>("bvh_normal_mesh_max_dist", &bvh_normal_mesh_max_dist);
       addOption<std::size_t>("grid_dimension", &grid_dimension);
       addOption<FloatType>("distance_field_cutoff", &distance_field_cutoff);
       addOption<FloatType>("roi_falloff_distance", &roi_falloff_distance);
@@ -101,6 +107,8 @@ public:
     bool regenerate_bvh_tree = false;
     bool regenerate_distance_field = false;
     std::string regions_json_filename = "";
+    std::size_t bvh_normal_mesh_knn = 10;
+    FloatType bvh_normal_mesh_max_dist = 2;
     std::size_t grid_dimension = 128;
     FloatType roi_falloff_distance = 10;
     FloatType distance_field_cutoff = 5;
@@ -123,7 +131,8 @@ public:
 
   using RawOccupancyMapType = OccupancyMap<OccupancyNode>;
   using OccupancyMapType = OccupancyMap<AugmentedOccupancyNode>;
-  using OccupiedTreeType = bvh::Tree<NodeObject, FloatType>;
+  using NodeObjectType = NodeObject<FloatType>;
+  using OccupiedTreeType = bvh::Tree<NodeObjectType, FloatType>;
 
   using TreeNavigatorType = TreeNavigator<OccupancyMapType, OccupancyMapType::NodeType>;
   using ConstTreeNavigatorType = TreeNavigator<const OccupancyMapType, const OccupancyMapType::NodeType>;
