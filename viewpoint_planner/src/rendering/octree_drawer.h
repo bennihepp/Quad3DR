@@ -18,6 +18,8 @@ class OcTreeDrawer {
 public:
   using FloatType = float;;
 
+  const FloatType kRaycastVoxelSizeFactor = (FloatType)1.05;
+
   OcTreeDrawer();
   virtual ~OcTreeDrawer();
 

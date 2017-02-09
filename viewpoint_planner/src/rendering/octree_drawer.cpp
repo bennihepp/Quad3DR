@@ -316,7 +316,7 @@ void OcTreeDrawer::updateRaycastVoxels(
   }
   raycast_drawer_->init();
   configVoxelDrawer(*raycast_drawer_);
-  raycast_drawer_->setVoxelSizeEps(0.01f);
+  raycast_drawer_->setVoxelSizeFactor(kRaycastVoxelSizeFactor);
   raycast_drawer_->setInformationRange(low_information, high_information);
   raycast_drawer_->upload(voxel_data, color_data, info_data);
   std::cout << "Information range: [" << low_information << ", " << high_information << "]" << std::endl;
@@ -380,6 +380,7 @@ void OcTreeDrawer::updateRaycastVoxels(
   }
   raycast_drawer_->init();
   configVoxelDrawer(*raycast_drawer_);
+  raycast_drawer_->setVoxelSizeFactor(kRaycastVoxelSizeFactor);
   raycast_drawer_->setInformationRange(low_information, high_information);
   raycast_drawer_->upload(voxel_data, color_data, info_data);
   std::cout << "Information range: [" << low_information << ", " << high_information << "]" << std::endl;
@@ -444,6 +445,7 @@ void OcTreeDrawer::updateRaycastVoxels(
   }
   raycast_drawer_->init();
   configVoxelDrawer(*raycast_drawer_);
+  raycast_drawer_->setVoxelSizeFactor(kRaycastVoxelSizeFactor);
   raycast_drawer_->setInformationRange(low_information, high_information);
   raycast_drawer_->upload(voxel_data, color_data, info_data);
   std::cout << "Information range: [" << low_information << ", " << high_information << "]" << std::endl;

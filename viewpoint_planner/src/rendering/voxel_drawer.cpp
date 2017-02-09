@@ -22,7 +22,7 @@ VoxelDrawer::VoxelDrawer()
   vertex_offset_normal_tex_(QOpenGLTexture::TargetBuffer),
   color_tex_(QOpenGLTexture::TargetBuffer),
   voxel_info_tex_(QOpenGLTexture::TargetBuffer),
-  voxel_size_eps_(0),
+  voxel_size_factor_(1),
   color_flags_(ColorFlags::Fixed),
   weight_color_scale_(1),
   weight_color_offset_(0),
@@ -302,7 +302,7 @@ void VoxelDrawer::draw(const QMatrix4x4& pvm_matrix, const QMatrix4x4& view_matr
   program_.bind();
   vao_.bind();
 
-  program_.setUniformValue("u_voxel_size_eps", voxel_size_eps_);
+  program_.setUniformValue("u_voxel_size_factor", voxel_size_factor_);
 
   glUniform1ui(program_.uniformLocation("u_color_mode"), static_cast<uint32_t>(color_flags_));
   program_.setUniformValue("u_weight_color_scale", weight_color_scale_);
@@ -359,8 +359,8 @@ void VoxelDrawer::draw(const QMatrix4x4& pvm_matrix, const QMatrix4x4& view_matr
   program_.release();
 }
 
-void VoxelDrawer::setVoxelSizeEps(const float voxel_size_eps) {
-  voxel_size_eps_ = voxel_size_eps;
+void VoxelDrawer::setVoxelSizeFactor(const float voxel_size_factor) {
+  voxel_size_factor_ = voxel_size_factor;
 }
 
 std::vector<std::pair<std::string, VoxelDrawer::ColorFlags>> VoxelDrawer::getAvailableColorFlags() {
