@@ -146,6 +146,7 @@ public:
     : ait::ConfigOptions("viewpoint_planner.gui", "ViewpointPlanner GUI options") {
       addOption<bool>("websocket_enable", &websocket_enable);
       addOption<uint16_t>("websocket_port", &websocket_port);
+      addOption<bool>("show_poisson_mesh_normals", &show_poisson_mesh_normals);
     }
 
     ~Options() override {}
@@ -153,6 +154,7 @@ public:
     // Websocket server options
     bool websocket_enable = true;
     uint16_t websocket_port = 54321;
+    bool show_poisson_mesh_normals = false;
   };
 
   using FloatType = float;
@@ -251,6 +253,8 @@ public slots:
   void onSaveViewpointPath(const std::string& filename);
   void onLoadViewpointPath(const std::string& filename);
   void onExportViewpointPathAsJson(const std::string& filename);
+  void onExportViewpointPathAsText(const std::string& filename);
+  void onExportViewpointPathAsSparseReconstruction(const std::string& path);
   void continuePlannerThread();
   void pausePlannerThread();
 
@@ -302,6 +306,7 @@ private:
       Fixed = 1,
       Component = 2,
       Information = 3,
+      Indexed = 4,
     };
 
     std::vector<std::pair<std::string, ViewerWidget::ViewpointColorMode>> getAvailableViewpointColorModes() const;
@@ -347,7 +352,7 @@ private:
 //    QTimer* process_timer_;
     ViewpointPlannerThread planner_thread_;
     std::vector<std::tuple<ViewpointPlanner::ViewpointEntryIndex, Pose, FloatType>> viewpoint_graph_copy_;
-    std::vector<std::tuple<ViewpointPlanner::ViewpointEntryIndex, Pose, FloatType>> viewpoint_path_copy_;
+    std::vector<std::tuple<ViewpointPlanner::ViewpointEntryIndex, Pose, FloatType, bool>> viewpoint_path_copy_;
     std::vector<std::size_t> viewpoint_path_order_copy_;
     std::size_t viewpoint_path_branch_index_;
 
