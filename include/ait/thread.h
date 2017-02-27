@@ -17,7 +17,9 @@ namespace ait {
 
 class Thread {
 public:
-  static std::size_t getHardwareConcurrency();
+  static std::size_t getHardwareConcurrency() {
+    return std::thread::hardware_concurrency();
+  }
 
   Thread(bool start_now = false)
   : keep_running_(true), finished_(false) {

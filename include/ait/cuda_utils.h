@@ -8,6 +8,7 @@
 #pragma once
 
 #include <string>
+#include <exception>
 
 #include <ait/common.h>
 
@@ -43,6 +44,22 @@
 }
 
 namespace ait {
+
+class CudaError : public std::exception {
+public:
+  CudaError(const cudaError_t err) {
+    msg_ = cudaGetErrorString(err);
+  }
+
+  ~CudaError() _GLIBCXX_USE_NOEXCEPT override {}
+
+  const char* what() const _GLIBCXX_USE_NOEXCEPT override {
+    return msg_.c_str();
+  }
+
+private:
+  std::string msg_;
+};
 
 class CudaManager {
 public:

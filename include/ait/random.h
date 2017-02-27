@@ -40,11 +40,15 @@ public:
     return rng_;
   }
 
+  bool sampleDiscrete(const FloatType true_probability) const {
+    return sampleUniform() <= true_probability;
+  }
+
   FloatType sampleNormal() const {
     return normal_dist_(rng_);
   }
 
-  FloatType sampleNormal(FloatType mean, FloatType sigma) const {
+  FloatType sampleNormal(const FloatType mean, const FloatType sigma) const {
     return mean + sigma * sampleNormal();
   }
 
@@ -54,7 +58,7 @@ public:
   }
 
   /// Sample uniform number from interval [min, max) (excluding max)
-  FloatType sampleUniform(FloatType min, FloatType max) const {
+  FloatType sampleUniform(const FloatType min, const FloatType max) const {
     return min + (max - min) * sampleUniform();
   }
 
@@ -64,10 +68,10 @@ public:
   }
 
   /// Sample uniform integer from interval [min, max] (including max)
-  IntType sampleUniformInt(IntType min, IntType max) const {
-    IntType random_max = std::numeric_limits<IntType>::max();
-    IntType num_values = max - min + 1;
-    IntType unbiased_sample_range = random_max - random_max % num_values;
+  IntType sampleUniformInt(const IntType min, const IntType max) const {
+    const IntType random_max = std::numeric_limits<IntType>::max();
+    const IntType num_values = max - min + 1;
+    const IntType unbiased_sample_range = random_max - random_max % num_values;
     IntType sample;
     do {
       sample = sampleUniformInt();
@@ -77,7 +81,7 @@ public:
   }
 
   /// Sample uniform integer from interval [min, max) (excluding max)
-  IntType sampleUniformIntExclusive(IntType min, IntType max) const {
+  IntType sampleUniformIntExclusive(const IntType min, const IntType max) const {
     return sampleUniformInt(min, max - 1);
   }
 
@@ -88,7 +92,7 @@ public:
   }
 
   template <typename Vector3T>
-  void sampleSphericalShell(FloatType min_radius, FloatType max_radius, Vector3T* vec) const {
+  void sampleSphericalShell(const FloatType min_radius, const FloatType max_radius, Vector3T* vec) const {
     sampleUnitSphere(vec);
     std::uniform_real_distribution<FloatType> radius_dist(min_radius, max_radius);
     (*vec) *= sampleUniform(min_radius, max_radius);
@@ -114,7 +118,7 @@ public:
 
   /// Sample from a discrete distribution with probabilities proportional to the given (positive) weights
   template <typename Iterator>
-  Iterator sampleDiscreteWeighted(Iterator first, Iterator last) {
+  Iterator sampleDiscreteWeighted(const Iterator first, const Iterator last) {
     FloatType total_weight = 0;
     for (Iterator it = first; it != last; ++it) {
       total_weight += *it;
@@ -133,7 +137,7 @@ public:
 
   /// Sample from a discrete distribution with probabilities proportional to the given (positive) weights
   template <typename Iterator, typename Evaluator>
-  Iterator sampleDiscreteWeighted(Iterator first, Iterator last, Evaluator eval) {
+  Iterator sampleDiscreteWeighted(const Iterator first, const Iterator last, Evaluator eval) {
     FloatType total_weight = 0;
     for (Iterator it = first; it != last; ++it) {
       total_weight += eval(*it);
@@ -152,7 +156,7 @@ public:
 
   /// Sample from a discrete distribution with given cumulative probabilities (sorted in ascending order)
   template <typename Iterator>
-  Iterator sampleDiscreteCumulative(Iterator first, Iterator last) {
+  Iterator sampleDiscreteCumulative(const Iterator first, const Iterator last) {
     FloatType u = sampleUniform();
     Iterator it = std::upper_bound(first, last, u);
     if (it == last) {
@@ -163,7 +167,7 @@ public:
 
   /// Sample from a discrete distribution with given cumulative probabilities (sorted in ascending order)
   template <typename Iterator, typename Compare>
-  Iterator sampleDiscreteCumulative(Iterator first, Iterator last, Compare comp) {
+  Iterator sampleDiscreteCumulative(const Iterator first, const Iterator last, Compare comp) {
     FloatType u = sampleUniform();
     Iterator it = std::upper_bound(first, last, u, comp);
     if (it == last) {

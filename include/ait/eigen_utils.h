@@ -26,13 +26,36 @@ const typename Derived::Scalar max = 1) {
 }
 
 template <typename Derived1, typename Derived2>
-inline std::tuple<typename Derived1::Scalar, typename Derived1::PlainObject> computeDistanceAndDirection(
+std::tuple<typename Derived1::Scalar, typename Derived1::PlainObject> computeDistanceAndDirection(
     const Eigen::MatrixBase<Derived1>& from, const Eigen::MatrixBase<Derived2>& to) {
   typename Derived1::PlainObject direction = to - from;
   double distance = direction.norm();
   direction.normalize();
   return std::make_tuple(distance, direction);
 }
+
+template <typename Derived1, typename Derived2>
+Eigen::Matrix<typename Derived1::Scalar, 3, 3> getZLookAtMatrix(const Derived1& look_at_direction, const Derived2& up_direction) {
+  typename Derived1::PlainObject right_direction = Derived1::PlainObject::Zero();
+  if (look_at_direction.dot(up_direction) == 0) {
+    right_direction(0) = 1;
+  }
+  else {
+    right_direction = look_at_direction.cross(up_direction).normalized();
+  }
+  typename Derived1::PlainObject orientation_up_direction = -right_direction.cross(look_at_direction);
+  Eigen::Matrix<typename Derived1::Scalar, 3, 3> orientation = Eigen::Matrix<typename Derived1::Scalar, 3, 3>::Identity();
+  orientation.col(2) = look_at_direction.normalized();
+  orientation.col(0) = right_direction.normalized();
+  orientation.col(1) = orientation_up_direction.normalized();
+  return orientation;
+}
+
+template <typename Derived1, typename Derived2>
+Eigen::Quaternion<typename Derived1::Scalar> getZLookAtQuaternion(const Derived1& look_at_direction, const Derived2& up_direction) {
+  return Eigen::Quaternion<typename Derived1::Scalar>(getZLookAtMatrix(look_at_direction, up_direction));
+}
+
 
 //inline Eigen::Vector3d fromHomogeneousVector(const Eigen::Vector4d& vector) {
 //    Eigen::Vector3d inhom_vector(vector.topRows<3>());

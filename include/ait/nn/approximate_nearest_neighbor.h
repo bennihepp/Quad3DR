@@ -122,6 +122,11 @@ public:
   };
 
   void knnSearch(const Point& point, std::size_t knn, std::vector<IndexType>* indices, std::vector<DistanceType>* distances) {
+    if (empty()) {
+      indices->resize(0);
+      distances->resize(0);
+      return;
+    }
     // FLANN is not supposed to modify the values
     Point& point_nonconst = const_cast<Point&>(point);
     FlannMatrix flann_query(point_nonconst.data(), 1, point_nonconst.rows());
@@ -136,6 +141,9 @@ public:
   }
 
   SingleResult knnSearch(const Point& point, std::size_t knn) {
+    if (empty()) {
+      return SingleResult();
+    }
     // FLANN is not supposed to modify the values
     Point& point_nonconst = const_cast<Point&>(point);
     Result result;
@@ -149,6 +157,9 @@ public:
   }
 
   Result knnSearch(const EigenMatrix& points, std::size_t knn) {
+    if (empty()) {
+      return Result();
+    }
     // FLANN is not supposed to modify the values
     EigenMatrix& points_nonconst = const_cast<EigenMatrix&>(points);
     FlannMatrix flann_queries(points_nonconst.data(), points_nonconst.rows(), points_nonconst.cols());
@@ -170,6 +181,11 @@ public:
 
   void radiusSearch(const Point& point, FloatType radius, std::size_t max_results,
       std::vector<IndexType>* indices, std::vector<DistanceType>* distances) {
+    if (empty()) {
+      indices->resize(0);
+      distances->resize(0);
+      return;
+    }
     // FLANN is not supposed to modify the values
     Point& point_nonconst = const_cast<Point&>(point);
     FlannMatrix flann_query(point_nonconst.data(), 1, point_nonconst.rows());
@@ -230,6 +246,14 @@ public:
         }
       }
     }
+  }
+
+  bool empty() const {
+    return numPoints() == 0;
+  }
+
+  std::size_t numPoints() const {
+    return numPointsInternal();
   }
 
 private:
