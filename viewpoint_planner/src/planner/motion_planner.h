@@ -230,10 +230,20 @@ private:
       Motion motion;
       motion.distance = motion_distance;
       motion.cost = motion_distance;
+      FloatType accumulated_motion_distance = 0;
       for (std::size_t i = 0; i < geo_path->getStateCount(); ++i) {
         const StateSpaceType::StateType* state = static_cast<const StateSpaceType::StateType*>(geo_path->getState(i));
         Vector3 position(state->getX(), state->getY(), state->getZ());
-        Quaternion quat = Quaternion::Identity();
+        Quaternion quat;
+        if (i == 0) {
+          quat = from.quaternion();
+        }
+        else {
+          const StateSpaceType::StateType* prev_state = static_cast<const StateSpaceType::StateType*>(geo_path->getState(i - 1));
+          accumulated_motion_distance += space_info_->distance(prev_state, state);
+          const FloatType fraction = accumulated_motion_distance / motion.distance;
+          quat = from.quaternion().slerp(fraction, to.quaternion());
+        }
         Pose pose = Pose::createFromImageToWorldTransformation(position, quat);
         motion.poses.push_back(pose);
       }
