@@ -48,6 +48,7 @@ public:
   void updateRaycastVoxels(const std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, FloatType>>& raycast_voxels);
   void updateRaycastVoxels(const std::vector<std::pair<const ViewpointPlanner::VoxelType*, FloatType>>& raycast_voxels);
   void updateRaycastVoxels(const ViewpointPlanner::VoxelWithInformationSet& raycast_voxels);
+  void updateRaycastVoxels(const ViewpointPlanner::VoxelMap& voxel_map);
   void configVoxelDrawer(VoxelDrawer& voxel_drawer) const;
 
   FloatType getOccupancyBinThreshold() const;
