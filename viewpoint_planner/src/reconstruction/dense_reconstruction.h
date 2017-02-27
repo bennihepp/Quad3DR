@@ -118,7 +118,7 @@ public:
 
   ~DenseReconstruction() override;
 
-  void read(const std::string& path) override;
+  void read(const std::string& path, const bool read_sfm_gps_transformation=true) override;
 
   /// Returns the depth map corresponding to the image (lazy loading of depth maps)
   const DepthMap& getDepthMap(ImageId image_id, DenseMapType dense_map_type = GEOMETRIC) const;

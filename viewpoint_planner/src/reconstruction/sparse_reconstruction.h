@@ -238,7 +238,7 @@ public:
 
   virtual ~SparseReconstruction();
 
-  virtual void read(const std::string& path);
+  virtual void read(const std::string& path, const bool read_sfm_gps_transformation=true);
 
   const CameraMapType& getCameras() const;
 
@@ -251,6 +251,8 @@ public:
   const Point3DMapType& getPoints3D() const;
 
   Point3DMapType& getPoints3D();
+
+  bool hasSfmGpsTransformation() const;
 
   const SfmToGpsTransformation& sfmGpsTransformation() const;
 
@@ -278,6 +280,7 @@ private:
   CameraMapType cameras_;
   ImageMapType images_;
   Point3DMapType points3D_;
+  bool has_sfm_gps_transformation_;
   SfmToGpsTransformation sfm_gps_transformation_;
 };
 

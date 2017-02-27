@@ -250,18 +250,22 @@ const Point3DStatistics& Point3D::getStatistics() const {
   return statistics;
 }
 
-SparseReconstruction::SparseReconstruction() {}
+SparseReconstruction::SparseReconstruction()
+: has_sfm_gps_transformation_(false) {}
 
 SparseReconstruction::~SparseReconstruction() {}
 
-void SparseReconstruction::read(const std::string& path) {
+void SparseReconstruction::read(const std::string& path, const bool read_sfm_gps_transformation /*=true*/) {
   cameras_.clear();
   images_.clear();
   points3D_.clear();
   readCameras(ait::joinPaths(path, "cameras.txt"));
   readImages(ait::joinPaths(path, "images.txt"));
   readPoints3D(ait::joinPaths(path, "points3D.txt"));
-  readGpsTransformation(ait::joinPaths(path, "gps_transformation.txt"));
+  if (read_sfm_gps_transformation) {
+    readGpsTransformation(ait::joinPaths(path, "gps_transformation.txt"));
+    has_sfm_gps_transformation_ = true;
+  }
 }
 
 const CameraMapType& SparseReconstruction::getCameras() const {
@@ -286,6 +290,10 @@ const Point3DMapType& SparseReconstruction::getPoints3D() const {
 
 Point3DMapType& SparseReconstruction::getPoints3D() {
   return points3D_;
+}
+
+bool SparseReconstruction::hasSfmGpsTransformation() const {
+  return has_sfm_gps_transformation_;
 }
 
 const SfmToGpsTransformation& SparseReconstruction::sfmGpsTransformation() const {

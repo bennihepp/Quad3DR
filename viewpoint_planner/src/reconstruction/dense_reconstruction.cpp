@@ -16,11 +16,11 @@ DenseReconstruction::DenseReconstruction() {}
 
 DenseReconstruction::~DenseReconstruction() {}
 
-void DenseReconstruction::read(const std::string& path) {
+void DenseReconstruction::read(const std::string& path, const bool read_sfm_gps_transformation /*=true*/) {
   path_ = path;
   depth_maps_.clear();
   normal_maps_.clear();
-  SparseReconstruction::read(ait::joinPaths(path, "sparse"));
+  SparseReconstruction::read(ait::joinPaths(path, "sparse"), read_sfm_gps_transformation);
 }
 
 const DenseReconstruction::DepthMap& DenseReconstruction::getDepthMap(ImageId image_id, DenseMapType dense_map_type) const {
