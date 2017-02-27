@@ -73,12 +73,12 @@ public:
 
   /// queries whether a node is occupied according to the tree's parameter for "occupancy"
   inline bool isNodeOccupied(const NodeT* occupancy_node) const {
-    return getNodeOccupancy(occupancy_node) >= this->occ_prob_thres_;
+    return getNodeOccupancy(occupancy_node) > this->occ_prob_thres_;
   }
 
   /// queries whether a node is occupied according to the tree's parameter for "occupancy"
   inline bool isNodeOccupied(const OccupancyType occupancy) const {
-    return occupancy >= this->occ_prob_thres_;
+    return occupancy > this->occ_prob_thres_;
   }
 
   inline bool isNodeFree(const NodeT* occupancy_node) const {

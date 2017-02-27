@@ -40,7 +40,7 @@
 
 template <typename NodeT>
 AbstractOccupancyMap<NodeT>::AbstractOccupancyMap() {
-  setOccupancyThres(0.7f);
+  setOccupancyThres(0.51f);
   setProbHit(0.7f);  // = 0.85 in logodds
   setProbMiss(0.4f);  // = -0.4 in logodds
   setObservationThres(1);

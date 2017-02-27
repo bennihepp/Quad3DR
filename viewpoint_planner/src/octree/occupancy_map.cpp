@@ -60,6 +60,7 @@ OccupancyMap<AugmentedOccupancyNode>* convertToAugmentedMap(const OccupancyMap<O
   size_t unknown_count = 0;
   size_t occupied_count = 0;
   size_t free_count = 0;
+  size_t leaf_count = 0;
 
   // Copy input tree into augmented tree and initialize parent pointer
   std::stack<std::pair<InputConstTreeNavigatorType, OutputTreeNavigatorType>> node_stack;
@@ -88,6 +89,7 @@ OccupancyMap<AugmentedOccupancyNode>* convertToAugmentedMap(const OccupancyMap<O
       }
     }
     else {
+      ++leaf_count;
       if (output_nav->getObservationCount() == 0) {
         ++unknown_count;
       }
@@ -99,7 +101,7 @@ OccupancyMap<AugmentedOccupancyNode>* convertToAugmentedMap(const OccupancyMap<O
       }
     }
   }
-  std::cout << "unknown=" << unknown_count << ", occupied=" << occupied_count << ", free=" << free_count << std::endl;
+  std::cout << "leaf_count=" << leaf_count << ", unknown=" << unknown_count << ", occupied=" << occupied_count << ", free=" << free_count << std::endl;
 
   // Update observation count sum of inner nodes
   output_tree->updateInnerOccupancy();
