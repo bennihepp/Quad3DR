@@ -12,6 +12,7 @@
         <file>shaders/points.f.glsl</file>
         <file>shaders/voxels.v.glsl</file>
         <file>shaders/voxels.f.glsl</file>
+        <file>shaders/triangles_normals.f.glsl</file>
+        <file>shaders/triangles_normals.v.glsl</file>
     </qresource>
 </RCC>
-

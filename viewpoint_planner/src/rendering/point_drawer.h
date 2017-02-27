@@ -41,6 +41,8 @@ struct OGLVertexData
   float z;
 };
 
+using OGLNormalData = OGLVertexData;
+
 struct OGLColorData
 {
   OGLColorData()
@@ -100,6 +102,57 @@ struct OGLVertexDataRGBA
 };
 
 inline std::ostream& operator<<(std::ostream& out, const OGLVertexDataRGBA& vertex) {
+    out << "(" << vertex.x << ", " << vertex.y << ", " << vertex.z << ")";
+    return out;
+}
+
+struct OGLVertexNormalDataRGBA
+{
+  OGLVertexNormalDataRGBA()
+  : x(0), y(0), z(0), nx(0), ny(0), nz(0), r(0), g(0), b(0), a(0) {}
+
+  OGLVertexNormalDataRGBA(float x, float y, float z)
+  : x(x), y(y), z(z), nx(0), ny(0), nz(0), r(0), g(0), b(0), a(0) {}
+
+  OGLVertexNormalDataRGBA(float x, float y, float z, float r, float g, float b, float a)
+  : x(x), y(y), z(z), nx(0), ny(0), nz(0), r(r), g(g), b(b), a(a) {}
+
+  OGLVertexNormalDataRGBA(float x, float y, float z, float nx, float ny, float nz, float r, float g, float b, float a)
+  : x(x), y(y), z(z), nx(nx), ny(ny), nz(nz), r(r), g(g), b(b), a(a) {}
+
+  OGLVertexNormalDataRGBA(const OGLVertexData& vertex, const OGLNormalData& normal, const OGLColorData& color)
+  : x(vertex.x), y(vertex.y), z(vertex.z),
+    nx(normal.x), ny(normal.y), nz(normal.z),
+    r(color.r), g(color.g), b(color.b), a(color.a) {}
+
+  OGLVertexNormalDataRGBA(const OGLVertexDataRGBA& other)
+  : x(other.x), y(other.y), z(other.z),
+    nx(0), ny(0), nz(0),
+    r(other.r), g(other.g), b(other.b), a(other.a) {}
+
+  OGLVertexNormalDataRGBA(const OGLVertexDataRGBA& other, const OGLNormalData& normal)
+  : x(other.x), y(other.y), z(other.z),
+    nx(normal.x), ny(normal.y), nz(normal.z),
+    r(other.r), g(other.g), b(other.b), a(other.a) {}
+
+  OGLVertexNormalDataRGBA(const OGLVertexNormalDataRGBA& other)
+  : x(other.x), y(other.y), z(other.z),
+    nx(other.nx), ny(other.ny), nz(other.nz),
+    r(other.r), g(other.g), b(other.b), a(other.a) {}
+
+    float x;
+    float y;
+    float z;
+    float nx;
+    float ny;
+    float nz;
+    float r;
+    float g;
+    float b;
+    float a;
+};
+
+inline std::ostream& operator<<(std::ostream& out, const OGLVertexNormalDataRGBA& vertex) {
     out << "(" << vertex.x << ", " << vertex.y << ", " << vertex.z << ")";
     return out;
 }
