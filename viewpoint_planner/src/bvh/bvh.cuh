@@ -147,7 +147,13 @@ public:
   __host__ __device__
   bool isOutside(const CudaVector3<FloatT>& point) const {
     for (std::size_t i = 0; i < point.Rows; ++i) {
-      if (point(i) < min_(i) || point(i) > max_(i)) {
+      const FloatT min_value = min_(i);
+      const FloatT max_value = max_(i);
+      const FloatT point_value = point(i);
+      const bool p_sm_min = point_value < min_value;
+      const bool p_gt_max = point_value > max_value;
+      if (p_sm_min || p_gt_max) {
+//      if (point(i) < min_(i) || point(i) > max_(i)) {
         return true;
       }
     }
@@ -444,14 +450,21 @@ public:
   static CudaTree* createCopyFromHostTree(NodeType* root, const std::size_t num_of_nodes, const std::size_t tree_depth);
 
   ~CudaTree() {
+    clear();
+  }
+
+  void clear() {
     if (d_nodes_ != nullptr) {
       ait::CudaUtils::deallocate(&d_nodes_);
+      d_nodes_ = nullptr;
     }
     if (d_rays_ != nullptr) {
       ait::CudaUtils::deallocate(&d_rays_);
+      d_rays_ = nullptr;
     }
     if (d_results_ != nullptr) {
       ait::CudaUtils::deallocate(&d_results_);
+      d_results_ = nullptr;
     }
   }
 
@@ -473,7 +486,8 @@ public:
       const CudaMatrix3x4<FloatT>& extrinsics,
       const std::size_t x_start, const std::size_t x_end,
       const std::size_t y_start, const std::size_t y_end,
-      const FloatT min_range = 0, const FloatT max_range = -1);
+      const FloatT min_range = 0, const FloatT max_range = -1,
+      const bool fail_on_error = false);
 #endif
 
   std::vector<CudaIntersectionResult> raycastIterative(

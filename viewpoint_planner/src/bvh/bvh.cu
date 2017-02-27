@@ -421,7 +421,8 @@ CudaTree<FloatT>::raycastRecursive(
     const CudaMatrix3x4<FloatT>& extrinsics,
     const std::size_t x_start, const std::size_t x_end,
     const std::size_t y_start, const std::size_t y_end,
-    FloatT min_range /*= 0*/, FloatT max_range /*= -1*/) {
+    FloatT min_range /*= 0*/, FloatT max_range /*= -1*/,
+    const bool fail_on_error /*= false*/) {
   const std::size_t num_of_rays = (y_end - y_start) * (x_end - x_start);
   reserveDeviceRaysAndResults(num_of_rays);
   const std::size_t grid_size = y_end - y_start;
@@ -438,8 +439,18 @@ CudaTree<FloatT>::raycastRecursive(
       min_range, max_range,
       root,
       d_results_);
-  CUDA_DEVICE_SYNCHRONIZE();
-  CUDA_CHECK_ERROR();
+  if (fail_on_error) {
+    CUDA_DEVICE_SYNCHRONIZE();
+    CUDA_CHECK_ERROR();
+  }
+  else {
+    cudaError err = cudaDeviceSynchronize();
+    if (cudaSuccess != err) { \
+      fprintf(stderr, "CUDA error in file '%s' in line %i: %s\n",
+          __FILE__, __LINE__, cudaGetErrorString(err));
+      throw ait::CudaError(err);
+    }
+  }
   std::vector<CudaIntersectionResult> cuda_results(num_of_rays);
   ait::CudaUtils::copyArrayFromDevice(d_results_, &cuda_results);
   return cuda_results;

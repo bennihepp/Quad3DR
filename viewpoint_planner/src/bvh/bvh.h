@@ -220,7 +220,7 @@ public:
   : root_(nullptr), stored_as_vector_(false), owns_objects_(false), depth_(0), num_nodes_(0), num_leaf_nodes_(0) {
 #if WITH_CUDA
     cuda_tree_ = nullptr;
-    cuda_stack_size_ = 16 * 1024;
+    cuda_stack_size_ = 32 * 1024;
 #endif
   }
 
@@ -370,7 +370,8 @@ public:
       const Matrix3x4& extrinsics,
       const std::size_t x_start, const std::size_t x_end,
       const std::size_t y_start, const std::size_t y_end,
-      FloatType min_range = 0, FloatType max_range = -1) {
+      FloatType min_range = 0, FloatType max_range = -1,
+      const bool fail_on_error = false) {
     ensureCudaTreeIsInitialized();
     CudaMatrix4x4<FloatType> cuda_intrinsics;
     cuda_intrinsics.copyFrom(intrinsics.data(), CudaMatrix4x4<FloatType>::ColumnMajor);
@@ -380,34 +381,44 @@ public:
 //    cuda_intrinsics.print();
 //    std::cout << "extrinsics: " << extrinsics << std::endl;
 //    cuda_extrinsics.print();
-    using CudaResultType = typename CudaTreeType::CudaIntersectionResult;
-    const std::vector<CudaResultType> cuda_results =
-        cuda_tree_->raycastRecursive(
-            cuda_intrinsics,
-            cuda_extrinsics,
-            x_start, x_end,
-            y_start, y_end,
-            min_range, max_range);
-//    const std::vector<CudaResultType> cuda_results =
-//        cuda_tree_->raycastIterative(
-//            cuda_intrinsics,
-//            cuda_extrinsics,
-//            x_start, x_end,
-//            y_start, y_end,
-//            min_range, max_range);
-    std::vector<IntersectionResult> results(cuda_results.size());
-#pragma omp parallel for
-    for (std::size_t i = 0; i < cuda_results.size(); ++i) {
-      const CudaResultType& cuda_result = cuda_results[i];
-      IntersectionResult& result = results[i];
-      result.depth = cuda_result.depth;
-      result.dist_sq = cuda_result.dist_sq;
-      result.intersection(0) = cuda_result.intersection(0);
-      result.intersection(1) = cuda_result.intersection(1);
-      result.intersection(2) = cuda_result.intersection(2);
-      result.node = reinterpret_cast<NodeType*>(cuda_result.node);
+    try {
+      using CudaResultType = typename CudaTreeType::CudaIntersectionResult;
+      const std::vector<CudaResultType> cuda_results =
+          cuda_tree_->raycastRecursive(
+              cuda_intrinsics,
+              cuda_extrinsics,
+              x_start, x_end,
+              y_start, y_end,
+              min_range, max_range,
+              fail_on_error);
+  //    const std::vector<CudaResultType> cuda_results =
+  //        cuda_tree_->raycastIterative(
+  //            cuda_intrinsics,
+  //            cuda_extrinsics,
+  //            x_start, x_end,
+  //            y_start, y_end,
+  //            min_range, max_range);
+      std::vector<IntersectionResult> results(cuda_results.size());
+  #pragma omp parallel for
+      for (std::size_t i = 0; i < cuda_results.size(); ++i) {
+        const CudaResultType& cuda_result = cuda_results[i];
+        IntersectionResult& result = results[i];
+        result.depth = cuda_result.depth;
+        result.dist_sq = cuda_result.dist_sq;
+        result.intersection(0) = cuda_result.intersection(0);
+        result.intersection(1) = cuda_result.intersection(1);
+        result.intersection(2) = cuda_result.intersection(2);
+        result.node = reinterpret_cast<NodeType*>(cuda_result.node);
+      }
+      return results;
     }
-    return results;
+    catch (const ait::CudaError& err) {
+      std::cerr << "CUDA raycast failed: " << err.what() << std::endl;
+      std::cerr << "Regenerating CUDA tree" << std::endl;
+      cuda_tree_->clear();
+      ensureCudaTreeIsInitialized();
+      throw ait::Error("Raycast failed");
+    }
   }
 
   // Cannot be const because BBoxIntersectionResult contains a non-const pointer to a node
@@ -835,7 +846,8 @@ private:
 #if WITH_CUDA
   void ensureCudaTreeIsInitialized() {
     if (cuda_tree_ == nullptr) {
-      std::cout << "Previous CUDA stack size: " << ait::CudaManager::getStackSize() << std::endl;
+      std::cout << "Previous CUDA stack size was " << ait::CudaManager::getStackSize() << std::endl;
+      std::cout << "Setting CUDA stack size to " << cuda_stack_size_ << std::endl;
       ait::CudaManager::setStackSize(cuda_stack_size_);
       CudaNodeType* cuda_root = reinterpret_cast<CudaNodeType*>(getRoot());
       cuda_tree_ = CudaTreeType::createCopyFromHostTree(cuda_root, getNumOfNodes(), getDepth());
