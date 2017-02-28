@@ -151,6 +151,16 @@ public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   };
 
+  struct IntersectionResultWithScreenCoordinates {
+    IntersectionResultWithScreenCoordinates()
+    : intersection_result(), screen_coordinates(Vector2::Zero()) {}
+
+    IntersectionResult intersection_result;
+    Vector2 screen_coordinates;
+
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  };
+
   struct BBoxIntersectionResult {
     using NodePtrType = NodeType*;
     NodePtrType node;
@@ -409,6 +419,65 @@ public:
         result.intersection(1) = cuda_result.intersection(1);
         result.intersection(2) = cuda_result.intersection(2);
         result.node = reinterpret_cast<NodeType*>(cuda_result.node);
+      }
+      return results;
+    }
+    catch (const ait::CudaError& err) {
+      std::cerr << "CUDA raycast failed: " << err.what() << std::endl;
+      std::cerr << "Regenerating CUDA tree" << std::endl;
+      cuda_tree_->clear();
+      ensureCudaTreeIsInitialized();
+      throw ait::Error("Raycast failed");
+    }
+  }
+
+  // Cannot be const because BBoxIntersectionResult contains a non-const pointer to a node
+  std::vector<IntersectionResultWithScreenCoordinates> raycastWithScreenCoordinatesCuda(
+      const Matrix4x4& intrinsics,
+      const Matrix3x4& extrinsics,
+      const std::size_t x_start, const std::size_t x_end,
+      const std::size_t y_start, const std::size_t y_end,
+      FloatType min_range = 0, FloatType max_range = -1,
+      const bool fail_on_error = false) {
+    ensureCudaTreeIsInitialized();
+    CudaMatrix4x4<FloatType> cuda_intrinsics;
+    cuda_intrinsics.copyFrom(intrinsics.data(), CudaMatrix4x4<FloatType>::ColumnMajor);
+    CudaMatrix3x4<FloatType> cuda_extrinsics;
+    cuda_extrinsics.copyFrom(extrinsics.data(), CudaMatrix3x4<FloatType>::ColumnMajor);
+//    std::cout << "intrinsics: " << intrinsics << std::endl;
+//    cuda_intrinsics.print();
+//    std::cout << "extrinsics: " << extrinsics << std::endl;
+//    cuda_extrinsics.print();
+    try {
+      using CudaResultType = typename CudaTreeType::CudaIntersectionResultWithScreenCoordinates;
+      const std::vector<CudaResultType> cuda_results =
+          cuda_tree_->raycastWithScreenCoordinatesRecursive(
+              cuda_intrinsics,
+              cuda_extrinsics,
+              x_start, x_end,
+              y_start, y_end,
+              min_range, max_range,
+              fail_on_error);
+  //    const std::vector<CudaResultType> cuda_results =
+  //        cuda_tree_->raycastIterative(
+  //            cuda_intrinsics,
+  //            cuda_extrinsics,
+  //            x_start, x_end,
+  //            y_start, y_end,
+  //            min_range, max_range);
+      std::vector<IntersectionResultWithScreenCoordinates> results(cuda_results.size());
+  #pragma omp parallel for
+      for (std::size_t i = 0; i < cuda_results.size(); ++i) {
+        const CudaResultType& cuda_result = cuda_results[i];
+        IntersectionResultWithScreenCoordinates& result = results[i];
+        result.intersection_result.depth = cuda_result.intersection_result.depth;
+        result.intersection_result.dist_sq = cuda_result.intersection_result.dist_sq;
+        result.intersection_result.intersection(0) = cuda_result.intersection_result.intersection(0);
+        result.intersection_result.intersection(1) = cuda_result.intersection_result.intersection(1);
+        result.intersection_result.intersection(2) = cuda_result.intersection_result.intersection(2);
+        result.intersection_result.node = reinterpret_cast<NodeType*>(cuda_result.intersection_result.node);
+        result.screen_coordinates(0) = cuda_result.screen_coordinates(0);
+        result.screen_coordinates(1) = cuda_result.screen_coordinates(1);
       }
       return results;
     }

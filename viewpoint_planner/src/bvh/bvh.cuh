@@ -21,6 +21,9 @@
 namespace bvh {
 
 template <typename FloatT>
+using CudaVector2 = CudaVector<FloatT, 3>;
+
+template <typename FloatT>
 using CudaVector3 = CudaVector<FloatT, 3>;
 
 template <typename FloatT>
@@ -430,6 +433,14 @@ public:
     FloatT dist_sq;
   };
 
+  struct CudaIntersectionResultWithScreenCoordinates {
+    CudaIntersectionResultWithScreenCoordinates()
+    : intersection_result(), screen_coordinates(CudaVector2<FloatT>::Zero()) {}
+
+    CudaIntersectionResult intersection_result;
+    CudaVector2<FloatT> screen_coordinates;
+  };
+
   struct CudaIntersectionData {
     CudaRayData<FloatT> ray;
     FloatT min_range_sq;
@@ -464,6 +475,7 @@ public:
     }
     if (d_results_ != nullptr) {
       ait::CudaUtils::deallocate(&d_results_);
+      ait::CudaUtils::deallocate(&d_results_with_screen_coordinates_);
       d_results_ = nullptr;
     }
   }
@@ -488,6 +500,14 @@ public:
       const std::size_t y_start, const std::size_t y_end,
       const FloatT min_range = 0, const FloatT max_range = -1,
       const bool fail_on_error = false);
+
+  std::vector<CudaIntersectionResultWithScreenCoordinates> raycastWithScreenCoordinatesRecursive(
+      const CudaMatrix4x4<FloatT>& intrinsics,
+      const CudaMatrix3x4<FloatT>& extrinsics,
+      const std::size_t x_start, const std::size_t x_end,
+      const std::size_t y_start, const std::size_t y_end,
+      const FloatT min_range = 0, const FloatT max_range = -1,
+      const bool fail_on_error = false);
 #endif
 
   std::vector<CudaIntersectionResult> raycastIterative(
@@ -502,7 +522,7 @@ private:
   : tree_depth_(tree_depth),
     d_nodes_(nullptr),
     d_rays_(nullptr), d_rays_size_(0),
-    d_results_(nullptr), d_results_size_(0),
+    d_results_(nullptr), d_results_with_screen_coordinates_(nullptr), d_results_size_(0),
     d_stacks_(nullptr), d_stacks_size_(0) {};
 
   bool intersectsRecursive(const CudaIntersectionData& data,
@@ -515,6 +535,7 @@ private:
   CudaRayType* d_rays_;
   std::size_t d_rays_size_;
   CudaIntersectionResult* d_results_;
+  CudaIntersectionResultWithScreenCoordinates* d_results_with_screen_coordinates_;
   std::size_t d_results_size_;
   CudaIntersectionIterativeStackEntry* d_stacks_;
   std::size_t d_stacks_size_;
