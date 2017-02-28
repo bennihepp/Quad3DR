@@ -70,6 +70,7 @@ public:
   void setMaxWeight(FloatType max_weight);
   void setMinInformation(FloatType min_information);
   void setMaxInformation(FloatType max_information);
+  void setInformationRange(const FloatType low_information, const FloatType high_information);
 
   size_t getRenderTreeDepth() const;
   void setRenderTreeDepth(size_t render_tree_depth);

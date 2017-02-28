@@ -165,6 +165,12 @@ void OcTreeDrawer::setMaxInformation(FloatType max_information) {
   });
 }
 
+void OcTreeDrawer::setInformationRange(const FloatType low_information, const FloatType high_information) {
+  forEachVoxelDrawer([this, low_information, high_information](VoxelDrawer& voxel_drawer) {
+    voxel_drawer.setInformationRange(low_information, high_information);
+  });
+}
+
 size_t OcTreeDrawer::getRenderTreeDepth() const {
   return render_tree_depth_;
 }
