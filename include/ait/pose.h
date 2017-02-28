@@ -58,6 +58,18 @@ struct Pose {
     return translation_.allFinite() && quaternion_.coeffs().allFinite();
   }
 
+  bool operator==(const Pose& other) const {
+    return translation_ == other.translation_ && quaternion_.coeffs() == other.quaternion_.coeffs();
+  }
+
+  bool operator!=(const Pose& other) const {
+    return !(*this == other);
+  }
+
+  bool isApprox(const Pose& other, const FloatType prec = Eigen::NumTraits<FloatType>::dummy_precision()) const {
+    return translation_.isApprox(other.translation_, prec) && quaternion_.isApprox(other.quaternion_, prec);
+  }
+
   Vector3& translation() {
     return translation_;
   }
