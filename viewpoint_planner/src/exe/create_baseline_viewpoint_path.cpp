@@ -49,6 +49,7 @@ public:
     : ait::ConfigOptions(kPrefix) {
       addOption<Vector3>("object_center", &object_center);
       addOption<FloatType>("circle_radius", &circle_radius);
+      addOption<FloatType>("circle_height", &circle_height);
       addOption<std::size_t>("num_of_viewpoints", &num_of_viewpoints);
     }
 
@@ -65,15 +66,38 @@ public:
     config_options.emplace(std::piecewise_construct,
         std::forward_as_tuple(Options::kPrefix),
         std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new Options())));
+    config_options.emplace(std::piecewise_construct,
+      std::forward_as_tuple("viewpoint_planner.data"),
+      std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlannerData::Options())));
+    config_options.emplace(std::piecewise_construct,
+      std::forward_as_tuple("viewpoint_planner"),
+      std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlanner::Options())));
+    config_options.emplace(std::piecewise_construct,
+      std::forward_as_tuple("motion_planner"),
+      std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlanner::MotionPlannerType::Options())));
     return config_options;
   }
 
   BaselineViewpointPathCmdline(const std::map<string, std::unique_ptr<ait::ConfigOptions>>& config_options,
-      const string& viewpoint_path_filename)
+      const string& viewpoint_path_filename, const string& viewpoint_path_filename_txt)
   : options_(*dynamic_cast<Options*>(config_options.at(Options::kPrefix).get())),
-    viewpoint_path_filename_(viewpoint_path_filename) {}
+    planner_ptr_(nullptr),
+    viewpoint_path_filename_(viewpoint_path_filename),
+    viewpoint_path_filename_txt_(viewpoint_path_filename_txt) {
+    if (!viewpoint_path_filename_txt_.empty()) {
+      const ViewpointPlannerData::Options* viewpoint_planner_data_options =
+        dynamic_cast<ViewpointPlannerData::Options*>(config_options.at("viewpoint_planner.data").get());
+      std::unique_ptr<ViewpointPlannerData> planner_data(
+        new ViewpointPlannerData(viewpoint_planner_data_options));
+      planner_ptr_ = new ViewpointPlanner(
+        dynamic_cast<ViewpointPlanner::Options*>(config_options.at("viewpoint_planner").get()),
+        dynamic_cast<ViewpointPlanner::MotionPlannerType::Options*>(config_options.at("motion_planner").get()),
+        std::move(planner_data));
+    }
+  }
 
   ~BaselineViewpointPathCmdline() {
+    SAFE_DELETE(planner_ptr_);
   }
 
   bool run() {
@@ -81,7 +105,6 @@ public:
     const FloatType circle_radius = options_.circle_radius;
     const FloatType circle_height = options_.circle_height;
     const FloatType num_of_viewpoints = options_.num_of_viewpoints;
-
 
     ViewpointPlanner::ViewpointPath viewpoint_path;
     ViewpointPlanner::ViewpointPathComputationData comp_data;
@@ -115,7 +138,8 @@ public:
       const PinholeCamera* camera = nullptr;
       const Viewpoint viewpoint(camera, pose);
       ViewpointPlanner::ViewpointPathEntry path_entry;
-      path_entry.viewpoint_index = (ViewpointPlanner::ViewpointEntryIndex)-1;
+//      path_entry.viewpoint_index = (ViewpointPlanner::ViewpointEntryIndex)-1;
+      path_entry.viewpoint_index = i;
       path_entry.viewpoint = viewpoint;
       viewpoint_path.entries.push_back(path_entry);
     }
@@ -135,12 +159,18 @@ public:
     oa << local_viewpoint_path_motions;
     std::cout << "Done" << std::endl;
 
+    if (!viewpoint_path_filename_txt_.empty()) {
+      planner_ptr_->exportViewpointPathAsText(viewpoint_path_filename_txt_, viewpoint_path);
+    }
+
     return true;
   }
 
 private:
   Options options_;
+  ViewpointPlanner *planner_ptr_;
   string viewpoint_path_filename_;
+  string viewpoint_path_filename_txt_;
 };
 
 const string BaselineViewpointPathCmdline::Options::kPrefix = "baseline_viewpoint_path";
@@ -156,7 +186,8 @@ std::pair<bool, boost::program_options::variables_map> processOptions(
     generic_options.add_options()
         ("help", "Produce help message")
         ("config-file", po::value<string>()->default_value("baseline_viewpoint_path.cfg"), "Config file.")
-        ("viewpoint-path", po::value<string>()->required(), "File to save the viewpoint-path to.")
+        ("out-viewpoint-path", po::value<string>()->required(), "File to save the viewpoint-path to.")
+        ("out-viewpoint-path-txt", po::value<string>()->default_value(""), "File to save the viewpoint-path to as text description.")
         ;
 
     po::options_description options;
@@ -224,7 +255,7 @@ int main(int argc, char** argv)
   boost::program_options::variables_map vm = std::move(cmdline_result.second);
 
   BaselineViewpointPathCmdline baseline_cmdline(
-      config_options, vm["viewpoint-path"].as<string>());
+      config_options, vm["out-viewpoint-path"].as<string>(), vm["out-viewpoint-path-txt"].as<string>());
 
   if (baseline_cmdline.run()) {
     return 0;
