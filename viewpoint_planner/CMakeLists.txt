@@ -231,7 +231,7 @@ set(VIEWPOINT_PLANNER_SOURCES_COMMON
 cuda_add_executable(create_baseline_viewpoint_path
   # Executable
   src/exe/create_baseline_viewpoint_path.cpp
-  #${VIEWPOINT_PLANNER_SOURCES_COMMON}
+  ${VIEWPOINT_PLANNER_SOURCES_COMMON}
 )
 target_link_libraries(create_baseline_viewpoint_path
   ${OCTOMAP_LIBRARIES}
@@ -240,12 +240,13 @@ target_link_libraries(create_baseline_viewpoint_path
   ${OpenCV_LIBRARIES}
   ${OMPL_LIBRARIES}
 )
-#if(WITH_OPENGL_OFFSCREEN)
-#  target_link_libraries(create_baseline_viewpoint_path
-#    ${OPENGL_LIBRARIES}
-#  )
-#  target_link_libraries(create_baseline_viewpoint_path Qt5::Core Qt5::Gui Qt5::OpenGL)
-#endif()
+if(WITH_OPENGL_OFFSCREEN)
+  # Needs Qt headers when including viewpoint_planner.h
+  target_link_libraries(create_baseline_viewpoint_path
+    ${OPENGL_LIBRARIES}
+  )
+  target_link_libraries(create_baseline_viewpoint_path Qt5::Core Qt5::Gui Qt5::OpenGL)
+endif()
 
 cuda_add_executable(viewpoint_planner_cmdline WIN32
   # Executable
