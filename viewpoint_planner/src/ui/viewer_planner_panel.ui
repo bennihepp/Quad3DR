@@ -406,7 +406,7 @@
      <item row="10" column="0">
       <widget class="QPushButton" name="exportBestViewpointPathAsJson">
        <property name="text">
-        <string>Export best viewpoint path</string>
+        <string>Export JSON flight plan</string>
        </property>
       </widget>
      </item>
