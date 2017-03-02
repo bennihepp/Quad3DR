@@ -189,7 +189,9 @@ public:
     _Iterator() {}
 
     _Iterator(ValueT* node) {
-      node_stack_.push(node);
+      if (node != nullptr) {
+        node_stack_.push(node);
+      }
     }
 
     // Construct from convertible iterator (i.e. const to non-const)
