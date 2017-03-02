@@ -136,6 +136,8 @@ public:
         vbo_.release();
         vao_.release();
         program_.release();
+
+        program_.link();
     }
 
     void upload(const std::vector<OGLTriangleWithNormalData>& triangle_normal_data) {
@@ -165,6 +167,8 @@ public:
       vao_.release();
       program_.release();
 
+      program_.link();
+
       normals_program_.bind();
       normals_vao_.bind();
       normals_vbo_.bind();
@@ -187,6 +191,8 @@ public:
       normals_vbo_.release();
       normals_vao_.release();
       normals_program_.release();
+
+      normals_program_.link();
     }
 
     void draw(const QMatrix4x4& pvm_matrix) {

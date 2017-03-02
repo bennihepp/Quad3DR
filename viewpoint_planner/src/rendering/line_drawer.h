@@ -90,9 +90,10 @@ public:
     program_.enableAttributeArray(0);
     program_.setAttributeBuffer(0, GL_FLOAT, 0, 3, sizeof(OGLVertexDataRGBA));
 
-
     program_.enableAttributeArray(1);
     program_.setAttributeBuffer(1, GL_FLOAT, 3 * sizeof(float), 4, sizeof(OGLVertexDataRGBA));
+
+    program_.link();
 
     vbo_.release();
     vao_.release();
