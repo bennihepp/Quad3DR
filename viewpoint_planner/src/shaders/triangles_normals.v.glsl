@@ -10,7 +10,7 @@ out vec4 v_color;
 void main(void) {
   gl_Position = u_pvm_matrix * vec4(a_position, 1);
   //v_color = a_color;
-  v_color = vec4(a_normal.xyz, 1);
+  v_color = vec4(0.5 * a_normal.xyz + vec3(0.5, 0.5, 0.5), 1);
   //mat3 normal_matrix = mat3(u_pvm_matrix);
   //normal_matrix = inverse(normal_matrix);
   //normal_matrix = transpose(normal_matrix);
