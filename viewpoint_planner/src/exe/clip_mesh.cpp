@@ -18,7 +18,7 @@
 #include <ait/eigen.h>
 #include <ait/utilities.h>
 #include <ait/options.h>
-#include <ait/geometry.h>
+#include <ait/math/geometry.h>
 
 #include <ait/mLib.h>
 
@@ -72,8 +72,6 @@ public:
   ~ClipAndTransformMeshCmdline() {
   }
 
-#pragma GCC push_options
-#pragma GCC optimize("O0")
   bool run() {
     BoundingBoxType clip_bbox(
         Vector3(options_.getValue<FloatType>("clip_bbox_min_x"),
@@ -173,7 +171,6 @@ public:
 
     return true;
   }
-#pragma GCC pop_options
 
 private:
   Options options_;

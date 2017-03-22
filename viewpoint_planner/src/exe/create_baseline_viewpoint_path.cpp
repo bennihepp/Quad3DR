@@ -20,11 +20,12 @@
 #include <ait/options.h>
 #include <ait/eigen_options.h>
 #include <ait/eigen_utils.h>
-#include <ait/geometry.h>
+#include <ait/math/geometry.h>
 
 #include <ait/mLib.h>
 
 #include "../planner/viewpoint_planner.h"
+#include "../planner/viewpoint_planner_serialization.h"
 
 using std::cout;
 using std::cerr;
@@ -34,7 +35,7 @@ using std::string;
 using FloatType = float;
 USE_FIXED_EIGEN_TYPES(FloatType)
 
-using BoundingBoxType = ait::BoundingBox3D<FloatType>;
+using BoundingBoxType = bh::BoundingBox3D<FloatType>;
 using PointCloudType = ml::PointCloud<FloatType>;
 using PointCloudIOType = ml::PointCloudIO<FloatType>;
 
@@ -47,18 +48,24 @@ public:
 
     Options()
     : ait::ConfigOptions(kPrefix) {
+      addOption<bool>("verbose", &verbose);
       addOption<Vector3>("object_center", &object_center);
+      addOption<std::size_t>("num_of_viewpoints", &num_of_viewpoints);
+      addOption<string>("mode", &mode);
       addOption<FloatType>("circle_radius", &circle_radius);
       addOption<FloatType>("circle_height", &circle_height);
-      addOption<std::size_t>("num_of_viewpoints", &num_of_viewpoints);
+      addOption<FloatType>("circle_factor", &circle_factor);
     }
 
     ~Options() override {}
 
+    bool verbose = false;
     Vector3 object_center = Vector3::Zero();
+    std::size_t num_of_viewpoints = 15;
+    string mode = "automatic_circle";
     FloatType circle_radius = 5;
     FloatType circle_height = 15;
-    std::size_t num_of_viewpoints = 15;
+    FloatType circle_factor = FloatType(1);
   };
 
   static std::map<string, std::unique_ptr<ait::ConfigOptions>> getConfigOptions() {
@@ -84,16 +91,14 @@ public:
     planner_ptr_(nullptr),
     viewpoint_path_filename_(viewpoint_path_filename),
     viewpoint_path_filename_txt_(viewpoint_path_filename_txt) {
-    if (!viewpoint_path_filename_txt_.empty()) {
-      const ViewpointPlannerData::Options* viewpoint_planner_data_options =
-        dynamic_cast<ViewpointPlannerData::Options*>(config_options.at("viewpoint_planner.data").get());
-      std::unique_ptr<ViewpointPlannerData> planner_data(
-        new ViewpointPlannerData(viewpoint_planner_data_options));
-      planner_ptr_ = new ViewpointPlanner(
-        dynamic_cast<ViewpointPlanner::Options*>(config_options.at("viewpoint_planner").get()),
-        dynamic_cast<ViewpointPlanner::MotionPlannerType::Options*>(config_options.at("motion_planner").get()),
-        std::move(planner_data));
-    }
+    const ViewpointPlannerData::Options* viewpoint_planner_data_options =
+      dynamic_cast<ViewpointPlannerData::Options*>(config_options.at("viewpoint_planner.data").get());
+    std::unique_ptr<ViewpointPlannerData> planner_data(
+      new ViewpointPlannerData(viewpoint_planner_data_options));
+    planner_ptr_ = new ViewpointPlanner(
+      dynamic_cast<ViewpointPlanner::Options*>(config_options.at("viewpoint_planner").get()),
+      dynamic_cast<ViewpointPlanner::MotionPlannerType::Options*>(config_options.at("motion_planner").get()),
+      std::move(planner_data));
   }
 
   ~BaselineViewpointPathCmdline() {
@@ -101,66 +106,100 @@ public:
   }
 
   bool run() {
+    const bool verbose = options_.verbose;
+
     const Vector3 object_center = options_.object_center;
-    const FloatType circle_radius = options_.circle_radius;
-    const FloatType circle_height = options_.circle_height;
     const FloatType num_of_viewpoints = options_.num_of_viewpoints;
+    if (options_.mode == "automatic_circle" || options_.mode == "manual_circle") {
+      FloatType circle_radius;
+      FloatType circle_height;
+      if (options_.mode == "manual_circle") {
+        circle_radius = options_.circle_radius;
+        circle_height = options_.circle_height;
+      }
+      else {
+        const BoundingBoxType roi_bbox = planner_ptr_->getRoiBbox();
+        const FloatType extent_x = roi_bbox.getExtent(0);
+        const FloatType extent_y = roi_bbox.getExtent(1);
+        circle_radius = std::sqrt(extent_x * extent_x + extent_y * extent_y);
+//        circle_height = circle_radius;
+        circle_height = options_.circle_height;
+        std::cout << "Automatic circle with radius " << circle_radius << " and height " << circle_height << std::endl;
+      }
 
-    ViewpointPlanner::ViewpointPath viewpoint_path;
-    ViewpointPlanner::ViewpointPathComputationData comp_data;
-    comp_data.num_connected_entries = 0;
-    for (std::size_t i = 0; i < num_of_viewpoints; ++i) {
-      AIT_PRINT_VALUE(i);
-      const FloatType current_angle = 2 * M_PI * (i / FloatType(num_of_viewpoints));
-      AIT_PRINT_VALUE(current_angle);
-      const float x = circle_radius * std::cos(current_angle);
-      const float y = circle_radius * std::sin(current_angle);
-      const float z = circle_height;
-      const Vector3 viewpoint_position = Vector3(object_center(0), object_center(1), 0) + Vector3(x, y, z);
-      AIT_PRINT_VALUE(viewpoint_position);
-      const Vector3 rotation_z_axis = (object_center - viewpoint_position).normalized();
-      const Vector3 rotation_x_axis = rotation_z_axis.cross(Vector3::UnitZ()).normalized();
-      const Vector3 rotation_y_axis = rotation_z_axis.cross(rotation_x_axis).normalized();
-      AIT_PRINT_VALUE(rotation_x_axis);
-      AIT_PRINT_VALUE(rotation_y_axis);
-      AIT_PRINT_VALUE(rotation_z_axis);
-      Matrix3x3 rotation_matrix;
-      rotation_matrix.col(0) = rotation_x_axis;
-      rotation_matrix.col(1) = rotation_y_axis;
-      rotation_matrix.col(2) = rotation_z_axis;
-      AIT_PRINT_VALUE(rotation_matrix);
-      const Quaternion viewpoint_quaternion(rotation_matrix);
-      const Quaternion viewpoint_quaternion2 = ait::getZLookAtQuaternion(object_center - viewpoint_position, Vector3::UnitZ());
-      AIT_PRINT_VALUE(viewpoint_quaternion);
-      AIT_PRINT_VALUE(viewpoint_quaternion2);
-      const ViewpointPlanner::Pose pose =
-          ViewpointPlanner::Pose::createFromImageToWorldTransformation(viewpoint_position, viewpoint_quaternion);
-      const PinholeCamera* camera = nullptr;
-      const Viewpoint viewpoint(camera, pose);
-      ViewpointPlanner::ViewpointPathEntry path_entry;
-//      path_entry.viewpoint_index = (ViewpointPlanner::ViewpointEntryIndex)-1;
-      path_entry.viewpoint_index = i;
-      path_entry.viewpoint = viewpoint;
-      viewpoint_path.entries.push_back(path_entry);
+      ViewpointPlanner::ViewpointPath viewpoint_path;
+      ViewpointPlanner::ViewpointPathComputationData comp_data;
+      comp_data.num_connected_entries = 0;
+      for (std::size_t i = 0; i < num_of_viewpoints; ++i) {
+        if (verbose) {
+          AIT_PRINT_VALUE(i);
+        }
+        const FloatType current_angle = 2 * M_PI * (i / FloatType(num_of_viewpoints));
+        if (verbose) {
+          AIT_PRINT_VALUE(current_angle);
+        }
+        const float x = circle_radius * std::cos(current_angle);
+        const float y = circle_radius * std::sin(current_angle);
+        const float z = circle_height;
+        const Vector3 viewpoint_position = Vector3(object_center(0), object_center(1), 0) + Vector3(x, y, z);
+        if (verbose) {
+          AIT_PRINT_VALUE(viewpoint_position);
+        }
+        const Vector3 rotation_z_axis = (object_center - viewpoint_position).normalized();
+        const Vector3 rotation_x_axis = rotation_z_axis.cross(Vector3::UnitZ()).normalized();
+        const Vector3 rotation_y_axis = rotation_z_axis.cross(rotation_x_axis).normalized();
+        if (verbose) {
+          AIT_PRINT_VALUE(rotation_x_axis);
+          AIT_PRINT_VALUE(rotation_y_axis);
+          AIT_PRINT_VALUE(rotation_z_axis);
+        }
+        Matrix3x3 rotation_matrix;
+        rotation_matrix.col(0) = rotation_x_axis;
+        rotation_matrix.col(1) = rotation_y_axis;
+        rotation_matrix.col(2) = rotation_z_axis;
+        if (verbose) {
+          AIT_PRINT_VALUE(rotation_matrix);
+        }
+        const Quaternion viewpoint_quaternion(rotation_matrix);
+        const Quaternion viewpoint_quaternion2 = bh::getZLookAtQuaternion(object_center - viewpoint_position, Vector3::UnitZ());
+        if (verbose) {
+          AIT_PRINT_VALUE(viewpoint_quaternion);
+          AIT_PRINT_VALUE(viewpoint_quaternion2);
+        }
+        const ViewpointPlanner::Pose pose =
+            ViewpointPlanner::Pose::createFromImageToWorldTransformation(viewpoint_position, viewpoint_quaternion);
+        const PinholeCamera* camera = nullptr;
+        const Viewpoint viewpoint(camera, pose);
+        ViewpointPlanner::ViewpointPathEntry path_entry;
+  //      path_entry.viewpoint_index = (ViewpointPlanner::ViewpointEntryIndex)-1;
+        path_entry.viewpoint_index = i;
+        path_entry.viewpoint = viewpoint;
+        viewpoint_path.entries.push_back(path_entry);
+      }
+
+      std::vector<ViewpointPlanner::ViewpointPath> viewpoint_paths;
+      std::vector<ViewpointPlanner::ViewpointPathComputationData> viewpoint_paths_data;
+      ViewpointPlannerData::OccupiedTreeType bvh_tree;
+      viewpoint_paths.push_back(viewpoint_path);
+      viewpoint_paths_data.push_back(comp_data);
+      std::cout << "Writing viewpoint path to " << viewpoint_path_filename_ << std::endl;
+      std::ofstream ofs(viewpoint_path_filename_);
+      boost::archive::binary_oarchive oa(ofs);
+      ViewpointPathSaver vps(viewpoint_paths, viewpoint_paths_data, bvh_tree);
+      oa << vps;
+      std::unordered_map<
+        ViewpointPlanner::ViewpointIndexPair,
+        ViewpointPlanner::ViewpointMotion,
+        ViewpointPlanner::ViewpointIndexPair::Hash> local_viewpoint_path_motions;
+      oa << local_viewpoint_path_motions;
+      std::cout << "Done" << std::endl;
+
+      if (!viewpoint_path_filename_txt_.empty()) {
+        planner_ptr_->exportViewpointPathAsText(viewpoint_path_filename_txt_, viewpoint_path);
+      }
     }
-
-    std::vector<ViewpointPlanner::ViewpointPath> viewpoint_paths;
-    std::vector<ViewpointPlanner::ViewpointPathComputationData> viewpoint_paths_data;
-    ViewpointPlannerData::OccupiedTreeType bvh_tree;
-    viewpoint_paths.push_back(viewpoint_path);
-    viewpoint_paths_data.push_back(comp_data);
-    std::cout << "Writing viewpoint path to " << viewpoint_path_filename_ << std::endl;
-    std::ofstream ofs(viewpoint_path_filename_);
-    boost::archive::binary_oarchive oa(ofs);
-    ViewpointPathSaver vps(viewpoint_paths, viewpoint_paths_data, bvh_tree);
-    oa << vps;
-    std::unordered_map<ViewpointPlanner::ViewpointIndexPair, ViewpointPlanner::Motion, ViewpointPlanner::ViewpointIndexPair::Hash>
-      local_viewpoint_path_motions;
-    oa << local_viewpoint_path_motions;
-    std::cout << "Done" << std::endl;
-
-    if (!viewpoint_path_filename_txt_.empty()) {
-      planner_ptr_->exportViewpointPathAsText(viewpoint_path_filename_txt_, viewpoint_path);
+    else {
+      std::cout << "ERROR: Unknown baseline mode: " << options_.mode << std::endl;
     }
 
     return true;

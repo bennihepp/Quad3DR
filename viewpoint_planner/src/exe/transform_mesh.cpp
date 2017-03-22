@@ -19,7 +19,7 @@
 #include <ait/utilities.h>
 #include <ait/options.h>
 #include <ait/eigen_options.h>
-#include <ait/geometry.h>
+#include <ait/math/geometry.h>
 
 #include <ait/mLib.h>
 #include <ait/mLibUtils.h>

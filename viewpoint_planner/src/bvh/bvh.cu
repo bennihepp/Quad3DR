@@ -73,6 +73,8 @@ CudaTree<FloatT>* CudaTree<FloatT>::createCopyFromHostTree(
       report_counter = 0;
     }
   }
+  CUDA_DEVICE_SYNCHRONIZE();
+  CUDA_CHECK_ERROR();
   return cuda_tree;
 }
 
@@ -179,7 +181,7 @@ __device__ bool intersectsRecursiveCuda(
   }
   if (cur_node->isLeaf()) {
     if (!outside_bounding_box) {
-      // If already inside the bounding box we want the intersection point to be the start of the ray.
+      // If already inside the bounding box we want the intersection point to be the start of the ray (if the bbox extent > min_dist).
       intersection = data.ray.origin;
       intersection_dist_sq = 0;
     }
@@ -405,12 +407,16 @@ __global__ void raycastWithScreenCoordinatesRecursiveCudaKernel(
 template <typename FloatT>
 std::vector<typename CudaTree<FloatT>::CudaIntersectionResult>
 CudaTree<FloatT>::intersectsRecursive(const std::vector<CudaRayType>& rays, FloatT min_range /*= 0*/, FloatT max_range /*= -1*/) {
+  if (rays.empty()) {
+    return std::vector<CudaIntersectionResult>();
+  }
   reserveDeviceRaysAndResults(rays.size());
   ait::CudaUtils::copyArrayToDevice(rays, d_rays_);
   const std::size_t grid_size = (rays.size() + kThreadsPerBlock - 1) / kThreadsPerBlock;
   const std::size_t block_size = std::min(kThreadsPerBlock, rays.size());
   AIT_ASSERT(grid_size > 0);
   AIT_ASSERT(block_size > 0);
+  AIT_ASSERT(getRoot() != nullptr);
 //  std::cout << "grid_size=" << grid_size << ", block_size=" << block_size << std::endl;
   intersectsRecursiveCudaKernel<FloatT><<<grid_size, block_size>>>(
       d_rays_, rays.size(),
@@ -428,12 +434,16 @@ CudaTree<FloatT>::intersectsRecursive(const std::vector<CudaRayType>& rays, Floa
 template <typename FloatT>
 std::vector<typename CudaTree<FloatT>::CudaIntersectionResult>
 CudaTree<FloatT>::intersectsIterative(const std::vector<CudaRayType>& rays, FloatT min_range /*= 0*/, FloatT max_range /*= -1*/) {
+  if (rays.empty()) {
+    return std::vector<CudaIntersectionResult>();
+  }
   reserveDeviceRaysAndResults(rays.size());
   ait::CudaUtils::copyArrayToDevice(rays, d_rays_);
   const std::size_t grid_size = (rays.size() + kThreadsPerBlock - 1) / kThreadsPerBlock;
   const std::size_t block_size = std::min(kThreadsPerBlock, rays.size());
   AIT_ASSERT(grid_size > 0);
   AIT_ASSERT(block_size > 0);
+  AIT_ASSERT(getRoot() != nullptr);
 //  std::cout << "grid_size=" << grid_size << ", block_size=" << block_size << std::endl;
   intersectsIterativeCudaKernel<FloatT><<<grid_size, block_size>>>(
       d_rays_, rays.size(),
@@ -465,6 +475,7 @@ CudaTree<FloatT>::raycastRecursive(
   const std::size_t block_size = x_end - x_start;
   AIT_ASSERT(grid_size > 0);
   AIT_ASSERT(block_size > 0);
+  AIT_ASSERT(getRoot() != nullptr);
   //  std::cout << "grid_size=" << grid_size << ", block_size=" << block_size << std::endl;
   NodeType* root = getRoot();
   raycastRecursiveCudaKernel<FloatT><<<grid_size, block_size>>>(
@@ -507,6 +518,7 @@ CudaTree<FloatT>::raycastWithScreenCoordinatesRecursive(
   const std::size_t block_size = x_end - x_start;
   AIT_ASSERT(grid_size > 0);
   AIT_ASSERT(block_size > 0);
+  AIT_ASSERT(getRoot() != nullptr);
   //  std::cout << "grid_size=" << grid_size << ", block_size=" << block_size << std::endl;
   NodeType* root = getRoot();
   raycastWithScreenCoordinatesRecursiveCudaKernel<FloatT><<<grid_size, block_size>>>(
@@ -549,6 +561,7 @@ CudaTree<FloatT>::raycastIterative(
   const std::size_t block_size = x_end - x_start;
   AIT_ASSERT(grid_size > 0);
   AIT_ASSERT(block_size > 0);
+  AIT_ASSERT(getRoot() != nullptr);
   //  std::cout << "grid_size=" << grid_size << ", block_size=" << block_size << std::endl;
   NodeType* root = getRoot();
   raycastIterativeCudaKernel<FloatT><<<grid_size, block_size>>>(
@@ -574,16 +587,24 @@ void CudaTree<FloatT>::reserveDeviceRaysAndResults(const std::size_t num_of_rays
   if (num_of_rays > d_rays_size_) {
     if (d_rays_ != nullptr) {
       ait::CudaUtils::deallocate(&d_rays_);
+      CUDA_DEVICE_SYNCHRONIZE();
+      CUDA_CHECK_ERROR();
     }
     d_rays_ = ait::CudaUtils::template allocate<CudaRayType>(num_of_rays);
+    CUDA_DEVICE_SYNCHRONIZE();
+    CUDA_CHECK_ERROR();
     d_rays_size_ = num_of_rays;
   }
   if (num_of_rays > d_results_size_) {
     if (d_results_ != nullptr) {
       ait::CudaUtils::deallocate(&d_results_);
+      CUDA_DEVICE_SYNCHRONIZE();
+      CUDA_CHECK_ERROR();
     }
     d_results_ = ait::CudaUtils::template allocate<CudaIntersectionResult>(num_of_rays);
     d_results_with_screen_coordinates_ = ait::CudaUtils::template allocate<CudaIntersectionResultWithScreenCoordinates>(num_of_rays);
+    CUDA_DEVICE_SYNCHRONIZE();
+    CUDA_CHECK_ERROR();
     d_results_size_ = num_of_rays;
   }
   if (num_of_rays > d_stacks_size_) {
@@ -591,6 +612,8 @@ void CudaTree<FloatT>::reserveDeviceRaysAndResults(const std::size_t num_of_rays
       ait::CudaUtils::deallocate(&d_stacks_);
     }
     d_stacks_ = ait::CudaUtils::template allocate<CudaIntersectionIterativeStackEntry>(num_of_rays * (tree_depth_ + 1));
+    CUDA_DEVICE_SYNCHRONIZE();
+    CUDA_CHECK_ERROR();
     d_stacks_size_ = num_of_rays;
   }
 }

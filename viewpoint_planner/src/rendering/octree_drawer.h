@@ -44,6 +44,8 @@ public:
   void updateVoxelsFromOctree();
   void updateVoxelData();
   void updateVoxelColorHeightmap();
+  void updateSingleRaycastVoxel(
+      const OGLVoxelData& voxel, const OGLColorData& color, const OGLVoxelInfoData& info);
   void updateRaycastVoxels(const std::vector<std::pair<ViewpointPlanner::ConstTreeNavigatorType, FloatType>>& raycast_voxels);
   void updateRaycastVoxels(const std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, FloatType>>& raycast_voxels);
   void updateRaycastVoxels(const std::vector<std::pair<const ViewpointPlanner::VoxelType*, FloatType>>& raycast_voxels);

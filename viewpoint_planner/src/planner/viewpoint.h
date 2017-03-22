@@ -6,14 +6,14 @@
  */
 #pragma once
 
-#include <ait/eigen.h>
-#include <ait/eigen_serialization.h>
+#include <bh/eigen.h>
+#include <bh/eigen_serialization.h>
 #include <memory>
 #include <unordered_set>
 #include <boost/serialization/access.hpp>
-#include <ait/common.h>
-#include <ait/eigen_utils.h>
-#include <ait/geometry.h>
+#include <bh/common.h>
+#include <bh/eigen_utils.h>
+#include <bh/math/geometry.h>
 #include "../reconstruction/dense_reconstruction.h"
 
 using reconstruction::PinholeCamera;
@@ -25,7 +25,7 @@ class Viewpoint {
 public:
   using FloatType = reconstruction::FloatType;
   USE_FIXED_EIGEN_TYPES(FloatType)
-  using RayType = ait::Ray<FloatType>;
+  using RayType = bh::Ray<FloatType>;
   using Pose = reconstruction::Pose;
 
   static constexpr FloatType DEFAULT_PROJECTION_MARGIN = 10;
@@ -62,7 +62,11 @@ public:
 
   bool isPointFiltered(const Point3D& point) const;
 
-  Vector2 projectWorldPointIntoImage(const Vector3& point_world) const;
+  Vector3 projectWorldPointIntoCamera(const Vector3& point_world) const;
+
+  bool isWorldPointVisible(const Vector3& point_world) const;
+
+  Vector2 projectWorldPointIntoImage(const Vector3& point_world, bool* behind_camera = nullptr) const;
 
   RayType getCameraRay(FloatType x, FloatType y) const;
 

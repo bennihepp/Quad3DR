@@ -5,7 +5,7 @@
  *      Author: bhepp
  */
 
-#include <ait/utilities.h>
+#include <bh/utilities.h>
 #include "viewpoint.h"
 
 using reconstruction::Point3DStatistics;
@@ -61,7 +61,7 @@ Viewpoint::FloatType Viewpoint::getDistanceTo(const Viewpoint& other, FloatType 
 }
 
 std::unordered_set<Point3DId> Viewpoint::getProjectedPoint3DIds(const SparseReconstruction::Point3DMapType& points) const {
-  ait::Timer timer;
+  bh::Timer timer;
   std::unordered_set<Point3DId> proj_point_ids;
   for (const auto& entry : points) {
     const Point3DId point_id = entry.first;
@@ -87,7 +87,7 @@ Viewpoint::RayType Viewpoint::getCameraRay(FloatType x, FloatType y) const {
 }
 
 std::unordered_set<Point3DId> Viewpoint::getProjectedPoint3DIdsFiltered(const SparseReconstruction::Point3DMapType& points) const {
-  ait::Timer timer;
+  bh::Timer timer;
   std::unordered_set<Point3DId> proj_point_ids;
   for (const auto& entry : points) {
     const Point3DId point_id = entry.first;
@@ -106,7 +106,7 @@ std::unordered_set<Point3DId> Viewpoint::getProjectedPoint3DIdsFiltered(const Sp
 
 bool Viewpoint::isPointFiltered(const Point3D& point) const {
   const Point3DStatistics& statistics = point.getStatistics();
-  std::tuple<FloatType, Vector3> result = ait::computeDistanceAndDirection(point.getPosition(), pose_.getWorldPosition());
+  std::tuple<FloatType, Vector3> result = bh::computeDistanceAndDirection(point.getPosition(), pose_.getWorldPosition());
   FloatType dist_deviation = std::abs(std::get<0>(result) - statistics.averageDistance());
   if (dist_deviation > MAX_DISTANCE_DEVIATION_BY_STDDEV * statistics.stddevDistance()) {
     return true;
@@ -119,8 +119,28 @@ bool Viewpoint::isPointFiltered(const Point3D& point) const {
   return false;
 }
 
-Viewpoint::Vector2 Viewpoint::projectWorldPointIntoImage(const Vector3& point_world) const {
+Viewpoint::Vector3 Viewpoint::projectWorldPointIntoCamera(const Vector3& point_world) const {
   Vector3 point_camera  = transformation_world_to_image_ * point_world.homogeneous();
+  return point_camera;
+}
+
+#pragma GCC push_options
+#pragma GCC optimize("O0")
+bool Viewpoint::isWorldPointVisible(const Vector3& point_world) const {
+  Vector3 point_camera  = transformation_world_to_image_ * point_world.homogeneous();
+  if (point_camera(3) < 0) {
+    return false;
+  }
+  Vector2 point_image = camera_->projectPoint(point_camera);
+  return camera_->isPointInViewport(point_image);
+}
+
+Viewpoint::Vector2 Viewpoint::projectWorldPointIntoImage(const Vector3& point_world, bool* behind_camera /*= nullptr*/) const {
+  Vector3 point_camera  = transformation_world_to_image_ * point_world.homogeneous();
+  if (behind_camera != nullptr) {
+    *behind_camera = point_camera(3) < 0;
+  }
   Vector2 point_image = camera_->projectPoint(point_camera);
   return point_image;
 }
+#pragma GCC pop_options

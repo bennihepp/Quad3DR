@@ -10,14 +10,12 @@
 #include <vector>
 #include <utility>
 #include <cstdint>
-#include <ait/eigen.h>
-#include <ait/mLib.h>
+#include "eigen.h"
+#include "mLib.h"
 
-namespace ait
-{
+namespace ait {
 
-class MLibUtilities
-{
+class MLibUtilities {
 public:
   template <typename T>
   static void savePointCloudToOff(const std::string &filename, const ml::PointCloud<T> &pc, bool save_color=true)
@@ -52,9 +50,9 @@ public:
   // Matrix conversions between Eigen and mLib
   //
 
-  template <typename FloatType>
-  static Eigen::Matrix<FloatType, 2, 2> convertMlibToEigen(const ml::Matrix2x2<FloatType>& ml_matrix) {
-    Eigen::Matrix<FloatType, 2, 2> matrix;
+  template <typename FloatT>
+  static Eigen::Matrix<FloatT, 2, 2> convertMlibToEigen(const ml::Matrix2x2<FloatT>& ml_matrix) {
+    Eigen::Matrix<FloatT, 2, 2> matrix;
     for (std::size_t row = 0; row < static_cast<std::size_t>(matrix.rows()); ++row) {
       for (std::size_t col = 0; col < static_cast<std::size_t>(matrix.cols()); ++col) {
         matrix(row, col) = ml_matrix(row, col);
@@ -63,9 +61,9 @@ public:
     return matrix;
   }
 
-  template <typename FloatType>
-  static Eigen::Matrix<FloatType, 3, 3> convertMlibToEigen(const ml::Matrix3x3<FloatType>& ml_matrix) {
-    Eigen::Matrix<FloatType, 3, 3> matrix;
+  template <typename FloatT>
+  static Eigen::Matrix<FloatT, 3, 3> convertMlibToEigen(const ml::Matrix3x3<FloatT>& ml_matrix) {
+    Eigen::Matrix<FloatT, 3, 3> matrix;
     for (std::size_t row = 0; row < static_cast<std::size_t>(matrix.rows()); ++row) {
       for (std::size_t col = 0; col < static_cast<std::size_t>(matrix.cols()); ++col) {
         matrix(row, col) = ml_matrix(row, col);
@@ -74,9 +72,9 @@ public:
     return matrix;
   }
 
-    template <typename FloatType>
-    static Eigen::Matrix<FloatType, 4, 4> convertMlibToEigen(const ml::Matrix4x4<FloatType>& ml_matrix) {
-      Eigen::Matrix<FloatType, 4, 4> matrix;
+    template <typename FloatT>
+    static Eigen::Matrix<FloatT, 4, 4> convertMlibToEigen(const ml::Matrix4x4<FloatT>& ml_matrix) {
+      Eigen::Matrix<FloatT, 4, 4> matrix;
       for (std::size_t row = 0; row < static_cast<std::size_t>(matrix.rows()); ++row) {
         for (std::size_t col = 0; col < static_cast<std::size_t>(matrix.cols()); ++col) {
           matrix(row, col) = ml_matrix(row, col);
@@ -85,9 +83,9 @@ public:
       return matrix;
     }
 
-    template <typename FloatType>
-    static ml::Matrix2x2<FloatType> convertEigenToMlib(const Eigen::Matrix<FloatType, 2, 2>& eigen_matrix) {
-      ml::Matrix2x2<FloatType> matrix;
+    template <typename FloatT>
+    static ml::Matrix2x2<FloatT> convertEigenToMlib(const Eigen::Matrix<FloatT, 2, 2>& eigen_matrix) {
+      ml::Matrix2x2<FloatT> matrix;
       for (std::size_t row = 0; row < static_cast<std::size_t>(eigen_matrix.rows()); ++row) {
         for (std::size_t col = 0; col < static_cast<std::size_t>(eigen_matrix.cols()); ++col) {
           matrix(row, col) = eigen_matrix(row, col);
@@ -96,9 +94,9 @@ public:
       return matrix;
     }
 
-    template <typename FloatType>
-    static ml::Matrix3x3<FloatType> convertEigenToMlib(const Eigen::Matrix<FloatType, 3, 3>& eigen_matrix) {
-      ml::Matrix3x3<FloatType> matrix;
+    template <typename FloatT>
+    static ml::Matrix3x3<FloatT> convertEigenToMlib(const Eigen::Matrix<FloatT, 3, 3>& eigen_matrix) {
+      ml::Matrix3x3<FloatT> matrix;
       for (std::size_t row = 0; row < static_cast<std::size_t>(eigen_matrix.rows()); ++row) {
         for (std::size_t col = 0; col < static_cast<std::size_t>(eigen_matrix.cols()); ++col) {
           matrix(row, col) = eigen_matrix(row, col);
@@ -107,9 +105,9 @@ public:
       return matrix;
     }
 
-    template <typename FloatType>
-    static ml::Matrix4x4<FloatType> convertEigenToMlib(const Eigen::Matrix<FloatType, 4, 4>& eigen_matrix) {
-      ml::Matrix4x4<FloatType> matrix;
+    template <typename FloatT>
+    static ml::Matrix4x4<FloatT> convertEigenToMlib(const Eigen::Matrix<FloatT, 4, 4>& eigen_matrix) {
+      ml::Matrix4x4<FloatT> matrix;
       for (std::size_t row = 0; row < static_cast<std::size_t>(eigen_matrix.rows()); ++row) {
         for (std::size_t col = 0; col < static_cast<std::size_t>(eigen_matrix.cols()); ++col) {
           matrix(row, col) = eigen_matrix(row, col);
@@ -122,54 +120,54 @@ public:
     // Vector conversions between Eigen and mLib
     //
 
-    template <typename FloatType>
-    static Eigen::Matrix<FloatType, 2, 1> convertEigenToMlib(const ml::vec2<FloatType>& ml_vector) {
-      Eigen::Matrix<FloatType, 2, 1> vector;
+    template <typename FloatT>
+    static Eigen::Matrix<FloatT, 2, 1> convertMlibToEigen(const ml::vec2<FloatT>& ml_vector) {
+      Eigen::Matrix<FloatT, 2, 1> vector;
       for (std::size_t row = 0; row < static_cast<std::size_t>(vector.rows()); ++row) {
         vector(row) = ml_vector[row];
       }
       return vector;
     }
 
-    template <typename FloatType>
-    static Eigen::Matrix<FloatType, 3, 1> convertEigenToMlib(const ml::vec3<FloatType>& ml_vector) {
-      Eigen::Matrix<FloatType, 3, 1> vector;
+    template <typename FloatT>
+    static Eigen::Matrix<FloatT, 3, 1> convertMlibToEigen(const ml::vec3<FloatT>& ml_vector) {
+      Eigen::Matrix<FloatT, 3, 1> vector;
       for (std::size_t row = 0; row < static_cast<std::size_t>(vector.rows()); ++row) {
         vector(row) = ml_vector[row];
       }
       return vector;
     }
 
-    template <typename FloatType>
-    static Eigen::Matrix<FloatType, 4, 1> convertEigenToMlib(const ml::vec4<FloatType>& ml_vector) {
-      Eigen::Matrix<FloatType, 4, 1> vector;
+    template <typename FloatT>
+    static Eigen::Matrix<FloatT, 4, 1> convertMlibToEigen(const ml::vec4<FloatT>& ml_vector) {
+      Eigen::Matrix<FloatT, 4, 1> vector;
       for (std::size_t row = 0; row < static_cast<std::size_t>(vector.rows()); ++row) {
         vector(row) = ml_vector[row];
       }
       return vector;
     }
 
-    template <typename FloatType>
-    static ml::vec2<FloatType> convertEigenToMlib(const Eigen::Matrix<FloatType, 2, 1>& eigen_vector) {
-      ml::vec2<FloatType> vector;
+    template <typename FloatT>
+    static ml::vec2<FloatT> convertEigenToMlib(const Eigen::Matrix<FloatT, 2, 1>& eigen_vector) {
+      ml::vec2<FloatT> vector;
       for (std::size_t row = 0; row < static_cast<std::size_t>(eigen_vector.rows()); ++row) {
         vector[row] = eigen_vector(row);
       }
       return vector;
     }
 
-    template <typename FloatType>
-    static ml::vec3<FloatType> convertEigenToMlib(const Eigen::Matrix<FloatType, 3, 1>& eigen_vector) {
-      ml::vec3<FloatType> vector;
+    template <typename FloatT>
+    static ml::vec3<FloatT> convertEigenToMlib(const Eigen::Matrix<FloatT, 3, 1>& eigen_vector) {
+      ml::vec3<FloatT> vector;
       for (std::size_t row = 0; row < static_cast<std::size_t>(eigen_vector.rows()); ++row) {
         vector[row] = eigen_vector(row);
       }
       return vector;
     }
 
-    template <typename FloatType>
-    static ml::vec4<FloatType> convertEigenToMlib(const Eigen::Matrix<FloatType, 4, 1>& eigen_vector) {
-      ml::vec4<FloatType> vector;
+    template <typename FloatT>
+    static ml::vec4<FloatT> convertEigenToMlib(const Eigen::Matrix<FloatT, 4, 1>& eigen_vector) {
+      ml::vec4<FloatT> vector;
       for (std::size_t row = 0; row < static_cast<std::size_t>(eigen_vector.rows()); ++row) {
         vector[row] = eigen_vector(row);
       }
@@ -178,4 +176,4 @@ public:
 
 };
 
-} /* namespace stereo */
+} /* namespace bh */

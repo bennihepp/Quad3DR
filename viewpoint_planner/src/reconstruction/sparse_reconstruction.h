@@ -93,6 +93,8 @@ public:
 
   bool isPointInViewport(const Vector2& point) const;
 
+  bool isPointInViewport(const Eigen::Vector2i& point) const;
+
   bool isPointInViewport(const Vector2& point, FloatType margin) const;
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -238,7 +240,7 @@ public:
 
   virtual ~SparseReconstruction();
 
-  virtual void read(const std::string& path, const bool read_sfm_gps_transformation=true);
+  virtual void read(const std::string& path, const bool read_sfm_gps_transformation=false);
 
   const CameraMapType& getCameras() const;
 

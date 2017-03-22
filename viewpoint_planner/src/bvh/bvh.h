@@ -12,10 +12,10 @@
 #include <utility>
 #include <boost/serialization/access.hpp>
 #include <boost/iterator_adaptors.hpp>
-#include <ait/common.h>
-#include <ait/eigen.h>
-#include <ait/geometry.h>
-#include <ait/utilities.h>
+#include <bh/common.h>
+#include <bh/eigen.h>
+#include <bh/math/geometry.h>
+#include <bh/utilities.h>
 #if WITH_CUDA
   #include <ait/cuda_utils.h>
   #include "bvh.cuh"
@@ -23,9 +23,9 @@
 
 namespace bvh {
 
-using ait::Ray;
-using ait::RayData;
-using ait::BoundingBox3D;
+using bh::Ray;
+using bh::RayData;
+using bh::BoundingBox3D;
 
 #if __GNUC__ && !__CUDACC__
   #pragma GCC push_options
@@ -126,8 +126,8 @@ public:
   USE_FIXED_EIGEN_TYPES(FloatType)
   using NodeType = Node<ObjectType, FloatType>;
   using BoundingBoxType = BoundingBox3D<FloatType>;
-  using RayType = ait::Ray<FloatType>;
-  using RayDataType = ait::RayData<FloatType>;
+  using RayType = bh::Ray<FloatType>;
+  using RayDataType = bh::RayData<FloatType>;
 #if WITH_CUDA
   using CudaNodeType = CudaNode<FloatType>;
   using CudaTreeType = CudaTree<FloatType>;
@@ -232,15 +232,9 @@ public:
   : root_(nullptr), stored_as_vector_(false), owns_objects_(false), depth_(0), num_nodes_(0), num_leaf_nodes_(0) {
 #if WITH_CUDA
     cuda_tree_ = nullptr;
-    cuda_stack_size_ = 32 * 1024;
 #endif
   }
 
-#if WITH_CUDA
-  void setCudaStackSize(const std::size_t cuda_stack_size) {
-    cuda_stack_size_ = cuda_stack_size;
-  }
-#endif
 //  Tree(const Node*, bool copy = true) {
 //    root_ = nullptr;
 //    build(map, copy);
@@ -251,9 +245,7 @@ public:
   ~Tree() {
     clear();
 #if WITH_CUDA
-    if (cuda_tree_ != nullptr) {
-      delete cuda_tree_;
-    }
+    SAFE_DELETE(cuda_tree_);
 #endif
   }
 
@@ -282,6 +274,9 @@ public:
   }
 
   void clear() {
+#if WITH_CUDA
+    SAFE_DELETE(cuda_tree_);
+#endif
     if (owns_objects_) {
       clearObjectsRecursive(root_);
     }
@@ -537,6 +532,17 @@ public:
     return results;
   }
 
+#if WITH_CUDA
+  void setCudaStackSize(const size_t cuda_stack_size, const int cuda_gpu_id = 0, const bool verbose = true) const {
+    ait::CudaDevice cuda_dev(cuda_gpu_id);
+    if (verbose) {
+      std::cout << "Previous CUDA stack size was " << cuda_dev.getStackSize() << std::endl;
+      std::cout << "Setting CUDA stack size to " << cuda_stack_size << std::endl;
+    }
+    cuda_dev.setStackSize(cuda_stack_size);
+  }
+#endif
+
 private:
   // Boost serialization
   friend class boost::serialization::access;
@@ -547,6 +553,9 @@ private:
     ar & getDepth();
     ar & getNumOfNodes();
     ar & getNumOfLeafNodes();
+    if (getNumOfNodes() == 0) {
+      return;
+    }
     // Write out all nodes
     std::deque<const NodeType*> node_queue;
     node_queue.push_front(getRoot());
@@ -593,6 +602,9 @@ private:
     ar & depth;
     ar & num_of_nodes;
     ar & num_of_leaf_nodes;
+    if (num_of_nodes == 0) {
+      return;
+    }
     std::cout << "Tree has depth " << depth << ", " << num_of_nodes << " nodes " << " and " << num_of_leaf_nodes << " leaf nodes" << std::endl;
     // Read nodes from disk
     std::vector<NodeType> nodes;
@@ -917,9 +929,6 @@ private:
 #if WITH_CUDA
   void ensureCudaTreeIsInitialized() {
     if (cuda_tree_ == nullptr) {
-      std::cout << "Previous CUDA stack size was " << ait::CudaManager::getStackSize() << std::endl;
-      std::cout << "Setting CUDA stack size to " << cuda_stack_size_ << std::endl;
-      ait::CudaManager::setStackSize(cuda_stack_size_);
       CudaNodeType* cuda_root = reinterpret_cast<CudaNodeType*>(getRoot());
       cuda_tree_ = CudaTreeType::createCopyFromHostTree(cuda_root, getNumOfNodes(), getDepth());
     }
@@ -940,7 +949,6 @@ private:
 
 #if WITH_CUDA
   CudaTreeType* cuda_tree_;
-  std::size_t cuda_stack_size_;
 #endif
 };
 

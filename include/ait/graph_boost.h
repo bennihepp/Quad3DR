@@ -152,7 +152,7 @@ public:
     OutEdgeIteratorWrapper,
     OutEdgeIterator,
     boost::use_default,
-    boost::forward_traversal_tag> {
+    boost::random_access_traversal_tag> {
   public:
     OutEdgeIteratorWrapper()
     : graph_(nullptr) {}

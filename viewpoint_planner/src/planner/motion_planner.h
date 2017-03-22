@@ -8,6 +8,8 @@
 
 #include <memory>
 #include <functional>
+#include <mutex>
+#include <condition_variable>
 #include <boost/serialization/access.hpp>
 #include <ompl/base/SpaceInformation.h>
 #include <ompl/base/OptimizationObjective.h>
@@ -58,7 +60,17 @@ public:
 
   struct Motion {
     Motion()
-    : distance(-1), cost(-1) {}
+    : distance(0), cost(0) {}
+
+    bool isValid() const {
+      return !poses.empty();
+    }
+
+    void append(const Motion& other) {
+      distance += other.distance;
+      cost += other.cost;
+      std::copy(other.poses.begin(), other.poses.end(), std::back_inserter(poses));
+    }
 
     FloatType distance;
     FloatType cost;
@@ -77,10 +89,10 @@ private:
   };
 
   MotionPlanner(const Options* options, ViewpointPlannerData* data)
-  : options_(*options), initialized_(false), data_(data) {}
+  : options_(*options), data_(data), initialized_(false), num_planner_data_in_use_(0) {}
 
   MotionPlanner(const Options* options, ViewpointPlannerData* data, const std::string& log_filename)
-  : options_(*options), initialized_(false), data_(data) {
+  : options_(*options), data_(data), initialized_(false), num_planner_data_in_use_(0) {
     ompl_output_handler_ = std::make_shared<ompl::msg::OutputHandlerFile>(log_filename.c_str());
     ompl::msg::useOutputHandler(ompl_output_handler_.get());
   }
@@ -93,73 +105,63 @@ private:
     object_extent_ = object_extent;
   }
 
-  void initialize() {
+  void initialize(const std::size_t planner_data_pool_size = std::thread::hardware_concurrency()) const {
+    std::lock_guard<std::mutex> lock(pool_mutex_);
+
+    if (initialized_) {
+      return;
+    }
+
     AIT_ASSERT((object_extent_.array() != 0).all());
     AIT_ASSERT(!space_bbox_.isEmpty());
 
-//    // Setup state space
-//    space_ = std::make_shared<StateSpaceType>();
-//    ob::RealVectorBounds bounds(3);
-//    for (std::size_t i = 0; i < 3; ++i) {
-//      bounds.setLow(i, space_bbox_.getMinimum(i));
-//      bounds.setHigh(i, space_bbox_.getMaximum(i));
-//    }
-//    std::cout << "Bounding box=" << space_bbox_ << std::endl;
-//    space_->setBounds(bounds);
-////
-//    space_info_ = std::make_shared<ob::SpaceInformation>(space_);
-//    space_info_->setStateValidityChecker(std::bind(&MotionPlanner::isStateValid, this, std::placeholders::_1));
-//
-//    std::cout << "Space information settings:" << std::endl;
-//    space_info_->printSettings(std::cout);
-
-//    problem_def_ = std::make_shared<ob::ProblemDefinition>(space_info_);
-//    problem_def_->setOptimizationObjective(std::make_shared<ob::PathLengthOptimizationObjective>(space_info_));
-//
-//    planner_ = std::make_shared<PlannerType>(space_info_);
-//    planner_->setRange(options_.max_motion_range);
-//    planner_->setGoalBias(0.1);
-//    planner_->setProblemDefinition(problem_def_);
-//
-//    planner_->setup();
-//
-//    std::cout << "Problem definition:" << std::endl;
-//    problem_def_->print(std::cout);
-
-//    double construction_time = 10;
-//    std::cout << "Building roadmap for " << construction_time << " seconds" << std::endl;
-//    planner_->constructRoadmap(ob::timedPlannerTerminationCondition(construction_time, construction_time / 10.0));
-//    std::cout << "Done" << std::endl;
-
     initialized_ = true;
+
+    for (std::size_t i = 0; i < planner_data_pool_size; ++i) {
+      PlannerData planner_data = createPlannerData();
+      planner_data_pool_.push_back(std::move(planner_data));
+    }
   }
 
-  std::pair<Motion, bool> findMotion(const Pose& from, const Pose& to) {
+  class SE3DistanceOptimizationObjective : public ob::OptimizationObjective {
+  public:
+    SE3DistanceOptimizationObjective(const ob::SpaceInformationPtr& space_info)
+    : ob::OptimizationObjective(space_info) {
+      re3_space_ = std::static_pointer_cast<ob::RealVectorStateSpace>(
+          std::static_pointer_cast<ob::CompoundStateSpace>(si_->getStateSpace())->getSubspace(0));
+    }
+
+    ob::Cost stateCost(const ob::State* s) const {
+      return identityCost();
+    }
+
+    ob::Cost motionCost(const ob::State* s1, const ob::State* s2) const override {
+      const ob::CompoundStateSpace::StateType* c_s1 = static_cast<const ob::CompoundStateSpace::StateType*>(s1);
+      const ob::CompoundStateSpace::StateType* c_s2 = static_cast<const ob::CompoundStateSpace::StateType*>(s2);
+      const ob::RealVectorStateSpace::StateType* re3_s1 = c_s1->as<ob::RealVectorStateSpace::StateType>(0);
+      const ob::RealVectorStateSpace::StateType* re3_s2 = c_s2->as<ob::RealVectorStateSpace::StateType>(0);
+      return ob::Cost(re3_space_->distance(re3_s1, re3_s2));
+    }
+
+    ob::Cost motionCostHeuristic(const ob::State* s1, const ob::State* s2) const override {
+      return motionCost(s1, s2);
+    }
+
+  private:
+    std::shared_ptr<const ob::RealVectorStateSpace> re3_space_;
+  };
+
+  std::pair<Motion, bool> findMotion(const Pose& from, const Pose& to) const {
     if (!initialized_) {
       initialize();
     }
 //    ait::Timer timer;
 
-    // TODO: Initialize a pool of structures in the beginning for thread-safety
-
-    // Setup state space
-    std::shared_ptr<StateSpaceType> space_ = std::make_shared<StateSpaceType>();
-    ob::RealVectorBounds bounds(3);
-    for (std::size_t i = 0; i < 3; ++i) {
-      bounds.setLow(i, space_bbox_.getMinimum(i));
-      bounds.setHigh(i, space_bbox_.getMaximum(i));
-    }
-//    std::cout << "Bounding box=" << space_bbox_ << std::endl;
-    space_->setBounds(bounds);
-    FloatType fraction = object_extent_.maxCoeff() / 2 / space_bbox_.getMaxExtent();
-    space_->setLongestValidSegmentFraction(fraction);
-
-    std::shared_ptr<ob::SpaceInformation> space_info_ = std::make_shared<ob::SpaceInformation>(space_);
-    space_info_->setStateValidityChecker(std::bind(&MotionPlanner::isStateValid, this, std::placeholders::_1));
+    LockedPlannerData planner_data = requestPlannerData();
 
     // Create start and goal state
-    ob::ScopedState<StateSpaceType> start = createStateFromPose(from, space_info_);
-    ob::ScopedState<StateSpaceType> goal = createStateFromPose(to, space_info_);
+    ob::ScopedState<StateSpaceType> start = createStateFromPose(from, planner_data->space_info);
+    ob::ScopedState<StateSpaceType> goal = createStateFromPose(to, planner_data->space_info);
 
     if (!isStateValid(start.get())) {
       std::cerr << "ERROR: start state not valid: from=" << from << std::endl;
@@ -170,67 +172,64 @@ private:
     AIT_ASSERT(isStateValid(start.get()));
     AIT_ASSERT(isStateValid(goal.get()));
 
-    std::shared_ptr<ob::ProblemDefinition> problem_def_ = std::make_shared<ob::ProblemDefinition>(space_info_);
-    problem_def_->setOptimizationObjective(std::make_shared<ob::PathLengthOptimizationObjective>(space_info_));
-    problem_def_->setStartAndGoalStates(start, goal);
+    planner_data->problem_def->clearSolutionNonExistenceProof();
+    planner_data->problem_def->clearSolutionPaths();
+    planner_data->problem_def->clearStartStates();
+    planner_data->problem_def->clearGoal();
+    planner_data->problem_def->setStartAndGoalStates(start, goal);
 
-    std::shared_ptr<PlannerType> planner_ = std::make_shared<PlannerType>(space_info_);
-    planner_->setRange(options_.max_motion_range);
-    planner_->setGoalBias(0.1);
-    planner_->setProblemDefinition(problem_def_);
-
-    planner_->setup();
-
-////    planner_->clearQuery();
-//    planner_->clear();
-//
-//    problem_def_->clearSolutionNonExistenceProof();
-//    problem_def_->clearSolutionPaths();
-//    problem_def_->clearStartStates();
-//    problem_def_->clearGoal();
-//    problem_def_->setStartAndGoalStates(start, goal);
-//    planner_->setProblemDefinition(problem_def_);
-
-//    std::cout << "Problem definition:" << std::endl;
-//    problem_def_->print(std::cout);
+    planner_data->planner->clear();
+//    planner_data->planner->clearQuery();
+    planner_data->planner->setProblemDefinition(planner_data->problem_def);
+    planner_data->planner->setup();
 
     ob::PlannerTerminationCondition termination_cond = getTerminationCondition();
 
-    ob::PlannerStatus solved = planner_->solve(termination_cond);
+    ob::PlannerStatus solved = planner_data->planner->solve(termination_cond);
 
 //    timer.printTimingMs("MotionPlanner::findMotion()");
 
     if (solved == ob::PlannerStatus::EXACT_SOLUTION) {
 //      std::cout << "Found exact solution:" << std::endl;
-      const ob::PathPtr path = problem_def_->getSolutionPath();;
+      const ob::PathPtr path = planner_data->problem_def->getSolutionPath();;
       const og::PathGeometric* geo_path = dynamic_cast<og::PathGeometric*>(path.get());
-      FloatType motion_distance = geo_path->cost(problem_def_->getOptimizationObjective()).value();
+      FloatType motion_distance = geo_path->cost(planner_data->problem_def->getOptimizationObjective()).value();
 
       // print the path to screen
 //      path->print(std::cout);
 
 //      ob::PlannerSolution solution(path);
-//      problem_def_->getSolution(solution);
-//      std::cout << "Length solution path: " << problem_def_->getSolutionPath()->length() << std::endl;
+//      planner_data->problem_def->getSolution(solution);
+//      std::cout << "Length solution path: " << planner_data->problem_def->getSolutionPath()->length() << std::endl;
 //      std::cout << "Solution path length: " << geo_path->length() << std::endl;
 //      std::cout << "Solution difference: " << solution.difference_ << std::endl;
-//      std::cout << "Solution cost: " <<  << std::endl;
+//      std::cout << "Solution cost: " << solution.cost_ << std::endl;
+//      std::cout << "Start: " << start->getX() << " " << start->getY() << " " << start->getZ() << std::endl;
+//      std::cout << "Goal: " << goal->getX() << " " << goal->getY() << " " << goal->getZ() << std::endl;
 
-      // Sanity checks
+      // Sanity check
       FloatType distance_square = (from.getWorldPosition() - to.getWorldPosition()).squaredNorm();
-//      FloatType distance2 = space_info_->distance(start.get(), goal.get());
-//      if (motion_distance * motion_distance < distance_square) {
-//        std::cout << "distance_square=" << distance_square << std::endl;
-//        std::cout << "distance2 * distance2=" << distance2 * distance2 << std::endl;
-//        std::cout << "motion_distance * motion_distance=" << motion_distance * motion_distance << std::endl;
-//      }
-      AIT_ASSERT(ait::isApproxGreater(motion_distance * motion_distance, distance_square, 1e-2));
-//      AIT_ASSERT(ait::isApproxGreater(motion_distance * motion_distance, distance2 * distance2, 1e-2));
+      FloatType distance_ompl = planner_data->problem_def->getOptimizationObjective()->motionCost(start.get(), goal.get()).value();
+      if (ait::isApproxSmaller(distance_ompl * distance_ompl, distance_square, 1e-2)) {
+        std::cout << "WARNING: distance_ompl * distance_ompl < distance_square" << std::endl;
+        AIT_PRINT_VALUE(distance_square);
+        AIT_PRINT_VALUE(distance_ompl * distance_ompl);
+        AIT_PRINT_VALUE(distance_ompl);
+        AIT_DEBUG_BREAK;
+      }
+      if (ait::isApproxSmaller(motion_distance * motion_distance, distance_square, 1e-2)) {
+        std::cout << "WARNING: motion_distance * motion_distance < distance_square" << std::endl;
+        AIT_PRINT_VALUE(motion_distance);
+        AIT_PRINT_VALUE(motion_distance * motion_distance);
+        AIT_PRINT_VALUE(distance_square);
+        AIT_DEBUG_BREAK;
+      }
 
       Motion motion;
       motion.distance = motion_distance;
       motion.cost = motion_distance;
       FloatType accumulated_motion_distance = 0;
+      FloatType accumulated_motion_distance2 = 0;
       for (std::size_t i = 0; i < geo_path->getStateCount(); ++i) {
         const StateSpaceType::StateType* state = static_cast<const StateSpaceType::StateType*>(geo_path->getState(i));
         Vector3 position(state->getX(), state->getY(), state->getZ());
@@ -240,13 +239,18 @@ private:
         }
         else {
           const StateSpaceType::StateType* prev_state = static_cast<const StateSpaceType::StateType*>(geo_path->getState(i - 1));
-          accumulated_motion_distance += space_info_->distance(prev_state, state);
+          accumulated_motion_distance += planner_data->problem_def->getOptimizationObjective()->motionCost(prev_state, state).value();
           const FloatType fraction = accumulated_motion_distance / motion.distance;
           quat = from.quaternion().slerp(fraction, to.quaternion());
         }
         Pose pose = Pose::createFromImageToWorldTransformation(position, quat);
+        if (!motion.poses.empty()) {
+          accumulated_motion_distance2 += (motion.poses.back().getWorldPosition() - pose.getWorldPosition()).norm();
+        }
         motion.poses.push_back(pose);
       }
+      AIT_ASSERT(ait::isApproxEqual(accumulated_motion_distance, motion_distance, 1e-2));
+      AIT_ASSERT(ait::isApproxEqual(accumulated_motion_distance2, motion_distance, 1e-2));
       return std::make_pair(motion, true);
     }
     else {
@@ -256,7 +260,7 @@ private:
   }
 
 private:
-  bool isStateValid(const ob::State *state) {
+  bool isStateValid(const ob::State *state) const {
     const StateSpaceType::StateType* state_tmp = static_cast<const StateSpaceType::StateType*>(state);
     Vector3 position(state_tmp->getX(), state_tmp->getY(), state_tmp->getZ());
     return data_->isValidObjectPosition(position, object_extent_);
@@ -293,16 +297,118 @@ private:
     return ob::IterationTerminationCondition(1000);
   }
 
+  struct PlannerData {
+    bool in_use;
+    std::shared_ptr<StateSpaceType> space;
+    std::shared_ptr<ob::SpaceInformation> space_info;
+    std::shared_ptr<ob::ProblemDefinition> problem_def;
+    std::shared_ptr<PlannerType> planner;
+  };
+
+  class LockedPlannerData {
+  public:
+    static LockedPlannerData request(const MotionPlanner* motion_planner) {
+      std::unique_lock<std::mutex> lock(motion_planner->pool_mutex_);
+
+      while (motion_planner->num_planner_data_in_use_ >= motion_planner->planner_data_pool_.size()) {
+        motion_planner->pool_condition_.wait(lock);
+      }
+
+      PlannerData* planner_data_ptr = nullptr;
+      for (PlannerData& planner_data : motion_planner->planner_data_pool_) {
+        if (!planner_data.in_use) {
+          planner_data_ptr = &planner_data;
+          break;
+        }
+      }
+      AIT_ASSERT_STR(planner_data_ptr != nullptr, "Unable to find a free planner data object");
+      planner_data_ptr->in_use = true;
+      ++motion_planner->num_planner_data_in_use_;
+      return LockedPlannerData(planner_data_ptr, motion_planner);
+    }
+
+    PlannerData* operator->() {
+      return planner_data_;
+    }
+
+    PlannerData& operator*() {
+      return *planner_data_;
+    }
+
+    ~LockedPlannerData() {
+      if (planner_data_ != nullptr) {
+        std::lock_guard<std::mutex> lock(motion_planner_->pool_mutex_);
+        planner_data_->in_use = false;
+        --motion_planner_->num_planner_data_in_use_;
+        motion_planner_->pool_condition_.notify_one();
+      }
+    }
+
+  private:
+    friend class MotionPlanner;
+
+    LockedPlannerData(PlannerData* planner_data, const MotionPlanner* motion_planner)
+    : planner_data_(planner_data), motion_planner_(motion_planner) {
+    }
+
+    LockedPlannerData(const LockedPlannerData& other) = delete;
+
+    LockedPlannerData(LockedPlannerData&& other) {
+      planner_data_ = other.planner_data_;
+      motion_planner_ = other.motion_planner_;
+      other.planner_data_ = nullptr;
+      other.motion_planner_ = nullptr;
+    }
+
+    PlannerData* planner_data_;
+    const MotionPlanner* motion_planner_;
+  };
+
+  LockedPlannerData requestPlannerData() const {
+    return LockedPlannerData::request(this);
+  }
+
+  PlannerData createPlannerData() const {
+    PlannerData planner_data;
+    planner_data.in_use = false;
+    planner_data.space = std::make_shared<StateSpaceType>();
+    ob::RealVectorBounds bounds(3);
+    for (std::size_t i = 0; i < 3; ++i) {
+      bounds.setLow(i, space_bbox_.getMinimum(i));
+      bounds.setHigh(i, space_bbox_.getMaximum(i));
+    }
+//    std::cout << "Bounding box=" << space_bbox_ << std::endl;
+    planner_data.space->setBounds(bounds);
+    FloatType fraction = object_extent_.maxCoeff() / 2 / space_bbox_.getMaxExtent();
+    planner_data.space->setLongestValidSegmentFraction(fraction);
+
+    planner_data.space_info = std::make_shared<ob::SpaceInformation>(planner_data.space);
+    planner_data.space_info->setStateValidityChecker(std::bind(&MotionPlanner::isStateValid, this, std::placeholders::_1));
+
+    planner_data.problem_def = std::make_shared<ob::ProblemDefinition>(planner_data.space_info);
+    planner_data.problem_def->setOptimizationObjective(std::make_shared<SE3DistanceOptimizationObjective>(planner_data.space_info));
+
+    planner_data.planner = std::make_shared<PlannerType>(planner_data.space_info);
+    planner_data.planner->setRange(options_.max_motion_range);
+    planner_data.planner->setGoalBias(0.1);
+
+    planner_data.planner->setup();
+
+    return planner_data;
+  }
+
   Options options_;
 
-  bool initialized_;
-  ViewpointPlannerData* data_;
   BoundingBoxType space_bbox_;
   Vector3 object_extent_;
 
-  std::shared_ptr<StateSpaceType> space_;
-  std::shared_ptr<ob::SpaceInformation> space_info_;
-  std::shared_ptr<ob::ProblemDefinition> problem_def_;
-  std::shared_ptr<PlannerType> planner_;
   std::shared_ptr<ompl::msg::OutputHandler> ompl_output_handler_;
+
+  ViewpointPlannerData* data_;
+
+  mutable bool initialized_;
+  mutable std::mutex pool_mutex_;
+  mutable std::condition_variable pool_condition_;
+  mutable std::size_t num_planner_data_in_use_;
+  mutable std::vector<PlannerData> planner_data_pool_;
 };

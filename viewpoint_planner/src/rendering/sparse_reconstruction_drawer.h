@@ -51,6 +51,8 @@ public:
 
   void draw(const QMatrix4x4& pvm_matrix, const int width, const int height);
 
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
 private:
   const float IMAGE_R = 1.0f;
   const float IMAGE_G = 0.1f;

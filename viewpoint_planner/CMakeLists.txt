@@ -1,4 +1,5 @@
-option(WITH_OPENGL_OFFSCREEN "Offscreen OpenGL support" ON)
+option(WITH_OPENGL_OFFSCREEN "Offscreen OpenGL support" On)
+option(WITH_PROFILING "Profiling support" Off)
 
 set(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules/")
 
@@ -19,7 +20,7 @@ find_package(CUDA REQUIRED)
 # Set nvcc flags
 list(APPEND CUDA_NVCC_FLAGS --compiler-options -fno-strict-aliasing -use_fast_math)
 list(APPEND CUDA_NVCC_FLAGS -lineinfo)
-#list(APPEND CUDA_NVCC_FLAGS -Xptxas -dlcm=cg)
+list(APPEND CUDA_NVCC_FLAGS -Xptxas -dlcm=cg)
 #list(APPEND CUDA_NVCC_FLAGS --debug)
 #list(APPEND CUDA_NVCC_FLAGS --device-debug)
 if(CUDA_VERSION_MAJOR LESS 7)
@@ -41,9 +42,9 @@ if(WITH_OPENGL_OFFSCREEN)
     add_definitions(-DWITH_OPENGL_OFFSCREEN=1)
 endif()
 
-
-# Enable debugger breaking on AIT_ASSERT macros
+# Enable debugger breaking on BH_ASSERT macros
 add_definitions(-DAIT_ASSERT_BREAK=1)
+add_definitions(-DBH_ASSERT_BREAK=1)
 
 # Qt settings
 # Instruct CMake to run moc automatically when needed.
@@ -66,6 +67,11 @@ if(Qt5_POSITION_INDEPENDENT_CODE)
 	set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 endif()
 
+if(WITH_PROFILING)
+    add_definitions(-DBH_WITH_PROFILING=1)
+    set(GPERFTOOLS_LIBRARIES "profiler")
+endif()
+
 include_directories(
 	../external/QGLViewer
   ${OCTOMAP_INCLUDE_DIRS}
@@ -77,7 +83,8 @@ include_directories(
 add_executable(occupancy_map_from_sens
   # Executable
   src/exe/occupancy_map_from_sens.cpp
-  # AIT
+  # BH
+  ../src/bh/common.cpp
   ../src/common.cpp
   # mLib
   src/mLib/mLib.h
@@ -99,7 +106,8 @@ target_link_libraries(occupancy_map_from_sens
 add_executable(occupancy_map_from_colmap
   # Executable
   src/exe/occupancy_map_from_colmap.cpp
-  # AIT
+  # BH
+  ../src/bh/common.cpp
   ../src/common.cpp
   # Octree
   src/octree/occupancy_map.h
@@ -123,7 +131,8 @@ target_link_libraries(occupancy_map_from_colmap
 add_executable(occupancy_map_from_mesh
   # Executable
   src/exe/occupancy_map_from_mesh.cpp
-  # AIT
+  # BH
+  ../src/bh/common.cpp
   ../src/common.cpp
   # Octree
   src/octree/occupancy_map.h
@@ -150,7 +159,9 @@ target_link_libraries(occupancy_map_from_mesh
 add_executable(transform_mesh WIN32
   # Executable
   src/exe/transform_mesh.cpp
-  # AIT
+  # BH
+  ../src/bh/common.cpp
+  ../src/bh/utilities.cpp
   ../src/common.cpp
   ../src/utilities.cpp
   # mLib
@@ -164,7 +175,9 @@ target_link_libraries(transform_mesh
 add_executable(clip_mesh WIN32
   # Executable
   src/exe/clip_mesh.cpp
-  # AIT
+  # BH
+  ../src/bh/common.cpp
+  ../src/bh/utilities.cpp
   ../src/common.cpp
   ../src/utilities.cpp
   # mLib
@@ -178,7 +191,9 @@ target_link_libraries(clip_mesh
 add_executable(clip_point_cloud WIN32
   # Executable
   src/exe/clip_point_cloud.cpp
-  # AIT
+  # BH
+  ../src/bh/common.cpp
+  ../src/bh/utilities.cpp
   ../src/common.cpp
   ../src/utilities.cpp
   # mLib
@@ -189,8 +204,42 @@ target_link_libraries(clip_point_cloud
   ${Boost_LIBRARIES}
 )
 
+add_executable(fuse_point_cloud WIN32
+  # Executable
+  src/exe/fuse_point_cloud.cpp
+  # BH
+  ../src/bh/common.cpp
+  ../src/bh/utilities.cpp
+  ../src/common.cpp
+  ../src/utilities.cpp
+  # mLib
+  src/mLib/mLib.h
+  src/mLib/mLib.cpp
+)
+target_link_libraries(fuse_point_cloud
+  ${Boost_LIBRARIES}
+)
+
+add_executable(evaluate_dense_points WIN32
+  # Executable
+  src/exe/evaluate_dense_points.cpp
+  # BH
+  ../src/bh/common.cpp
+  ../src/bh/utilities.cpp
+  ../src/common.cpp
+  ../src/utilities.cpp
+  # mLib
+  src/mLib/mLib.h
+  src/mLib/mLib.cpp
+)
+target_link_libraries(evaluate_dense_points
+  ${Boost_LIBRARIES}
+)
+
 set(VIEWPOINT_PLANNER_SOURCES_COMMON
-  # AIT
+  # BH
+  ../src/bh/common.cpp
+  ../src/bh/utilities.cpp
   ../src/common.cpp
   ../src/utilities.cpp
   # mLib
@@ -216,10 +265,21 @@ set(VIEWPOINT_PLANNER_SOURCES_COMMON
   src/planner/viewpoint_planner.h
   src/planner/viewpoint_planner.cpp
   src/planner/viewpoint_planner.hxx
+  src/planner/viewpoint_planner_raycast.cpp
+  src/planner/viewpoint_planner_sampling.cpp
+  src/planner/viewpoint_planner_motion.cpp
+  src/planner/viewpoint_planner_scoring.cpp
+  src/planner/viewpoint_planner_export.cpp
+  src/planner/viewpoint_planner_serialization.cpp
   src/planner/viewpoint_planner_graph.cpp
   src/planner/viewpoint_planner_graph.hxx
+  src/planner/viewpoint_planner_path.cpp
+  src/planner/viewpoint_planner_path_tour.cpp
+  src/planner/viewpoint_planner_sparse_matching.cpp
   src/planner/viewpoint_planner_data.h
   src/planner/viewpoint_planner_data.cpp
+  src/planner/viewpoint_planner_opengl.cpp
+  src/planner/viewpoint_planner_dump.cpp
   src/planner/motion_planner.h
   # Reconstruction
   src/reconstruction/sparse_reconstruction.h
@@ -227,18 +287,59 @@ set(VIEWPOINT_PLANNER_SOURCES_COMMON
   src/reconstruction/dense_reconstruction.h
   src/reconstruction/dense_reconstruction.cpp
 )
+cuda_add_library(viewpoint_planner_common_objects
+  ${VIEWPOINT_PLANNER_SOURCES_COMMON}
+)
+if(WITH_OPENGL_OFFSCREEN)
+	target_link_libraries(viewpoint_planner_common_objects Qt5::Core Qt5::Gui Qt5::OpenGL)
+	target_link_libraries(viewpoint_planner_common_objects
+      ${OMPL_LIBRARIES}
+      ${Boost_LIBRARIES}
+    )
+endif()
+
+cuda_add_executable(compute_ground_truth_mesh WIN32
+  # Executable
+  src/exe/compute_ground_truth_mesh.cpp
+  src/octree/occupancy_map.cpp
+  # BH
+  ../src/bh/common.cpp
+  ../src/bh/utilities.cpp
+  ../src/common.cpp
+  ../src/utilities.cpp
+  # mLib
+  src/mLib/mLib.h
+  src/mLib/mLib.cpp
+)
+target_link_libraries(compute_ground_truth_mesh
+  viewpoint_planner_common_objects
+)
+target_link_libraries(compute_ground_truth_mesh
+  ${OCTOMAP_LIBRARIES}
+  ${OCTOVIS_LIBRARIES}
+  ${Boost_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+)
+if(WITH_OPENGL_OFFSCREEN)
+  # Needs Qt headers when including viewpoint_planner.h
+  target_link_libraries(compute_ground_truth_mesh
+    ${OPENGL_LIBRARIES}
+  )
+  target_link_libraries(compute_ground_truth_mesh Qt5::Core Qt5::Gui Qt5::OpenGL)
+endif()
 
 cuda_add_executable(create_baseline_viewpoint_path
   # Executable
   src/exe/create_baseline_viewpoint_path.cpp
-  ${VIEWPOINT_PLANNER_SOURCES_COMMON}
+)
+target_link_libraries(create_baseline_viewpoint_path
+  viewpoint_planner_common_objects
 )
 target_link_libraries(create_baseline_viewpoint_path
   ${OCTOMAP_LIBRARIES}
   ${OCTOVIS_LIBRARIES}
   ${Boost_LIBRARIES}
   ${OpenCV_LIBRARIES}
-  ${OMPL_LIBRARIES}
 )
 if(WITH_OPENGL_OFFSCREEN)
   # Needs Qt headers when including viewpoint_planner.h
@@ -251,16 +352,17 @@ endif()
 cuda_add_executable(viewpoint_planner_cmdline WIN32
   # Executable
   src/exe/viewpoint_planner_cmdline.cpp
-  # Offscreen rendering
+  # Offscreen rendering resources
   src/shaders_offscreen.qrc
-  ${VIEWPOINT_PLANNER_SOURCES_COMMON}
+)
+target_link_libraries(viewpoint_planner_cmdline
+  viewpoint_planner_common_objects
 )
 target_link_libraries(viewpoint_planner_cmdline
   ${OCTOMAP_LIBRARIES}
   ${OCTOVIS_LIBRARIES}
   ${Boost_LIBRARIES}
   ${OpenCV_LIBRARIES}
-  ${OMPL_LIBRARIES}
 )
 if(WITH_OPENGL_OFFSCREEN)
     target_link_libraries(viewpoint_planner_cmdline
@@ -275,9 +377,7 @@ QT5_WRAP_UI(viewpoint_planner_gui_UIS_H
 	src/ui/viewer_planner_panel.ui
 )
 
-cuda_add_executable(viewpoint_planner_gui WIN32
-  # Executable
-  src/exe/viewpoint_planner_gui.cpp
+set(VIEWPOINT_PLANNER_SOURCES_GUI
   # UI
   src/ui/viewer_window.h
   src/ui/viewer_window.cpp
@@ -298,9 +398,27 @@ cuda_add_executable(viewpoint_planner_gui WIN32
   src/rendering/sparse_reconstruction_drawer.cpp
   src/rendering/viewpoint_drawer.h
   src/rendering/viewpoint_drawer.hxx
+)
+cuda_add_library(viewpoint_planner_gui_objects
+  ${VIEWPOINT_PLANNER_SOURCES_GUI}
+  # UI
   ${viewpoint_planner_gui_UIS_H}
+)
+target_link_libraries(viewpoint_planner_gui_objects Qt5::Core Qt5::Xml Qt5::Gui Qt5::OpenGL Qt5::WebSockets)
+target_link_libraries(viewpoint_planner_gui_objects
+  viewpoint_planner_common_objects
+  ${Boost_LIBRARIES}
+)
+
+cuda_add_executable(viewpoint_planner_gui WIN32
+  # Executable
+  src/exe/viewpoint_planner_gui.cpp
+  # Resources
   src/shaders.qrc
-  ${VIEWPOINT_PLANNER_SOURCES_COMMON}
+)
+target_link_libraries(viewpoint_planner_gui
+  viewpoint_planner_common_objects
+  viewpoint_planner_gui_objects
 )
 target_link_libraries(viewpoint_planner_gui
   ${OCTOMAP_LIBRARIES}
@@ -308,7 +426,7 @@ target_link_libraries(viewpoint_planner_gui
   ${Boost_LIBRARIES}
   ${OpenCV_LIBRARIES}
   ${OPENGL_LIBRARIES}
-  ${OMPL_LIBRARIES}
+  ${GPERFTOOLS_LIBRARIES}
 )
 target_link_libraries(viewpoint_planner_gui Qt5::Core Qt5::Xml Qt5::Gui Qt5::OpenGL Qt5::WebSockets)
 #target_link_libraries(viewpoint_planner_gui /home/bhepp/Projects/Libraries/libQGLViewer-2.6.4/lib/libQGLViewer-qt5.so)

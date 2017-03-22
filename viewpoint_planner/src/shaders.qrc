@@ -14,5 +14,7 @@
         <file>shaders/voxels.f.glsl</file>
         <file>shaders/triangles_normals.f.glsl</file>
         <file>shaders/triangles_normals.v.glsl</file>
+        <file>shaders/triangles_depth.f.glsl</file>
+        <file>shaders/triangles_depth.v.glsl</file>
     </qresource>
 </RCC>

@@ -40,7 +40,7 @@ public:
     return rng_;
   }
 
-  bool sampleDiscrete(const FloatType true_probability) const {
+  bool sampleBernoulli(const FloatType true_probability) const {
     return sampleUniform() <= true_probability;
   }
 

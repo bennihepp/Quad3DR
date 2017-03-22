@@ -42,6 +42,7 @@
 #include <manipulatedCameraFrame.h>
 #include <ait/qt_utils.h>
 #include <ait/utilities.h>
+#include <ait/eigen_utils.h>
 #include <ait/pose.h>
 #include <ait/color.h>
 
@@ -57,6 +58,9 @@ ViewerWidget::ViewerWidget(const Options& options, const QGLFormat& format,
       z_near_coefficient_(0.01),
       planner_(planner), initialized_(false),
       settings_panel_(settings_panel), planner_panel_(planner_panel),
+      selected_viewpoint_graph_entry_index_((size_t)-1),
+      selected_viewpoint_path_branch_index_((size_t)-1),
+      selected_viewpoint_path_entry_index_((size_t)-1),
       octree_(nullptr), sparse_recon_(nullptr),
       dense_points_(nullptr), dense_points_size_(1),
       poisson_mesh_(nullptr),
@@ -67,7 +71,8 @@ ViewerWidget::ViewerWidget(const Options& options, const QGLFormat& format,
       viewpoint_color_mode_(Fixed),
       viewpoint_selected_component_(-1),
       planner_thread_(planner, this),
-      viewpoint_path_branch_index_(0) {
+      viewpoint_path_branch_index_(0),
+      raycast_mode_(RaycastMode::DEFAULT) {
     QSizePolicy policy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     policy.setHeightForWidth(true);
     setSizePolicy(policy);
@@ -158,6 +163,7 @@ ViewerWidget::ViewerWidget(const Options& options, const QGLFormat& format,
 
     connect(this, SIGNAL(viewpointsChanged()), this, SLOT(updateViewpoints()));
     connect(this, SIGNAL(plannerThreadPaused()), this, SLOT(onPlannerThreadPaused()));
+    connect(this, SIGNAL(raycastFinished()), this, SLOT(onRaycastFinished()));
 
     std::vector<std::pair<std::string, std::size_t>> color_mode_size_t;
     for (const auto& entry : getAvailableViewpointColorModes()) {
@@ -199,7 +205,7 @@ void ViewerWidget::init() {
   //    setHandlerKeyboardModifiers(QGLViewer::CAMERA, Qt::AltModifier);
   //    setHandlerKeyboardModifiers(QGLViewer::FRAME, Qt::NoModifier);
   //    setHandlerKeyboardModifiers(QGLViewer::CAMERA, Qt::ControlModifier);
-  setMouseTracking(true);
+//  setMouseTracking(true);
 
   // Restore previous viewer state.
   restoreStateFromFile();
@@ -220,7 +226,7 @@ void ViewerWidget::init() {
   setUseDroneCamera(settings_panel_->getUseDroneCamera());
 
   // background color defaults to white
-  this->setBackgroundColor(QColor(200,200,200));
+  this->setBackgroundColor(QColor(225, 225, 225));
   this->qglClearColor(this->backgroundColor());
 
   initAxesDrawer();
@@ -574,11 +580,16 @@ void ViewerWidget::showViewpointGraph(const std::size_t selected_index /*= (std:
   }
 
   std::unique_lock<std::mutex> lock(mutex_);
+  std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
+#if WITH_OPENGL_OFFSCREEN
+  std::unique_lock<std::mutex> opengl_lock = planner_->acquireOpenGLLock();
+#endif
+  makeCurrent();
 
   // Fill viewpoint graph dropbox in planner panel
   std::vector<std::pair<std::string, size_t>> viewpoint_graph_gui_entries;
-  for (size_t i = 0; i < viewpoint_graph_copy_.size(); ++i) {
-    ViewpointPlanner::FloatType total_information = std::get<2>(viewpoint_graph_copy_[i]);
+  for (size_t i = 0; i < planner_->getViewpointEntries().size(); ++i) {
+    ViewpointPlanner::FloatType total_information = planner_->getViewpointEntries()[i].total_information;
     if (total_information < min_information_filter_) {
       continue;
     }
@@ -603,10 +614,38 @@ void ViewerWidget::showViewpointGraph(const std::size_t selected_index /*= (std:
     planner_panel_->setViewpointComponentSelectionByItemIndex(0);
   }
 
+  uploadViewpointGraphDrawerViewpointsWithoutLock(selected_index);
+
+  planner_panel_->setViewpointGraphSize(planner_->getViewpointEntries().size());
+  planner_panel_->setViewpointMotionsSize(planner_->getViewpointGraph().numEdges());
+
+#if WITH_OPENGL_OFFSCREEN
+  opengl_lock.unlock();
+#endif
+  planner_lock.unlock();
+  lock.unlock();
+
+  const bool inspect_graph_motions = planner_panel_->isInspectViewpointGraphMotionsChecked();
+  const bool valid_selection = selected_index != (std::size_t)-1;
+  if (inspect_graph_motions && valid_selection) {
+    showViewpointGraphMotions(selected_index);
+  }
+
+  update();
+}
+
+#pragma GCC push_options
+#pragma GCC optimize("O0")
+void ViewerWidget::uploadViewpointGraphDrawerViewpointsWithoutLock(
+        const size_t selected_index, const bool use_selection_mode) {
+  std::vector<std::size_t> components;
+  std::size_t num_components;
+  std::tie(components, num_components) = planner_->getConnectedComponents();
+
   // Compute min-max of information value
   ait::MinMaxTracker<FloatType> min_max;
-  for (const auto& entry : viewpoint_graph_copy_) {
-    FloatType total_information = std::get<2>(entry);
+  for (const auto& entry : planner_->getViewpointEntries()) {
+    FloatType total_information = entry.total_information;
     min_max.update(total_information);
   }
 
@@ -629,36 +668,45 @@ void ViewerWidget::showViewpointGraph(const std::size_t selected_index /*= (std:
   // viewpoints select by the user
   std::vector<Pose> poses;
   std::vector<typename ViewpointDrawer<FloatType>::Color4> colors;
+  poses.reserve(planner_->getViewpointEntries().size());
+  colors.reserve(planner_->getViewpointEntries().size());
   const ait::ColorMapHot<FloatType> cmap;
-  for (auto it = viewpoint_graph_copy_.begin(); it != viewpoint_graph_copy_.end(); ++it) {
-    const std::size_t entry_index = it - viewpoint_graph_copy_.begin();
-    const auto entry = *it;
-    if (viewpoint_selected_component_ >= 0 && components[std::get<0>(entry)] != (std::size_t)viewpoint_selected_component_) {
+  const auto first_entry = planner_->getViewpointEntries().begin();
+  const auto last_entry = planner_->getViewpointEntries().end();
+  for (auto it = first_entry; it != last_entry; ++it) {
+    const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = it - first_entry;
+    const ViewpointPlanner::ViewpointEntry& entry = *it;
+    if (viewpoint_selected_component_ >= 0
+        && components[viewpoint_index] != (std::size_t)viewpoint_selected_component_) {
       continue;
     }
-    FloatType total_information = std::get<2>(entry);
+    FloatType total_information = entry.total_information;
     if (inspect_graph_motions && valid_selection) {
-      const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = std::get<0>(entry);
-      if (viewpoint_index != selected_index && !planner_->getViewpointGraph().getEdgesByNode(selected_index).containsTargetNode(viewpoint_index)) {
+      if (viewpoint_index != selected_index
+          && !planner_->getViewpointGraph().getEdgesByNode(selected_index).containsTargetNode(viewpoint_index)) {
         continue;
       }
     }
-    const Pose& pose = std::get<1>(entry);
-    typename ViewpointDrawer<FloatType>::Color4 color;
-    if (viewpoint_color_mode_ == Fixed
-        && valid_selection && std::get<0>(entry) == std::get<0>(viewpoint_graph_copy_[selected_index])) {
+    const Pose& pose = entry.viewpoint.pose();
+    Color4 color;
+    if (use_selection_mode) {
+      std::tie(std::ignore, color) = addSelectableObject(
+              VIEWPOINT_GRAPH_ENTRY, boost::any((size_t)viewpoint_index));
+    }
+    else if (viewpoint_color_mode_ == Fixed
+        && valid_selection && viewpoint_index == selected_index) {
       color = typename ViewpointDrawer<FloatType>::Color4(0.8f, 0.0f, 0.0f, 0.6f);
     }
     else if (viewpoint_color_mode_ == Fixed) {
       color = typename ViewpointDrawer<FloatType>::Color4(0.7f, 0.8f, 0.0f, 0.6f);
     }
     else if (viewpoint_color_mode_ == Component) {
-      const std::size_t component = components[std::get<0>(entry)];
+      const std::size_t component = components[viewpoint_index];
       const FloatType value = ait::normalize<FloatType>(component, 0, num_components);
       color = cmap.map(value, 0.6f);
     }
     else if (viewpoint_color_mode_ == Indexed) {
-      const FloatType value = ait::normalize<FloatType>(entry_index, 0, viewpoint_graph_copy_.size() - 1);
+      const FloatType value = ait::normalize<FloatType>(viewpoint_index, 0, planner_->getViewpointEntries().size() - 1);
       color = cmap.map(value, 0.6f);
     }
     else {
@@ -671,17 +719,8 @@ void ViewerWidget::showViewpointGraph(const std::size_t selected_index /*= (std:
   // Draw viewpoint camera frustums
   viewpoint_graph_drawer_.setCamera(planner_->getVirtualCamera());
   viewpoint_graph_drawer_.setViewpoints(poses, colors);
-
-  planner_panel_->setViewpointGraphSize(viewpoint_graph_copy_.size());
-  planner_panel_->setViewpointMotionsSize(planner_->getViewpointGraph().numEdges());
-  lock.unlock();
-
-  if (inspect_graph_motions && valid_selection) {
-    showViewpointGraphMotions(selected_index);
-  }
-
-  update();
 }
+#pragma GCC pop_options
 
 void ViewerWidget::showViewpointPath(const std::size_t selected_index /*= (std::size_t)-1*/) {
   if (!initialized_) {
@@ -689,6 +728,10 @@ void ViewerWidget::showViewpointPath(const std::size_t selected_index /*= (std::
   }
 
   std::unique_lock<std::mutex> lock(mutex_);
+  std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
+#if WITH_OPENGL_OFFSCREEN
+  std::unique_lock<std::mutex> opengl_lock = planner_->acquireOpenGLLock();
+#endif
 
   // Fill viewpoint path branch dropbox in planner panel
   std::vector<std::pair<std::string, size_t>> viewpoint_path_branch_gui_entries;
@@ -699,61 +742,107 @@ void ViewerWidget::showViewpointPath(const std::size_t selected_index /*= (std::
   }
   planner_panel_->initializeViewpointPathBranch(viewpoint_path_branch_gui_entries);
 
+  const size_t viewpoint_path_branch_index =
+          (selected_viewpoint_path_branch_index_ != (size_t) -1) ? selected_viewpoint_path_branch_index_ : 0;
+  const ViewpointPlanner::ViewpointPath& viewpoint_path = planner_->getViewpointPaths()[viewpoint_path_branch_index];
   // Fill viewpoint path dropbox in planner panel
   std::vector<std::pair<std::string, size_t>> viewpoint_path_gui_entries;
-  for (size_t i = 0; i < viewpoint_path_copy_.size(); ++i) {
-    ViewpointPlanner::FloatType information = std::get<2>(viewpoint_path_copy_[i]);
-    std::string name = std::to_string(i) + " - " + std::to_string(information);
-    viewpoint_path_gui_entries.push_back(std::make_pair(name, i));
+  for (size_t i = 0; i < viewpoint_path.entries.size(); ++i) {
+    size_t path_entry_index = i;
+    if (viewpoint_path.order.size() == viewpoint_path.entries.size()) {
+      path_entry_index = viewpoint_path.order[i];
+    }
+    ViewpointPlanner::FloatType information = viewpoint_path.entries[path_entry_index].local_information;
+    std::string name = std::to_string(path_entry_index) + " - " + std::to_string(information);
+    viewpoint_path_gui_entries.push_back(std::make_pair(name, path_entry_index));
   }
   planner_panel_->initializeViewpointPath(viewpoint_path_gui_entries);
 
+  planner_panel_->setViewpointPathSize(viewpoint_path.entries.size());
+
+  uploadViewpointPathDrawerViewpointsWithoutLock(selected_index);
+
+#if WITH_OPENGL_OFFSCREEN
+  opengl_lock.unlock();
+#endif
+  planner_lock.unlock();
+  lock.unlock();
+
+  showViewpointPathMotions(selected_index);
+
+  update();
+}
+
+void ViewerWidget::uploadViewpointPathDrawerViewpointsWithoutLock(
+        const size_t selected_index, const bool use_selection_mode) {
+  const size_t viewpoint_path_branch_index =
+          (selected_viewpoint_path_branch_index_ != (size_t) -1) ? selected_viewpoint_path_branch_index_ : 0;
+  const ViewpointPlanner::ViewpointPath& viewpoint_path = planner_->getViewpointPaths()[viewpoint_path_branch_index];
   // Compute min-max of information value
   ait::MinMaxTracker<FloatType> min_max;
-  for (const auto& entry : viewpoint_path_copy_) {
-    const FloatType total_information = std::get<2>(entry);
+  for (const auto& entry : viewpoint_path.entries) {
+    const FloatType total_information = entry.local_information;
     min_max.update(total_information);
   }
 
+  // Get viewpoint path and selection/motion inspection flags
   const bool valid_selection = selected_index != (std::size_t)-1;
   const bool inspect_graph_motions = planner_panel_->isInspectViewpointGraphMotionsChecked();
+
+  // Retrieve connected components data
+  std::vector<std::size_t> component;
+  std::size_t num_components;
+  std::tie(component, num_components) = planner_->getConnectedComponents();
+
   // Generate OGL data for viewpoint drawer
   std::vector<Pose> poses;
   std::vector<typename ViewpointDrawer<FloatType>::Color4> colors;
   const ait::ColorMapHot<FloatType> cmap;
   ViewpointPlanner::ViewpointEntryIndex selected_viewpoint_index = (std::size_t)-1;
   if (valid_selection) {
-    selected_viewpoint_index = std::get<0>(viewpoint_path_copy_[selected_index]);
+    selected_viewpoint_index = viewpoint_path.entries[selected_index].viewpoint_index;
   }
-  for (const auto& entry : viewpoint_path_copy_) {
-    const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = std::get<0>(entry);
-    FloatType total_information = std::get<2>(entry);
+  for (auto it = viewpoint_path.entries.begin(); it != viewpoint_path.entries.end(); ++it) {
+    const ViewpointPlanner::ViewpointPathEntry& path_entry = *it;
+    const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[path_entry.viewpoint_index];
+    const FloatType total_information = viewpoint_entry.total_information;
     if (inspect_graph_motions && valid_selection) {
-      if (selected_viewpoint_index != viewpoint_index
-          && !planner_->getViewpointGraph().getEdgesByNode(selected_viewpoint_index).containsTargetNode(viewpoint_index)) {
-        continue;
+      // If motions are inspected, only draw selected viewpoint or neighbouring viewpoints
+      if (selected_viewpoint_index != path_entry.viewpoint_index) {
+        const auto order_it = std::find(viewpoint_path.order.begin(), viewpoint_path.order.end(), selected_index);
+        if (order_it == viewpoint_path.order.end()) {
+          continue;
+        }
+        auto next_order_it = order_it + 1;
+        if (next_order_it == viewpoint_path.order.end()) {
+          next_order_it = viewpoint_path.order.begin();
+        }
+        if (path_entry.viewpoint_index != viewpoint_path.entries[*next_order_it].viewpoint_index) {
+          continue;
+        }
       }
     }
 
-    const Pose& pose = std::get<1>(entry);
-    const bool mvs_viewpoint = std::get<3>(entry);
+    const Pose& pose = path_entry.viewpoint.pose();
+    const bool mvs_viewpoint = path_entry.mvs_viewpoint;
     typename ViewpointDrawer<FloatType>::Color4 color;
-    if (viewpoint_color_mode_ == Fixed) {
-      if (valid_selection && viewpoint_index == selected_viewpoint_index) {
-        color = typename ViewpointDrawer<FloatType>::Color4(0.8f, 0.0f, 0.0f, 0.6f);
+    if (use_selection_mode) {
+      std::tie(std::ignore, color) = addSelectableObject(
+              VIEWPOINT_PATH_ENTRY, boost::any(size_t(it - viewpoint_path.entries.begin())));
+    }
+    else if (viewpoint_color_mode_ == Fixed) {
+      if (valid_selection && path_entry.viewpoint_index == selected_viewpoint_index) {
+        color = Color4(0.8f, 0.0f, 0.0f, 0.6f);
       }
       else if (mvs_viewpoint) {
-        color = typename ViewpointDrawer<FloatType>::Color4(0.0f, 0.1f, 0.8f, 0.6f);
+        color = Color4(0.0f, 0.1f, 0.8f, 0.6f);
       }
       else {
-        color = typename ViewpointDrawer<FloatType>::Color4(0.0f, 0.8f, 0.1f, 0.6f);
+        color = Color4(0.0f, 0.8f, 0.8f, 0.6f);
       }
     }
     else if (viewpoint_color_mode_ == Component) {
-      std::vector<std::size_t> component;
-      std::size_t num_components;
-      std::tie(component, num_components) = planner_->getConnectedComponents();
-      std::size_t comp = component[viewpoint_index];
+      std::size_t comp = component[path_entry.viewpoint_index];
       const FloatType value = ait::normalize<FloatType>(comp, 0, num_components);
       color = cmap.map(value, 0.6f);
     }
@@ -764,16 +853,74 @@ void ViewerWidget::showViewpointPath(const std::size_t selected_index /*= (std::
     poses.push_back(pose);
     colors.push_back(color);
   }
+  for (auto order_it = viewpoint_path.order.begin(); order_it != viewpoint_path.order.end(); ++order_it) {
+    if (inspect_graph_motions && valid_selection && *order_it != selected_index) {
+      continue;
+    }
+    // Show sparse matching viewpoints
+    AIT_ASSERT(viewpoint_path.order.size() >= 2);
+    auto next_order_it = order_it + 1;
+    if (next_order_it == viewpoint_path.order.end()) {
+      next_order_it = viewpoint_path.order.begin();
+    }
+    const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = viewpoint_path.entries[*order_it].viewpoint_index;
+    const ViewpointPlanner::ViewpointEntryIndex next_viewpoint_index = viewpoint_path.entries[*next_order_it].viewpoint_index;
+    if (planner_->hasViewpointMotion(viewpoint_index, next_viewpoint_index)) {
+      const ViewpointPlanner::ViewpointMotion& motion = planner_->getViewpointMotion(viewpoint_index, next_viewpoint_index);
+
+      for (auto it = motion.viewpointIndices().begin() + 1; it != motion.viewpointIndices().end() - 1; ++it) {
+        Color4 color(0.0f, 0.8f, 0.1f, 0.6f);
+        const Pose& pose = planner_->getViewpointEntries()[*it].viewpoint.pose();
+        poses.push_back(pose);
+        colors.push_back(color);
+      }
+      if (inspect_graph_motions && valid_selection) {
+        // Print matchability matrix along motion
+        std::cout << "Matchability matrix:" << std::endl;
+        for (auto it = motion.viewpointIndices().begin(); it != motion.viewpointIndices().end(); ++it) {
+          for (auto it2 = it + 1; it2 != motion.viewpointIndices().end(); ++it2) {
+            const bool matchable = planner_->isSparseMatchable(*it, *it2);
+            const size_t motion_index1 = it - motion.viewpointIndices().begin();
+            const size_t motion_index2 = it2 - motion.viewpointIndices().begin();
+            std::cout << "  " << motion_index1 << "[" << *it << "] <-> " << motion_index2 << " [" << *it2
+                      << "] matchable: " << matchable << std::endl;
+          }
+        }
+      }
+    }
+  }
+
   // Draw viewpoint camera frustums
   viewpoint_path_drawer_.setCamera(planner_->getVirtualCamera());
   viewpoint_path_drawer_.setViewpoints(poses, colors);
+}
 
-  planner_panel_->setViewpointPathSize(viewpoint_path_copy_.size());
-  lock.unlock();
+ViewerWidget::Color4 ViewerWidget::readPixelColor(const size_t x, const size_t y) const {
+  const size_t x_scaled = static_cast<size_t>(devicePixelRatio() * x);
+  const size_t y_scaled = static_cast<size_t>(devicePixelRatio() * (height() - y - 1));
+  Color4 color;
+  glReadPixels(x_scaled, y_scaled, 1, 1, GL_RGBA, GL_FLOAT, color.data());
+  BH_PRINT_VALUE(x_scaled);
+  BH_PRINT_VALUE(y_scaled);
+  BH_PRINT_VALUE(color);
+  return color;
+}
 
-  showViewpointPathMotions(selected_index);
+size_t ViewerWidget::colorToSelectionIndex(const Color4& color) const {
+  BH_PRINT_VALUE(static_cast<size_t>(color.r() * FloatType(255)) << 0);
+  BH_PRINT_VALUE(static_cast<size_t>(color.g() * FloatType(255)) << 8);
+  BH_PRINT_VALUE(static_cast<size_t>(color.b() * FloatType(255)) << 16);
+  return (static_cast<size_t>(color.r() * FloatType(255)) << 0) +
+          (static_cast<size_t>(color.g() * FloatType(255)) << 8) +
+          (static_cast<size_t>(color.b() * FloatType(255)) << 16);
+}
 
-  update();
+ViewerWidget::Color4 ViewerWidget::selectionIndexToColor(const size_t index) const {
+  const FloatType r = ((index & 0x000000FF) >> 0) / FloatType(255);
+  const FloatType g = ((index & 0x0000FF00) >> 8) / FloatType(255);
+  const FloatType b = ((index & 0x00FF0000) >> 16) / FloatType(255);
+  const FloatType a = 1;
+  return Color4(r, g, b, a);
 }
 
 void ViewerWidget::showViewpointGraphMotions(const std::size_t selected_index) {
@@ -788,131 +935,32 @@ void ViewerWidget::showViewpointGraphMotions(const std::size_t selected_index) {
 //  const OGLColorData line_color(0.7f, 0.1f, 0.0f, 1.0f);
   const ait::ColorMapHot<FloatType> cmap;
   ViewpointPlanner::ViewpointGraph& viewpoint_graph = planner_->getViewpointGraph();
+
+  std::cout << "Motions:" << std::endl;
   auto edges = viewpoint_graph.getEdgesByNode(selected_index);
+  std::size_t edge_index = 0;
   for (auto it = edges.begin(); it != edges.end(); ++it) {
     const ViewpointPlanner::ViewpointEntryIndex from_index = selected_index;
     const ViewpointPlanner::ViewpointEntryIndex to_index = it.targetNode();
-    const ViewpointPlanner::Motion& motion = planner_->getViewpointMotion(from_index, to_index);
+    const ViewpointPlanner::ViewpointMotion& motion = planner_->getViewpointMotion(from_index, to_index);
+    const bool matchable = planner_->isSparseMatchable(from_index, to_index);
+    std::cout << "  -> " << to_index << ", distance=" << motion.distance()
+        << ", matchable=" << matchable << std::endl;
     // Careful, assuming random access iterators
-    FloatType total_distance = 0;
-    for (auto it2 = motion.poses.cbegin() + 1; it2 < motion.poses.cend(); ++it2) {
-      const Vector3 from_pos = (it2 - 1)->getWorldPosition();
-      const Vector3 to_pos = it2->getWorldPosition();
-      total_distance += (from_pos - to_pos).norm();
-    }
+    FloatType total_distance = motion.distance();
     FloatType acc_dist = 0;
-    for (auto it2 = motion.poses.cbegin() + 1; it2 < motion.poses.cend(); ++it2) {
-      const Vector3 from_pos = (it2 - 1)->getWorldPosition();
-      const Vector3 to_pos = it2->getWorldPosition();
-      const OGLVertexData vertex1(from_pos(0), from_pos(1), from_pos(2));
-      const OGLVertexData vertex2(to_pos(0), to_pos(1), to_pos(2));
-      const FloatType local_dist = (from_pos - to_pos).norm();
-      const FloatType value1 = ait::normalize<FloatType>(acc_dist, 0, total_distance);
-      const FloatType value2 = ait::normalize<FloatType>(acc_dist + local_dist, 0, total_distance);
-      acc_dist += local_dist;
-      ait::Color3<FloatType> color1 = cmap.map(value1);
-      const OGLColorData line_color1(color1.r(), color1.g(), color1.b(), 1.0f);
-      ait::Color3<FloatType> color2 = cmap.map(value2);
-      const OGLColorData line_color2(color2.r(), color2.g(), color2.b(), 1.0f);
-      lines.emplace_back(OGLVertexDataRGBA(vertex1, line_color1), OGLVertexDataRGBA(vertex2, line_color2));
-    }
-  }
-  std::cout << "Selected viewpoint " << selected_index << " has " << edges.size() << " edges" << std::endl;
-  viewpoint_motion_line_drawer_.upload(lines);
-
-  lock.unlock();
-
-  update();
-}
-
-void ViewerWidget::showViewpointPathMotions(const std::size_t selected_index /*= (std::size_t)-1*/) {
-  if (!initialized_) {
-      return;
-  }
-
-  std::unique_lock<std::mutex> lock(mutex_);
-
-  const bool inspect_graph_motions = planner_panel_->isInspectViewpointGraphMotionsChecked();
-  const bool valid_selection = selected_index != (std::size_t)-1;
-  const ait::ColorMapHot<FloatType> cmap;
-  // Draw motion path
-  std::vector<OGLLineData> lines;
-  if (inspect_graph_motions && valid_selection) {
-    const OGLColorData line_color(0.7f, 0.1f, 0.0f, 1.0f);
-    const ViewpointPlanner::ViewpointPath viewpoint_path = planner_->getViewpointPaths()[viewpoint_path_branch_index_];
-    const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = viewpoint_path.entries[selected_index].viewpoint_index;
-    const ViewpointPlanner::ViewpointEntry viewpoint_entry = planner_->getViewpointEntries()[viewpoint_index];
-    auto edges = planner_->getViewpointGraph().getEdgesByNode(viewpoint_index);
-    for (auto it = edges.begin(); it != edges.end(); ++it) {
-      const ViewpointPlanner::ViewpointEntryIndex from_index = viewpoint_index;
-      const ViewpointPlanner::ViewpointEntryIndex to_index = it.targetNode();
-      const ViewpointPlanner::Motion& motion = planner_->getViewpointMotion(from_index, to_index);
-      // Careful, assuming random access iterators
-      FloatType total_distance = 0;
-      for (auto it2 = motion.poses.cbegin() + 1; it2 < motion.poses.cend(); ++it2) {
-        const Vector3 from_pos = (it2 - 1)->getWorldPosition();
-        const Vector3 to_pos = it2->getWorldPosition();
-        total_distance += (from_pos - to_pos).norm();
-      }
-      FloatType acc_dist = 0;
-      for (auto it2 = motion.poses.cbegin() + 1; it2 < motion.poses.cend(); ++it2) {
-        const Vector3 from_pos = (it2 - 1)->getWorldPosition();
-        const Vector3 to_pos = it2->getWorldPosition();
+    for (auto se3_motion_it = motion.se3Motions().begin(); se3_motion_it != motion.se3Motions().end(); ++se3_motion_it) {
+      AIT_ASSERT(!se3_motion_it->poses.empty());
+      for (auto pose_it = se3_motion_it->poses.begin() + 1; pose_it != se3_motion_it->poses.end(); ++pose_it) {
+        const Vector3 from_pos = (pose_it - 1)->getWorldPosition();
+        const Vector3 to_pos = pose_it->getWorldPosition();
         const OGLVertexData vertex1(from_pos(0), from_pos(1), from_pos(2));
         const OGLVertexData vertex2(to_pos(0), to_pos(1), to_pos(2));
         const FloatType local_dist = (from_pos - to_pos).norm();
-        const FloatType value1 = ait::normalize<FloatType>(acc_dist, 0, total_distance);
-        const FloatType value2 = ait::normalize<FloatType>(acc_dist + local_dist, 0, total_distance);
-        acc_dist += local_dist;
-        ait::Color3<FloatType> color1 = cmap.map(value1);
-        const OGLColorData line_color1(color1.r(), color1.g(), color1.b(), 1.0f);
-        ait::Color3<FloatType> color2 = cmap.map(value2);
-        const OGLColorData line_color2(color2.r(), color2.g(), color2.b(), 1.0f);
-        lines.emplace_back(OGLVertexDataRGBA(vertex1, line_color1), OGLVertexDataRGBA(vertex2, line_color2));
-      }
-    }
-  }
-  else if (viewpoint_path_copy_.size() > 1) {
-    // Compute total distance of path
-    FloatType total_distance = 0;
-    for (auto it = viewpoint_path_order_copy_.begin(); it != viewpoint_path_order_copy_.end(); ++it) {
-      const ViewpointPlanner::ViewpointEntryIndex from_index = std::get<0>(viewpoint_path_copy_[*it]);
-      auto next_it = it + 1;
-      if (next_it == viewpoint_path_order_copy_.end()) {
-        next_it = viewpoint_path_order_copy_.begin();
-      }
-      const ViewpointPlanner::ViewpointEntryIndex to_index = std::get<0>(viewpoint_path_copy_[*next_it]);
-      const ViewpointPlanner::Motion& motion = planner_->getViewpointMotion(from_index, to_index);
-      // Careful, assuming random access iterators
-      for (auto it2 = motion.poses.cbegin() + 1; it2 < motion.poses.cend(); ++it2) {
-        const Vector3 from_pos = (it2 - 1)->getWorldPosition();
-        const Vector3 to_pos = it2->getWorldPosition();
-        total_distance += (from_pos - to_pos).norm();
-      }
-    }
-
-    FloatType acc_dist = 0;
-    for (auto it = viewpoint_path_order_copy_.begin(); it != viewpoint_path_order_copy_.end(); ++it) {
-      const ViewpointPlanner::ViewpointEntryIndex from_index = std::get<0>(viewpoint_path_copy_[*it]);
-      auto next_it = it + 1;
-      if (next_it == viewpoint_path_order_copy_.end()) {
-        next_it = viewpoint_path_order_copy_.begin();
-      }
-      const ViewpointPlanner::ViewpointEntryIndex to_index = std::get<0>(viewpoint_path_copy_[*next_it]);
-      const ViewpointPlanner::Motion& motion = planner_->getViewpointMotion(from_index, to_index);
-      // Careful, assuming random access iterators
-      for (auto it2 = motion.poses.cbegin() + 1; it2 < motion.poses.cend(); ++it2) {
-        const Vector3 from_pos = (it2 - 1)->getWorldPosition();
-        const Vector3 to_pos = it2->getWorldPosition();
-        const OGLVertexData vertex1(from_pos(0), from_pos(1), from_pos(2));
-        const OGLVertexData vertex2(to_pos(0), to_pos(1), to_pos(2));
-        const FloatType local_dist = (from_pos - to_pos).norm();
-        acc_dist += local_dist;
         ait::Color3<FloatType> color1;
         ait::Color3<FloatType> color2;
         if (viewpoint_color_mode_ == Indexed) {
-          const std::size_t entry_index = it - viewpoint_path_order_copy_.begin();
-          const FloatType value = ait::normalize<FloatType>(entry_index, 0, viewpoint_path_order_copy_.size() - 1);
+          const FloatType value = ait::normalize<FloatType>(edge_index, 0, edges.size() - 1);
           color1 = cmap.map(value);
           color2 = cmap.map(value);
         }
@@ -925,11 +973,148 @@ void ViewerWidget::showViewpointPathMotions(const std::size_t selected_index /*=
         const OGLColorData line_color1(color1.r(), color1.g(), color1.b(), 1.0f);
         const OGLColorData line_color2(color2.r(), color2.g(), color2.b(), 1.0f);
         lines.emplace_back(OGLVertexDataRGBA(vertex1, line_color1), OGLVertexDataRGBA(vertex2, line_color2));
+        acc_dist += local_dist;
+      }
+    }
+    ++edge_index;
+  }
+  std::cout << "Selected viewpoint " << selected_index << " has " << edges.size() << " edges" << std::endl;
+
+#if WITH_OPENGL_OFFSCREEN
+  std::unique_lock<std::mutex> opengl_lock = planner_->acquireOpenGLLock();
+#endif
+  makeCurrent();
+  viewpoint_motion_line_drawer_.upload(lines);
+
+#if WITH_OPENGL_OFFSCREEN
+  opengl_lock.unlock();
+#endif
+  lock.unlock();
+
+  update();
+}
+
+void ViewerWidget::showViewpointPathMotions(const std::size_t selected_index /*= (std::size_t)-1*/) {
+  if (!initialized_) {
+      return;
+  }
+
+  std::unique_lock<std::mutex> lock(mutex_);
+  std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
+#if WITH_OPENGL_OFFSCREEN
+  std::unique_lock<std::mutex> opengl_lock = planner_->acquireOpenGLLock();
+#endif
+
+  makeCurrent();
+
+  const ViewpointPlanner::ViewpointPath viewpoint_path = planner_->getViewpointPaths()[viewpoint_path_branch_index_];
+
+  const bool inspect_graph_motions = planner_panel_->isInspectViewpointGraphMotionsChecked();
+  const bool valid_selection = selected_index != (std::size_t)-1;
+  const ait::ColorMapHot<FloatType> cmap;
+  // Draw motion path
+  std::vector<OGLLineData> lines;
+  if (inspect_graph_motions && valid_selection) {
+    if (viewpoint_path.order.empty()) {
+      std::cout << "Warning: Viewpoint path has no associated tour" << std::endl;
+    }
+    else {
+      const OGLColorData line_color(0.7f, 0.1f, 0.0f, 1.0f);
+      const auto order_it = std::find(viewpoint_path.order.begin(), viewpoint_path.order.end(), selected_index);
+      auto next_order_it = order_it + 1;
+      if (next_order_it == viewpoint_path.order.end()) {
+        next_order_it = viewpoint_path.order.begin();
+      }
+      const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = viewpoint_path.entries[selected_index].viewpoint_index;
+      const ViewpointPlanner::ViewpointEntryIndex next_viewpoint_index = viewpoint_path.entries[*next_order_it].viewpoint_index;
+      const ViewpointPlanner::ViewpointMotion& motion = planner_->getViewpointMotion(viewpoint_index, next_viewpoint_index);
+      // Careful, assuming random access iterators
+      FloatType total_distance = motion.distance();
+      FloatType acc_dist = 0;
+      for (auto se3_motion_it = motion.se3Motions().begin(); se3_motion_it != motion.se3Motions().end(); ++se3_motion_it) {
+        AIT_ASSERT(!se3_motion_it->poses.empty());
+        for (auto pose_it = se3_motion_it->poses.begin() + 1; pose_it != se3_motion_it->poses.end(); ++pose_it) {
+          const Vector3 from_pos = (pose_it - 1)->getWorldPosition();
+          const Vector3 to_pos = pose_it->getWorldPosition();
+          const OGLVertexData vertex1(from_pos(0), from_pos(1), from_pos(2));
+          const OGLVertexData vertex2(to_pos(0), to_pos(1), to_pos(2));
+          const FloatType local_dist = (from_pos - to_pos).norm();
+          const FloatType value1 = ait::normalize<FloatType>(acc_dist, 0, total_distance);
+          const FloatType value2 = ait::normalize<FloatType>(acc_dist + local_dist, 0, total_distance);
+          acc_dist += local_dist;
+          ait::Color3<FloatType> color1 = cmap.map(value1);
+          const OGLColorData line_color1(color1.r(), color1.g(), color1.b(), 1.0f);
+          ait::Color3<FloatType> color2 = cmap.map(value2);
+          const OGLColorData line_color2(color2.r(), color2.g(), color2.b(), 1.0f);
+          lines.emplace_back(OGLVertexDataRGBA(vertex1, line_color1), OGLVertexDataRGBA(vertex2, line_color2));
+        }
+      }
+    }
+  }
+  else if (viewpoint_path.entries.size() > 1) {
+    // Compute total distance of path
+    FloatType total_distance = 0;
+    for (auto it = viewpoint_path.order.begin(); it != viewpoint_path.order.end(); ++it) {
+      const ViewpointPlanner::ViewpointEntryIndex from_index = viewpoint_path.entries[*it].viewpoint_index;
+      auto next_it = it + 1;
+      if (next_it == viewpoint_path.order.end()) {
+        next_it = viewpoint_path.order.begin();
+      }
+      const ViewpointPlanner::ViewpointEntryIndex to_index = viewpoint_path.entries[*next_it].viewpoint_index;
+      if (planner_->hasViewpointMotion(from_index, to_index)) {
+        const ViewpointPlanner::ViewpointMotion& motion = planner_->getViewpointMotion(from_index, to_index);
+        total_distance += motion.distance();
+      }
+    }
+
+    FloatType acc_dist = 0;
+    for (auto it = viewpoint_path.order.begin(); it != viewpoint_path.order.end(); ++it) {
+      const ViewpointPlanner::ViewpointEntryIndex from_index = viewpoint_path.entries[*it].viewpoint_index;
+      auto next_it = it + 1;
+      if (next_it == viewpoint_path.order.end()) {
+        next_it = viewpoint_path.order.begin();
+      }
+      const ViewpointPlanner::ViewpointEntryIndex to_index = viewpoint_path.entries[*next_it].viewpoint_index;
+      if (!planner_->hasViewpointMotion(from_index, to_index)) {
+        continue;
+      }
+      const ViewpointPlanner::ViewpointMotion& motion = planner_->getViewpointMotion(from_index, to_index);
+      for (auto se3_motion_it = motion.se3Motions().begin(); se3_motion_it != motion.se3Motions().end(); ++se3_motion_it) {
+        AIT_ASSERT(!se3_motion_it->poses.empty());
+        for (auto pose_it = se3_motion_it->poses.begin() + 1; pose_it != se3_motion_it->poses.end(); ++pose_it) {
+          const Vector3 from_pos = (pose_it - 1)->getWorldPosition();
+          const Vector3 to_pos = pose_it->getWorldPosition();
+          const OGLVertexData vertex1(from_pos(0), from_pos(1), from_pos(2));
+          const OGLVertexData vertex2(to_pos(0), to_pos(1), to_pos(2));
+          const FloatType local_dist = (from_pos - to_pos).norm();
+          acc_dist += local_dist;
+          ait::Color3<FloatType> color1;
+          ait::Color3<FloatType> color2;
+          if (viewpoint_color_mode_ == Indexed) {
+            const std::size_t entry_index = it - viewpoint_path.order.begin();
+            const FloatType value = ait::normalize<FloatType>(entry_index, 0, viewpoint_path.order.size() - 1);
+            color1 = cmap.map(value);
+            color2 = cmap.map(value);
+          }
+          else {
+            const FloatType value1 = ait::normalize<FloatType>(acc_dist, 0, total_distance);
+            const FloatType value2 = ait::normalize<FloatType>(acc_dist + local_dist, 0, total_distance);
+            color1 = cmap.map(value1);
+            color2 = cmap.map(value2);
+          }
+          const OGLColorData line_color1(color1.r(), color1.g(), color1.b(), 1.0f);
+          const OGLColorData line_color2(color2.r(), color2.g(), color2.b(), 1.0f);
+          lines.emplace_back(OGLVertexDataRGBA(vertex1, line_color1), OGLVertexDataRGBA(vertex2, line_color2));
+        }
       }
     }
   }
   viewpoint_motion_line_drawer_.upload(lines);
 
+#if WITH_OPENGL_OFFSCREEN
+  opengl_lock.unlock();
+#endif
+  planner_lock.unlock();
   lock.unlock();
 
   update();
@@ -969,36 +1154,69 @@ void ViewerWidget::setDrawRaycast(bool draw_raycast) {
 void ViewerWidget::captureRaycast() {
   const Pose camera_pose = getCameraPose();
   const Viewpoint viewpoint = planner_->getVirtualViewpoint(camera_pose);
+  raycast_mode_ = RaycastMode::DEFAULT;
 //  std::cout << "raycast pose: " << camera_pose << std::endl;
 //  std::vector<std::pair<ViewpointPlanner::ConstTreeNavigatorType, FloatType>> raycast_results = planner_->getRaycastHitVoxels(camera_pose);
   std::cout << "BVH bounding box: " << planner_->getBvhTree().getRoot()->getBoundingBox() << std::endl;
-#if WITH_CUDA
-//  // Test code for Cuda raycast
-//  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results_non_cuda
-//    = planner_->getRaycastHitVoxels(camera_pose);
-//  std::cout << "Non-cuda raycast hit " << raycast_results_non_cuda.size() << " voxels" << std::endl;
-//  // End of test code
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results = planner_->getRaycastHitVoxelsCuda(viewpoint);
-#else
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results = planner_->getRaycastHitVoxels(viewpoint);
-#endif
-  std::cout << "Raycast hit " << raycast_results.size() << " voxels" << std::endl;
-  std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, FloatType>> tmp;
-  tmp.reserve(raycast_results.size());
-  for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
-    FloatType information = planner_->computeViewpointObservationScore(viewpoint, *it);
-    tmp.push_back(std::make_pair(*it, information));
-  }
-  octree_drawer_.updateRaycastVoxels(tmp);
-  update();
+  planner_thread_.requestRaycast(viewpoint, 0, viewpoint.camera().width(), 0, viewpoint.camera().height());
+}
+
+void ViewerWidget::captureRaycastWithCurrentInformation() {
+  const Pose camera_pose = getCameraPose();
+  const Viewpoint viewpoint = planner_->getVirtualViewpoint(camera_pose);
+  raycast_mode_ = RaycastMode::WITH_CURRENT_INFORMATION;
+  planner_thread_.requestRaycast(viewpoint, 0, viewpoint.camera().width(), 0, viewpoint.camera().height());
+}
+
+void ViewerWidget::captureInformationVoxelCenter() {
+  const Pose camera_pose = getCameraPose();
+  const Viewpoint viewpoint = planner_->getVirtualViewpoint(camera_pose);
+  raycast_mode_ = RaycastMode::INFORMATION_VOXEL_CENTER;
+  planner_thread_.requestRaycast(viewpoint, 0, viewpoint.camera().width(), 0, viewpoint.camera().height());
+}
+
+void ViewerWidget::captureRaycast(
+    const std::size_t x_start, const std::size_t x_end, const std::size_t y_start, const std::size_t y_end) {
+  const Pose camera_pose = getCameraPose();
+  const Viewpoint viewpoint = planner_->getVirtualViewpoint(camera_pose);
+  raycast_mode_ = RaycastMode::DEFAULT;
+  planner_thread_.requestRaycast(viewpoint, x_start, x_end, y_start, y_end);
 }
 
 void ViewerWidget::captureRaycastWindow(const std::size_t width, const std::size_t height) {
   const Pose camera_pose = getCameraPose();
   const Viewpoint viewpoint = planner_->getVirtualViewpoint(camera_pose);
+  raycast_mode_ = RaycastMode::DEFAULT;
+  const PinholeCamera& camera = viewpoint.camera();
 //  std::cout << "raycast pose: " << camera_pose << std::endl;
-  std::pair<ViewpointPlanner::VoxelWithInformationSet, FloatType> raycast_results =
-      planner_->getRaycastHitVoxelsWithInformationScore(viewpoint, width, height);
+//  std::pair<ViewpointPlanner::VoxelWithInformationSet, FloatType> raycast_results =
+//      planner_->getRaycastHitVoxelsWithInformationScore(viewpoint, width, height);
+  std::size_t y_start = camera.height() / 2 - height / 2;
+  std::size_t y_end = camera.height() / 2 + height / 2 + 1;
+  std::size_t x_start = camera.width() / 2 - width / 2;
+  std::size_t x_end = camera.width() / 2 + width / 2 + 1;
+  y_start = ait::clamp<std::size_t>(y_start, 0, camera.height());
+  y_end = ait::clamp<std::size_t>(y_end, 0, camera.height());
+  x_start = ait::clamp<std::size_t>(x_start, 0, camera.width());
+  x_end = ait::clamp<std::size_t>(x_end, 0, camera.width());
+  planner_thread_.requestRaycast(viewpoint, x_start, x_end, y_start, y_end);
+}
+
+void ViewerWidget::signalRaycastFinished() {
+  emit raycastFinished();
+}
+
+void ViewerWidget::onRaycastFinished() {
+  const Viewpoint& viewpoint = planner_thread_.getRaycastViewpoint();
+  const std::size_t width = planner_thread_.getRaycastXEnd() - planner_thread_.getRaycastXStart();
+  const std::size_t height = planner_thread_.getRaycastYEnd() - planner_thread_.getRaycastYStart();
+  const std::pair<ViewpointPlanner::VoxelWithInformationSet, FloatType>& raycast_results = planner_thread_.getRaycastResults();
+  const std::unordered_map<ViewpointPlanner::VoxelWrapper, Vector3, ViewpointPlanner::VoxelWrapper::Hash>&
+    poisson_mesh_normals = planner_thread_.getRaycastPoissonMeshNormals();
+  const std::unordered_map<ViewpointPlanner::VoxelWrapper, FloatType, ViewpointPlanner::VoxelWrapper::Hash>&
+    poisson_mesh_depth = planner_thread_.getRaycastPoissonMeshDepth();
+  const std::unordered_map<ViewpointPlanner::VoxelWrapper, Vector2, ViewpointPlanner::VoxelWrapper::Hash>&
+    screen_coordinates = planner_thread_.getRaycastScreenCoordinates();
   const ViewpointPlanner::VoxelWithInformationSet& raycast_voxels = raycast_results.first;
 //#if WITH_CUDA
 ////  // Test code for Cuda raycast
@@ -1012,16 +1230,27 @@ void ViewerWidget::captureRaycastWindow(const std::size_t width, const std::size
 //  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results
 //    = planner_->getRaycastHitVoxels(camera_pose, width, height);
 //#endif
-  std::cout << "Raycast hit " << raycast_voxels.size() << " voxels" << std::endl;
-  std::cout << "Nodes:" << std::endl;
-  for (auto it = raycast_voxels.begin(); it != raycast_voxels.end(); ++it) {
-    std::cout << "  position=" << it->voxel->getBoundingBox().getCenter().transpose() << std::endl;
-    std::cout << "  normal=" << it->voxel->getObject()->normal.transpose() << std::endl;
-    std::cout << "  occupancy=" << it->voxel->getObject()->occupancy << std::endl;
-    std::cout << "  observation count=" << it->voxel->getObject()->observation_count << std::endl;
-    std::cout << "  weight=" << it->voxel->getObject()->weight << std::endl;
-    std::cout << "  information=" << it->information << std::endl;
-  }
+  if (width < viewpoint.camera().width() && raycast_mode_ == RaycastMode::DEFAULT) {
+    std::cout << "Raycast hit " << raycast_voxels.size() << " voxels" << std::endl;
+    std::cout << "Nodes:" << std::endl;
+    for (auto it = raycast_voxels.begin(); it != raycast_voxels.end(); ++it) {
+      const Vector3 position = it->voxel->getBoundingBox().getCenter();
+      std::cout << " node: " << it->voxel << std::endl;
+      std::cout << "  position=" << position.transpose() << std::endl;
+      std::cout << "  screen coordinate=" << screen_coordinates.at(it->voxel).transpose() << std::endl;
+      std::cout << "  normal field=" << it->voxel->getObject()->normal.transpose() << std::endl;
+      std::cout << "  normal=" << poisson_mesh_normals.at(it->voxel).transpose() << std::endl;
+      std::cout << "  depth=" << poisson_mesh_depth.at(it->voxel) << std::endl;
+      std::cout << "  occupancy=" << it->voxel->getObject()->occupancy << std::endl;
+      std::cout << "  observation count=" << it->voxel->getObject()->observation_count << std::endl;
+      std::cout << "  weight=" << it->voxel->getObject()->weight << std::endl;
+      std::cout << "  information=" << it->information << std::endl;
+      std::cout << "  ROI inside=" << planner_->getRoiBbox().isInside(position) << std::endl;
+      std::cout << "  ROI distance=" << planner_->getRoiBbox().distanceTo(position) << std::endl;
+      const Eigen::Vector3i grid_indices = planner_->getPlannerData().getGridIndices(position);
+      std::cout << "  Distance field="
+          << planner_->getPlannerData().getDistanceField()(grid_indices(0), grid_indices(1), grid_indices(2)) << std::endl;
+    }
 //  std::cout << "Node with weight > 0.5" << std::endl;
 //  for (auto it = raycast_results.cbegin(); it != raycast_results.cend(); ++it) {
 //    if (it->node->getObject()->weight > 0.5) {
@@ -1030,19 +1259,93 @@ void ViewerWidget::captureRaycastWindow(const std::size_t width, const std::size
 //          << ", obs_count=" << it->node->getObject()->observation_count << std::endl;
 //    }
 //  }
-  std::vector<std::pair<const ViewpointPlanner::VoxelType*, FloatType>> tmp;
-  tmp.reserve(raycast_voxels.size());
-  for (auto it = raycast_voxels.begin(); it != raycast_voxels.end(); ++it) {
-    FloatType information = planner_->computeViewpointObservationScore(viewpoint, it->voxel);
-    tmp.push_back(std::make_pair(it->voxel, information));
   }
-  octree_drawer_.updateRaycastVoxels(tmp);
-  if (width == 0 && height == 0) {
-    if (raycast_voxels.empty()) {
-      sendClearSelectedPositionToWebSocketClients();
+
+  std::cout << "Total number of voxels: " << raycast_voxels.size() << std::endl;
+  const FloatType total_information = std::accumulate(raycast_voxels.begin(), raycast_voxels.end(),
+  FloatType { 0 }, [&](const FloatType& value, const ViewpointPlanner::VoxelWithInformation& vi) {
+    const FloatType information = vi.information;
+    return value + information;
+  });
+  std::cout << "Total information: " << total_information << std::endl;
+  const ViewpointPlanner::ViewpointPath* viewpoint_path;
+  if (selected_viewpoint_path_branch_index_ == (std::size_t)-1) {
+    viewpoint_path = &planner_->getBestViewpointPath();
+  }
+  else {
+    viewpoint_path = &planner_->getViewpointPaths()[selected_viewpoint_path_branch_index_];
+  }
+  if (raycast_mode_ == RaycastMode::INFORMATION_VOXEL_CENTER) {
+    Vector3 voxel_center = Vector3::Zero();
+    FloatType total_weight = 0;
+    for (const ViewpointPlanner::VoxelWithInformation& vi : raycast_voxels) {
+      const FloatType information = vi.information;
+      voxel_center += information * vi.voxel->getBoundingBox().getCenter();
+      total_weight += information;
     }
-    else {
-      sendSelectedPositionToWebSocketClients(raycast_voxels.begin()->voxel->getBoundingBox().getCenter());
+    voxel_center /= total_weight;
+    std::cout << "Information voxel center: " << voxel_center.transpose() << std::endl;
+    std::vector<std::pair<const ViewpointPlanner::VoxelType*, FloatType>> tmp;
+    for (auto it = raycast_voxels.begin(); it != raycast_voxels.end(); ++it) {
+  //    const FloatType information = planner_->computeViewpointObservationScore(viewpoint, it->voxel);
+      FloatType information = it->information;
+      if (raycast_mode_ == RaycastMode::WITH_CURRENT_INFORMATION) {
+        const auto observed_it = viewpoint_path->observed_voxel_map.find(it->voxel);
+        if (observed_it != viewpoint_path->observed_voxel_map.end()) {
+          const FloatType voxel_weight = observed_it->first.voxel->getObject()->weight;
+          information = std::min(information, voxel_weight - observed_it->second);
+        }
+      }
+      tmp.push_back(std::make_pair(it->voxel, information));
+    }
+    OGLVoxelData voxel(OGLVertexData(voxel_center(0), voxel_center(1), voxel_center(2)), 0.1f);
+    OGLColorData color(1, 0, 0, 1);
+    OGLVoxelInfoData info(1.0f, 100.0f, 1.0f, 1.0f);
+    octree_drawer_.updateSingleRaycastVoxel(voxel, color, info);
+  }
+  else {
+    std::size_t new_voxels = 0;
+    const FloatType new_information = std::accumulate(raycast_voxels.begin(), raycast_voxels.end(),
+    FloatType { 0 }, [&](const FloatType& value, const ViewpointPlanner::VoxelWithInformation& vi) {
+      FloatType information = vi.information;
+      auto it = viewpoint_path->observed_voxel_map.find(vi.voxel);
+      if (it != viewpoint_path->observed_voxel_map.end()) {
+        information -= it->second;
+        if (information < 0) {
+          information = 0;
+        }
+      }
+      else {
+        ++new_voxels;
+      }
+      return value + information;
+    });
+    std::cout << "New voxels: " << new_voxels << std::endl;
+    std::cout << "New information: " << new_information << std::endl;
+
+    std::vector<std::pair<const ViewpointPlanner::VoxelType*, FloatType>> tmp;
+    tmp.reserve(raycast_voxels.size());
+    for (auto it = raycast_voxels.begin(); it != raycast_voxels.end(); ++it) {
+  //    const FloatType information = planner_->computeViewpointObservationScore(viewpoint, it->voxel);
+      FloatType information = it->information;
+      if (raycast_mode_ == RaycastMode::WITH_CURRENT_INFORMATION) {
+        const auto observed_it = viewpoint_path->observed_voxel_map.find(it->voxel);
+        if (observed_it != viewpoint_path->observed_voxel_map.end()) {
+          const FloatType voxel_weight = observed_it->first.voxel->getObject()->weight;
+          information = std::min(information, voxel_weight - observed_it->second);
+        }
+      }
+      tmp.push_back(std::make_pair(it->voxel, information));
+    }
+    octree_drawer_.updateRaycastVoxels(tmp);
+    octree_drawer_.setInformationRange(0, 1);
+    if (width == 0 && height == 0) {
+      if (raycast_voxels.empty()) {
+        sendClearSelectedPositionToWebSocketClients();
+      }
+      else {
+        sendSelectedPositionToWebSocketClients(raycast_voxels.begin()->voxel->getBoundingBox().getCenter());
+      }
     }
   }
   update();
@@ -1227,24 +1530,34 @@ void ViewerWidget::setImagePoseIndex(ImageId image_id) {
   const ImageColmap& image = sparse_recon_->getImages().at(image_id);
   setCameraPose(image.pose());
   std::cout << "Selected image with id " << image_id << std::endl;
-  std::cout << "  Pose=" << image.pose().getWorldPosition().transpose() << std::endl;
+  std::cout << "  Position=(" << image.pose().getWorldPosition().transpose() << ")" << std::endl;
+  std::cout << "  Orientation=" << image.pose().quaternion() << std::endl;
   std::cout << "  GPS=" << getGpsFromPose(image.pose()) << std::endl;
   update();
 }
 
 void ViewerWidget::setViewpointGraphSelectionIndex(const std::size_t index) {
-  std::cout << "Selected viewpoint " << index << std::endl;
   std::unique_lock<std::mutex> lock(mutex_);
-  const Pose& pose = std::get<1>(viewpoint_graph_copy_[index]);
-  std::cout << "  Pose=" << pose.getWorldPosition().transpose() << std::endl;
+  std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
+#if WITH_OPENGL_OFFSCREEN
+  std::unique_lock<std::mutex> opengl_lock = planner_->acquireOpenGLLock();
+#endif
+
+  makeCurrent();
+
+  selected_viewpoint_graph_entry_index_ = index;
+
+  const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = index;
+  std::cout << "Selected viewpoint " << viewpoint_index << std::endl;
+  const Pose& pose = planner_->getViewpointEntries()[viewpoint_index].viewpoint.pose();
+  std::cout << "  Position=" << pose.getWorldPosition().transpose() << std::endl;
+  std::cout << "  Orientation=" << pose.quaternion() << std::endl;
   if (planner_->hasGpsTransformation()) {
     std::cout << "  GPS=" << getGpsFromPose(pose) << std::endl;
   }
-  const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = std::get<0>(viewpoint_graph_copy_[index]);
-  std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
   const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[viewpoint_index];
   const FloatType total_information = viewpoint_entry.total_information;
-  const ViewpointPlanner::ViewpointPath& viewpoint_path = planner_->getViewpointPaths()[viewpoint_path_branch_index_];
+  const ViewpointPlanner::ViewpointPath& viewpoint_path = planner_->getViewpointPaths()[selected_viewpoint_path_branch_index_];
   // Compute new information of selected viewpoint
   std::size_t new_voxels = 0;
   FloatType new_information = std::accumulate(viewpoint_entry.voxel_set.cbegin(), viewpoint_entry.voxel_set.cend(),
@@ -1268,7 +1581,7 @@ void ViewerWidget::setViewpointGraphSelectionIndex(const std::size_t index) {
 //      FloatType { 0 }, [](const FloatType& value, const ViewpointPlanner::VoxelWithInformation& voxel) {
 //        return value + voxel.information;
 //  });
-//  const FloatType new_information = planner_->computeNewInformation(viewpoint_path_branch_index_, viewpoint_index);
+//  const FloatType new_information = planner_->computeNewInformation(selected_viewpoint_path_branch_index_, viewpoint_index);
   std::cout << "  Total voxels=" << viewpoint_entry.voxel_set.size() << std::endl;
   std::cout << "  Total information=" << total_information << std::endl;
   std::cout << "  New voxels=" << new_voxels << std::endl;
@@ -1277,15 +1590,23 @@ void ViewerWidget::setViewpointGraphSelectionIndex(const std::size_t index) {
     setCameraPose(viewpoint_entry.viewpoint.pose());
   }
   octree_drawer_.updateRaycastVoxels(viewpoint_entry.voxel_set);
+  octree_drawer_.setInformationRange(0, 1);
+
+#if WITH_OPENGL_OFFSCREEN
+  opengl_lock.unlock();
+#endif
+  planner_lock.unlock();
   lock.unlock();
+
   showViewpointGraph(index);
-//  // Set previous selection for combo box
   planner_panel_->setViewpointGraphSelection(index);
 }
 
 void ViewerWidget::setViewpointPathBranchSelectionIndex(std::size_t index) {
   std::unique_lock<std::mutex> lock(mutex_);
-  viewpoint_path_branch_index_ = index;
+
+  selected_viewpoint_path_branch_index_ = index;
+
   std::cout << "Selected viewpoint path " << index << std::endl;
   const ViewpointPlanner::ViewpointPath& viewpoint_path = planner_->getViewpointPaths()[index];
   for (std::size_t i = 0; i < viewpoint_path.entries.size(); ++i) {
@@ -1296,6 +1617,11 @@ void ViewerWidget::setViewpointPathBranchSelectionIndex(std::size_t index) {
   std::cout << "  accumulated information=" << viewpoint_path.acc_information << std::endl;
   std::cout << "  accumulated motion distance=" << viewpoint_path.acc_motion_distance << std::endl;
   std::cout << "  accumulated objective=" << viewpoint_path.acc_objective << std::endl;
+  std::cout << "Order:" << std::endl;
+  for (std::size_t i = 0; i < viewpoint_path.order.size(); ++i) {
+    std::cout << "  " << i << ": " << viewpoint_path.order[i]
+              << ", entry=" << viewpoint_path.entries[viewpoint_path.order[i]].viewpoint_index << std::endl;
+  }
   lock.unlock();
   planner_thread_.updateViewpoints();
   // Remember selected entry before updating combo box
@@ -1307,95 +1633,158 @@ void ViewerWidget::setViewpointPathBranchSelectionIndex(std::size_t index) {
   planner_panel_->setViewpointPathSelectionByItemIndex(path_selection_index);
   // Show triangulated voxels
   octree_drawer_.updateRaycastVoxels(viewpoint_path.observed_voxel_map);
+  octree_drawer_.setInformationRange(0, 1);
 }
 
 void ViewerWidget::setViewpointPathSelectionIndex(std::size_t index) {
   const bool verbose = true;
 
   std::unique_lock<std::mutex> lock(mutex_);
-  const Pose& pose = std::get<1>(viewpoint_path_copy_[index]);
-  std::cout << "  Pose=" << pose.getWorldPosition().transpose() << std::endl;
+  std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
+#if WITH_OPENGL_OFFSCREEN
+  std::unique_lock<std::mutex> opengl_lock = planner_->acquireOpenGLLock();
+#endif
+
+  makeCurrent();
+
+  selected_viewpoint_path_entry_index_ = index;
+
+  const size_t viewpoint_path_branch_index =
+          (selected_viewpoint_path_branch_index_ != (size_t)-1) ? selected_viewpoint_path_branch_index_ : 0;
+  const ViewpointPlanner::ViewpointPath& viewpoint_path = planner_->getViewpointPaths()[viewpoint_path_branch_index];
+
+  const Pose& pose = viewpoint_path.entries[index].viewpoint.pose();
+  std::cout << "  Position=" << pose.getWorldPosition().transpose() << std::endl;
+  std::cout << "  Orientation=" << pose.quaternion() << std::endl;
   if (planner_->hasGpsTransformation()) {
     std::cout << "  GPS=" << getGpsFromPose(pose) << std::endl;
   }
 //  const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = std::get<0>(viewpoint_path_copy_[index]);
-  std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
 
   // Compute total and incremental voxel set and information of selected viewpoint
-  const ViewpointPlanner::ViewpointPath& viewpoint_path = planner_->getViewpointPaths()[viewpoint_path_branch_index_];
-  const ViewpointPlanner::ViewpointPathComputationData& comp_data = planner_->getViewpointPathsComputationData()[viewpoint_path_branch_index_];
   const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = viewpoint_path.entries[index].viewpoint_index;
   const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[viewpoint_index];
-  ViewpointPlanner::VoxelWithInformationSet total_voxel_set = viewpoint_entry.voxel_set;
+  const ViewpointPlanner::VoxelWithInformationSet total_voxel_set = viewpoint_entry.voxel_set;
   // TODO: Broken. Only for triangulation mode,
-  if (!comp_data.triangulated_voxel_to_path_entries_map.empty()) {
-    for (const auto& entry : comp_data.triangulated_voxel_to_path_entries_map) {
-      auto it1 = std::find_if(total_voxel_set.begin(), total_voxel_set.end(),
-          [&](const ViewpointPlanner::VoxelWithInformation& vi) {
-        return vi.voxel == entry.first;
-      });
-      if (it1 != total_voxel_set.end()) {
-        auto it2 = std::find_if(entry.second.begin(), entry.second.end(),
-            [&](const std::pair<ViewpointPlanner::ViewpointEntryIndex, ViewpointPlanner::ViewpointEntryIndex>& p) {
-          return p.first == viewpoint_index || p.second == viewpoint_index;
-        });
-        if (it2 == entry.second.end()) {
-          total_voxel_set.erase(it1);
+  //  const ViewpointPlanner::ViewpointPathComputationData& comp_data = planner_->getViewpointPathsComputationData()[viewpoint_path_branch_index];
+//  ViewpointPlanner::VoxelWithInformationSet total_voxel_set = viewpoint_entry.voxel_set;
+//  if (!comp_data.triangulated_voxel_to_path_entries_map.empty()) {
+//    for (const auto& entry : comp_data.triangulated_voxel_to_path_entries_map) {
+//      auto it1 = std::find_if(total_voxel_set.begin(), total_voxel_set.end(),
+//          [&](const ViewpointPlanner::VoxelWithInformation& vi) {
+//        return vi.voxel == entry.first;
+//      });
+//      if (it1 != total_voxel_set.end()) {
+//        auto it2 = std::find_if(entry.second.begin(), entry.second.end(),
+//            [&](const std::pair<ViewpointPlanner::ViewpointEntryIndex, ViewpointPlanner::ViewpointEntryIndex>& p) {
+//          return p.first == viewpoint_index || p.second == viewpoint_index;
+//        });
+//        if (it2 == entry.second.end()) {
+//          total_voxel_set.erase(it1);
+//        }
+//      }
+//    }
+//  }
+  ViewpointPlanner::VoxelMap accumulated_voxel_map;
+  ViewpointPlanner::VoxelMap incremental_voxel_map;
+  if (planner_panel_->isShowIncrementalVoxelSetChecked() || planner_panel_->isShowAccumulativeVoxelSetChecked()) {
+    // Compute accumulated and incremental voxel map
+    for (std::size_t i = 0; i <= index; ++i) {
+      ViewpointPlanner::ViewpointEntryIndex other_viewpoint_index = viewpoint_path.entries[i].viewpoint_index;
+      const ViewpointPlanner::VoxelWithInformationSet& other_voxel_set = planner_->getViewpointEntries()[other_viewpoint_index].voxel_set;
+      for (const ViewpointPlanner::VoxelWithInformation& vi : other_voxel_set) {
+        const FloatType observation_information = planner_->getOptions().viewpoint_information_factor * vi.information;
+        const auto it = accumulated_voxel_map.find(vi.voxel);
+        if (it == accumulated_voxel_map.end()) {
+          accumulated_voxel_map.emplace(vi.voxel, observation_information);
+          if (i == index) {
+            incremental_voxel_map.emplace(vi.voxel, observation_information);
+          }
+        }
+        else {
+          const FloatType current_information = it->second;
+          if (i == index) {
+            const FloatType incremental_information = std::min(observation_information, 1 - current_information);
+            incremental_voxel_map.emplace(vi.voxel, incremental_information);
+          }
+          const FloatType new_information = std::min(current_information + observation_information, FloatType(1));
+          it->second = new_information;
         }
       }
     }
-  }
-  ViewpointPlanner::VoxelWithInformationSet incremental_voxel_set = total_voxel_set;
-  ViewpointPlanner::VoxelWithInformationSet accumulated_voxel_set = total_voxel_set;
-  for (std::size_t i = 0; i < index; ++i) {
-    ViewpointPlanner::ViewpointEntryIndex other_viewpoint_index = viewpoint_path.entries[i].viewpoint_index;
-    const ViewpointPlanner::VoxelWithInformationSet& other_voxel_set = planner_->getViewpointEntries()[other_viewpoint_index].voxel_set;
-    for (const ViewpointPlanner::VoxelWithInformation& voxel_with_information : other_voxel_set) {
-      incremental_voxel_set.erase(voxel_with_information);
-    }
-    accumulated_voxel_set.insert(other_voxel_set.cbegin(), other_voxel_set.cend());
   }
 
   if (verbose) {
     // Print some information on the selected viewpoint
     std::cout << "Selected viewpoint " << viewpoint_index << std::endl;
     std::cout << "  total_voxel_set.size()=" << total_voxel_set.size() << std::endl;
-    std::cout << "  incremental_voxel_set.size()=" << incremental_voxel_set.size() << std::endl;
+    std::cout << "  incremental_voxel_set.size()=" << incremental_voxel_map.size() << std::endl;
     const std::size_t total_informative_voxel_count = std::count_if(total_voxel_set.cbegin(), total_voxel_set.cend(),
         [](const ViewpointPlanner::VoxelWithInformation& voxel) {
           return voxel.information > 0;
     });
     std::cout << "  total informative voxel count=" << total_informative_voxel_count << std::endl;
-    const std::size_t incremental_informative_voxel_count = std::count_if(incremental_voxel_set.cbegin(), incremental_voxel_set.cend(),
-        [](const ViewpointPlanner::VoxelWithInformation& voxel) {
-          return voxel.information > 0;
-    });
-    std::cout << "  incremental informative voxel count=" << incremental_informative_voxel_count << std::endl;
+    if (planner_panel_->isShowIncrementalVoxelSetChecked() || planner_panel_->isShowAccumulativeVoxelSetChecked()) {
+      const std::size_t incremental_informative_voxel_count = std::count_if(incremental_voxel_map.cbegin(), incremental_voxel_map.cend(),
+          [](const typename ViewpointPlanner::VoxelMap::value_type& entry) {
+            return entry.second > 0;
+      });
+      std::cout << "  incremental informative voxel count=" << incremental_informative_voxel_count << std::endl;
+    }
     const FloatType total_voxel_information = std::accumulate(total_voxel_set.cbegin(), total_voxel_set.cend(),
         FloatType { 0 }, [](const FloatType& value, const ViewpointPlanner::VoxelWithInformation& voxel) {
           return value + voxel.information;
     });
     std::cout << "  total voxel information=" << total_voxel_information << std::endl;
-    const FloatType incremental_voxel_information = std::accumulate(incremental_voxel_set.cbegin(), incremental_voxel_set.cend(),
-        FloatType { 0 }, [](const FloatType& value, const ViewpointPlanner::VoxelWithInformation& voxel) {
-          return value + voxel.information;
-    });
-    std::cout << "  incremental voxel information=" << incremental_voxel_information << std::endl;
+    if (planner_panel_->isShowIncrementalVoxelSetChecked() || planner_panel_->isShowAccumulativeVoxelSetChecked()) {
+      const FloatType incremental_voxel_information = std::accumulate(incremental_voxel_map.cbegin(), incremental_voxel_map.cend(),
+          FloatType { 0 }, [](const FloatType& value, const typename ViewpointPlanner::VoxelMap::value_type& entry) {
+            return value + entry.second;
+      });
+      std::cout << "  incremental voxel information=" << incremental_voxel_information << std::endl;
+    }
+    const auto order_it = std::find(viewpoint_path.order.begin(), viewpoint_path.order.end(), index);
+    if (order_it != viewpoint_path.order.end()) {
+      auto next_order_it = order_it + 1;
+      if (next_order_it == viewpoint_path.order.end()) {
+        next_order_it = viewpoint_path.order.begin();
+      }
+      std::cout << "Pose of path entry " << index << " = " << viewpoint_entry.viewpoint.pose() << std::endl;
+      std::cout << "Pose of path entry " << *next_order_it << " = " << viewpoint_path.entries[*next_order_it].viewpoint.pose() << std::endl;
+      std::cout << "Motion from path entry " << index << " to " << *next_order_it << std::endl;
+      const ViewpointPlanner::ViewpointMotion& motion = planner_->getViewpointMotion(viewpoint_index, viewpoint_path.entries[*next_order_it].viewpoint_index);
+      for (const ViewpointPlanner::ViewpointEntryIndex viewpoint_index : motion.viewpointIndices()) {
+        std::cout << "  viewpoint index=" << viewpoint_index << std::endl;
+      }
+      for (auto se3_motion_it = motion.se3Motions().begin(); se3_motion_it != motion.se3Motions().end(); ++se3_motion_it) {
+        std::cout << "  sub motion: " << (se3_motion_it - motion.se3Motions().begin()) << std::endl;
+        for (auto pose_it = se3_motion_it->poses.begin(); pose_it != se3_motion_it->poses.end(); ++pose_it) {
+          std::cout << "  pose = " << *pose_it << std::endl;
+        }
+      }
+    }
   }
 
   if (planner_panel_->isUpdateCameraOnSelectionChecked()) {
     setCameraPose(viewpoint_entry.viewpoint.pose());
   }
   if (planner_panel_->isShowIncrementalVoxelSetChecked()) {
-    octree_drawer_.updateRaycastVoxels(incremental_voxel_set);
+    octree_drawer_.updateRaycastVoxels(incremental_voxel_map);
   }
   else if (planner_panel_->isShowAccumulativeVoxelSetChecked()) {
-    octree_drawer_.updateRaycastVoxels(accumulated_voxel_set);
+    octree_drawer_.updateRaycastVoxels(accumulated_voxel_map);
   }
   else {
     octree_drawer_.updateRaycastVoxels(total_voxel_set);
   }
+  octree_drawer_.setInformationRange(0, 1);
+
+#if WITH_OPENGL_OFFSCREEN
+  opengl_lock.unlock();
+#endif
+  planner_lock.unlock();
   lock.unlock();
+
   // Remember selected entry before updating combo box
   const std::size_t branch_selection_index = planner_panel_->getViewpointPathBranchSelection();
   showViewpointPath(index);
@@ -1476,7 +1865,18 @@ void ViewerWidget::setSceneBoundingBox(const qglviewer::Vec& min, const qglviewe
     QGLViewer::setSceneBoundingBox(min, max);
 }
 
+void ViewerWidget::updateGL() {
+  QGLViewer::updateGL();
+}
+
 void ViewerWidget::draw() {
+  std::unique_lock<std::mutex> lock(mutex_);
+#if WITH_OPENGL_OFFSCREEN
+  std::unique_lock<std::mutex> opengl_lock = planner_->acquireOpenGLLock();
+#endif
+
+  makeCurrent();
+
   glEnable(GL_DEPTH_TEST);
 //  glDisable(GL_DEPTH_TEST);
   glEnable(GL_BLEND);
@@ -1532,6 +1932,109 @@ void ViewerWidget::draw() {
   }
 }
 
+#pragma GCC push_options
+#pragma GCC optimize("O0")
+std::pair<ViewerWidget::SelectableObjectType, boost::any> ViewerWidget::selectObject(const size_t x, const size_t y) {
+  std::unique_lock<std::mutex> lock(mutex_);
+#if WITH_OPENGL_OFFSCREEN
+  std::unique_lock<std::mutex> opengl_lock = planner_->acquireOpenGLLock();
+#endif
+
+  BH_PRINT_VALUE(x);
+  BH_PRINT_VALUE(y);
+
+  makeCurrent();
+
+  glClearColor(FloatType(1), FloatType(1), FloatType(1), FloatType(1));
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+
+  glEnable(GL_DEPTH_TEST);
+//  glDisable(GL_DEPTH_TEST);
+  glDisable(GL_BLEND);
+
+  glDisable(GL_LIGHTING);
+  glDisable(GL_CULL_FACE);
+
+  glDisable(GL_MULTISAMPLE);
+
+  QMatrix4x4 pvm_matrix;
+  camera()->getModelViewProjectionMatrix(pvm_matrix.data());
+  QMatrix4x4 view_matrix;
+  camera()->getModelViewMatrix(view_matrix.data());
+  QMatrix4x4 model_matrix; // Identity
+  model_matrix.setToIdentity();
+
+  const size_t selected_graph_entry_index = (size_t)-1;
+  const size_t selected_path_entry_index = (size_t)-1;
+  const bool use_selection_mode = true;
+  selection_list_.clear();
+  const size_t viewpoint_path_branch_index =
+          (selected_viewpoint_path_branch_index_ != (size_t) -1) ? selected_viewpoint_path_branch_index_ : 0;
+  const ViewpointPlanner::ViewpointPath& viewpoint_path = planner_->getViewpointPaths()[viewpoint_path_branch_index];
+  selection_list_.reserve(planner_->getViewpointEntries().size() + viewpoint_path.entries.size());
+  std::cout << "Uploading viewpoint graph" << std::endl;
+  uploadViewpointGraphDrawerViewpointsWithoutLock(
+          selected_graph_entry_index, use_selection_mode);
+  std::cout << "Done" << std::endl;
+  std::cout << "Uploading viewpoint path" << std::endl;
+  uploadViewpointPathDrawerViewpointsWithoutLock(
+          selected_path_entry_index, use_selection_mode);
+  std::cout << "Done" << std::endl;
+  // Draw selectable objects:
+//  octree_drawer_.draw(pvm_matrix, view_matrix, model_matrix);
+  viewpoint_graph_drawer_.draw(pvm_matrix, width(), height());
+  viewpoint_path_drawer_.draw(pvm_matrix, width(), height());
+
+  const Color4 color = readPixelColor(x, y);
+  const size_t selection_index = colorToSelectionIndex(color);
+  BH_PRINT_VALUE(x);
+  BH_PRINT_VALUE(y);
+  BH_PRINT_VALUE(color);
+  BH_PRINT_VALUE(selection_index);
+
+  glEnable(GL_MULTISAMPLE);
+
+  size_t new_selected_graph_entry_index = (size_t)-1;
+  size_t new_selected_path_entry_index = (size_t)-1;
+  if (selection_index < selection_list_.size()) {
+    const SelectableObjectType type = selection_list_[selection_index].first;
+    const boost::any& value = selection_list_[selection_index].second;
+    BH_PRINT_VALUE(type);
+    if (type == VIEWPOINT_GRAPH_ENTRY) {
+      BH_PRINT_VALUE(boost::any_cast<size_t>(&value));
+      new_selected_graph_entry_index = boost::any_cast<size_t>(value);
+    }
+    else if (type == VIEWPOINT_PATH_ENTRY) {
+      BH_PRINT_VALUE(boost::any_cast<size_t>(&value));
+      new_selected_path_entry_index = boost::any_cast<size_t>(value);
+    }
+  }
+  uploadViewpointGraphDrawerViewpointsWithoutLock(new_selected_graph_entry_index);
+  uploadViewpointPathDrawerViewpointsWithoutLock(new_selected_path_entry_index);
+
+#if WITH_OPENGL_OFFSCREEN
+  opengl_lock.unlock();
+#endif
+  lock.unlock();
+
+  draw();
+
+  if (selection_index < selection_list_.size()) {
+    return selection_list_[selection_index];
+  }
+  else {
+    return std::make_pair(SelectableObjectType::INVALID, boost::any());
+  }
+}
+
+std::pair<size_t, ViewerWidget::Color4> ViewerWidget::addSelectableObject(
+        const SelectableObjectType type, const boost::any& value) {
+  const size_t index = selection_list_.size();
+  const Color4 color = selectionIndexToColor(index);
+  selection_list_.push_back(std::make_pair(type, value));
+  return std::make_pair(index, color);
+};
+
 void ViewerWidget::drawWithNames() {}
 
 void ViewerWidget::postDraw() {}
@@ -1573,14 +2076,19 @@ void ViewerWidget::wheelEvent(QWheelEvent* event) {
     QGLViewer::wheelEvent(event);
   }
 }
+#pragma GCC pop_options
 
+#pragma GCC push_options
+#pragma GCC optimize("O0")
 void ViewerWidget::keyPressEvent(QKeyEvent* event) {
   if (event->key() == Qt::Key_P) {
+    // Take screenshot
     const std::string screenshot_dir = "screenshots/";
     const QDir currentDir(".");
     if (!currentDir.exists(QString::fromStdString(screenshot_dir))) {
       if (!currentDir.mkdir(QString::fromStdString(screenshot_dir))) {
         std::cout << "ERROR: Unable to create screenshot folder" << std::endl;
+        event->accept();
         return;
       }
     }
@@ -1596,8 +2104,10 @@ void ViewerWidget::keyPressEvent(QKeyEvent* event) {
       saveScreenshot(screenshot_filename);
       std::cout << "Saved screenshot" << std::endl;
     }
+    event->accept();
   }
   else if (event->key() == Qt::Key_C) {
+    // Print current camera pose + info
     const Pose pose = getCameraPose();
     std::cout << "Camera pose = " << pose << std::endl;
     std::cout << "Axis: " << std::endl;
@@ -1607,15 +2117,31 @@ void ViewerWidget::keyPressEvent(QKeyEvent* event) {
     if (planner_->hasGpsTransformation()) {
       std::cout << "GPS = " << getGpsFromPose(pose) << std::endl;
     }
+    std::cout << "Valid drone position: " << planner_->isValidObjectPosition(pose.getWorldPosition(), planner_->getDroneExtent()) << std::endl;
+    event->accept();
   }
   else if (event->key() == Qt::Key_T) {
+    // Capture raycast for full image
     captureRaycast();
+    event->accept();
   }
   else if (event->key() == Qt::Key_R) {
-    captureRaycastWindow(0, 0);
-    captureRaycastWindow(15, 15);
+    // Capture raycast for small window at image center
+    if (event->modifiers() == Qt::ShiftModifier) {
+      captureRaycastWindow(0, 0);
+    }
+    else {
+      captureRaycastWindow(15, 15);
+    }
+    event->accept();
+  }
+  else if (event->key() == Qt::Key_U) {
+    // Capture raycast for small window at image left upper border
+    captureRaycast(30, 60, 30, 60);
+    event->accept();
   }
   else if (event->key() == Qt::Key_Q) {
+    // Save viewpoint path as text file (i.e. for synthetic rendering)
     const std::string viewpoint_path_filename = QFileDialog::getSaveFileName(this, tr("Save viewpoint path"),
         QString("viewpoint_path.txt"),
         tr("Text file (*.txt);;All Files (*.*)")).toStdString();
@@ -1623,8 +2149,10 @@ void ViewerWidget::keyPressEvent(QKeyEvent* event) {
       onExportViewpointPathAsText(viewpoint_path_filename);
       std::cout << "Saved viewpoint path" << std::endl;
     }
+    event->accept();
   }
   else if (event->key() == Qt::Key_W) {
+    // Save viewpoint path as Colmap sparse reconstruction
     const std::string sparse_reconstruction_path = QFileDialog::getExistingDirectory(
         this, tr("Save viewpoint path as sparse reconstruction"),
         QString("sparse/0"),
@@ -1633,11 +2161,191 @@ void ViewerWidget::keyPressEvent(QKeyEvent* event) {
       onExportViewpointPathAsSparseReconstruction(sparse_reconstruction_path);
       std::cout << "Saved viewpoint path as sparse reconstruction" << std::endl;
     }
+    event->accept();
+  }
+  else if (event->key() == Qt::Key_A) {
+    // Show raycast with current information
+    captureRaycastWithCurrentInformation();
+    event->accept();
+  }
+  else if (event->key() == Qt::Key_S) {
+    // Show missing information on all voxels with weight > 0
+    const ViewpointPlanner::ViewpointPath& viewpoint_path = planner_->getBestViewpointPath();
+    std::vector<ViewpointPlanner::OccupiedTreeType::ConstBBoxIntersectionResult> results = planner_->getBvhTree().intersects(planner_->getPositiveWeightBbox());
+    ViewpointPlanner::VoxelMap voxel_map;
+    for (const ViewpointPlanner::OccupiedTreeType::ConstBBoxIntersectionResult& result : results) {
+      const FloatType voxel_weight = result.node->getObject()->weight;
+      voxel_map.emplace(result.node, voxel_weight);
+    }
+    for (const ViewpointPlanner::VoxelMap::value_type& entry : viewpoint_path.observed_voxel_map) {
+      const auto it = voxel_map.find(entry.first);
+      if (it != voxel_map.end()) {
+        it->second -= entry.second;
+      }
+    }
+    octree_drawer_.updateRaycastVoxels(voxel_map);
+    octree_drawer_.setInformationRange(0, 1);
+    update();
+    event->accept();
+  }
+  else if (event->key() == Qt::Key_M) {
+    // Dump poisson mesh rendering from current camera pose to file
+    planner_thread_.requestPoissonMeshDump(getCameraPose());
+    event->accept();
+  }
+  else if (event->key() == Qt::Key_V) {
+    // Raycast into image center
+    captureInformationVoxelCenter();
+    event->accept();
+  }
+  else if (event->key() == Qt::Key_G) {
+    // Augment viewpoint path
+    planner_->augmentedViewpointPathForSparseMatching(&planner_->getBestViewpointPath());
+    planner_thread_.updateViewpoints();
+    showViewpointGraph();
+    showViewpointPath();
+    update();
+    event->accept();
+  }
+  else if (event->key() == Qt::Key_O) {
+    // Compute visible sparse points at current camera pose
+    const Viewpoint viewpoint = planner_->getVirtualViewpoint(getCameraPose());
+    std::size_t num_points_visible = 0;
+    std::size_t num_points_visible2 = 0;
+    std::size_t num_points = 0;
+    std::size_t num_points_before_camera = 0;
+    for (const auto& entry : planner_->getPlannerData().getReconstruction().getPoints3D()) {
+      const Point3D& point3d = entry.second;
+      const Vector3 point3d_camera = viewpoint.projectWorldPointIntoCamera(point3d.getPosition());
+      //      bool behind_camera;
+      const Eigen::Vector2i point2d = viewpoint.camera().projectPoint(point3d_camera).cast<int>();
+      const bool behind_camera = point3d_camera(2) < 0;
+//      const Vector2 point2d = viewpoint.projectWorldPointIntoImage(point3d.getPosition(), &behind_camera);
+      const bool visible_in_image = viewpoint.camera().isPointInViewport(point2d);
+      if (visible_in_image) {
+        ++num_points;
+        if (!behind_camera) {
+          ++num_points_before_camera;
+          const FloatType point_depth = point3d_camera(2);
+          AIT_ASSERT(point_depth >= 0);
+          const FloatType view_depth = planner_->computePoissonMeshDepth(viewpoint, point2d(0), point2d(1));
+          const bool visible = point_depth <= view_depth + planner_->getOptions().sparse_matching_depth_tolerance;
+          if (visible) {
+            ++num_points_visible2;
+          }
+        }
+      }
+      if (planner_->isSparsePointVisible(viewpoint, point3d)) {
+        ++num_points_visible;
+      }
+    }
+    std::unordered_set<Point3DId> point_set = planner_->computeVisibleSparsePoints(
+        viewpoint,
+        planner_->getReconstruction()->getPoints3D().begin(),
+        planner_->getReconstruction()->getPoints3D().end());
+    const std::size_t num_points_visible3 = point_set.size();
+    std::cout << "Visible 3D points = " << num_points_visible << std::endl;
+    std::cout << "Visible 3D points 2 = " << num_points_visible2 << std::endl;
+    std::cout << "Visible 3D points 3 = " << num_points_visible3 << std::endl;
+    std::cout << "3D points before camera = " << num_points_before_camera << std::endl;
+    std::cout << "Projecting 3D points = " << num_points << std::endl;
+    event->accept();
+  }
+  else if (event->key() == Qt::Key_Z) {
+    // Add manual viewpoint path entry
+    const size_t viewpoint_path_index =
+            (selected_viewpoint_path_branch_index_ != (size_t)-1) ? selected_viewpoint_path_branch_index_ : 0;
+    try {
+      if (event->modifiers() == Qt::ShiftModifier) {
+        planner_->addViewpointPathEntryWithStereoPair(viewpoint_path_index, getCameraPose());
+      }
+      else {
+        planner_->addViewpointPathEntry(viewpoint_path_index, getCameraPose());
+      }
+    }
+      // TODO: Should be a exception for raycast
+    catch (const ait::Error& err) {
+      std::cout << "Raycast failed: " << err.what() << std::endl;
+    }
+    planner_thread_.updateViewpoints();
+    updateViewpoints();
+    event->accept();
+  }
+  else if (event->key() == Qt::Key_X) {
+    // Add manual viewpoint path entry from graph
+    if (selected_viewpoint_graph_entry_index_ != (size_t) -1) {
+      const size_t viewpoint_path_branch_index =
+              (selected_viewpoint_path_branch_index_ != (size_t) -1) ? selected_viewpoint_path_branch_index_ : 0;
+      try {
+        if (event->modifiers() == Qt::ShiftModifier) {
+          planner_->addViewpointPathEntryWithStereoPair(viewpoint_path_branch_index, selected_viewpoint_graph_entry_index_);
+        }
+        else {
+          planner_->addViewpointPathEntry(viewpoint_path_branch_index, selected_viewpoint_graph_entry_index_);
+        }
+      }
+      // TODO: Should be a exception for raycast
+      catch (const ait::Error &err) {
+        std::cout << "Raycast failed: " << err.what() << std::endl;
+      }
+      planner_thread_.updateViewpoints();
+      updateViewpoints();
+    }
+    event->accept();
   }
   else {
     QGLViewer::keyPressEvent(event);
   }
 }
+
+void ViewerWidget::mousePressEvent(QMouseEvent* event) {
+  std::cout << "Mouse press event" << std::endl;
+  if (event->button() == Qt::LeftButton && event->modifiers() == Qt::ShiftModifier) {
+    if (selection_timer_.isActive()) {
+      std::cout << "Timer is active" << std::endl;
+      const size_t x = event->pos().x();
+      const size_t y = event->pos().y();
+      SelectableObjectType selection_type;
+      boost::any selection_value;
+      std::tie(selection_type, selection_value) = selectObject(x, y);
+      if (selection_type == VIEWPOINT_GRAPH_ENTRY) {
+        const size_t graph_entry_index = boost::any_cast<size_t>(selection_value);
+        std::cout << "Selected graph entry: " << boost::any_cast<size_t>(graph_entry_index) << std::endl;
+        selected_viewpoint_graph_entry_index_ = graph_entry_index;
+      }
+      else if (selection_type == VIEWPOINT_PATH_ENTRY) {
+        const size_t path_entry_index = boost::any_cast<size_t>(selection_value);
+        std::cout << "Selected graph entry: " << boost::any_cast<size_t>(path_entry_index) << std::endl;
+        selected_viewpoint_path_entry_index_ = path_entry_index;
+      }
+      update();
+    }
+    else {
+      std::cout << "Starting timer" << std::endl;
+      selection_timer_.setSingleShot(true);
+      selection_timer_.start(kSelectionClickTimeMs);
+    }
+    event->accept();
+  }
+  else {
+    QGLViewer::mousePressEvent(event);
+  }
+}
+
+void ViewerWidget::mouseReleaseEvent(QMouseEvent* event) {
+  std::cout << "Mouse release event" << std::endl;
+  if (event->button() == Qt::LeftButton && event->modifiers() == Qt::ShiftModifier) {
+    event->accept();
+  }
+  else {
+    QGLViewer::mouseReleaseEvent(event);
+  }
+}
+
+void ViewerWidget::mouseMoveEvent(QMouseEvent* event) {
+  QGLViewer::mouseMoveEvent(event);
+}
+#pragma GCC pop_options
 
 ViewerWidget::GpsCoordinateType ViewerWidget::getGpsFromPose(const Pose& pose) const {
   using GpsFloatType = typename GpsCoordinateType::FloatType;
@@ -1767,13 +2475,14 @@ void ViewerWidget::onSaveViewpointPath(const std::string& filename) {
 void ViewerWidget::onLoadViewpointPath(const std::string& filename) {
   planner_->loadViewpointPath(filename);
   planner_thread_.updateViewpoints();
+  showViewpointGraph();
   showViewpointPath();
 }
 
 void ViewerWidget::onExportViewpointPathAsJson(const std::string& filename) {
   ViewpointPlanner::ViewpointPath* viewpoint_path;
-  if (viewpoint_path_branch_index_ != (std::size_t)-1 && viewpoint_path_branch_index_ < planner_->getViewpointPaths().size()) {
-    viewpoint_path = &planner_->getViewpointPaths()[viewpoint_path_branch_index_];
+  if (selected_viewpoint_path_branch_index_ != (std::size_t)-1 && selected_viewpoint_path_branch_index_ < planner_->getViewpointPaths().size()) {
+    viewpoint_path = &planner_->getViewpointPaths()[selected_viewpoint_path_branch_index_];
   }
   else {
     viewpoint_path = &planner_->getBestViewpointPath();
@@ -1781,8 +2490,8 @@ void ViewerWidget::onExportViewpointPathAsJson(const std::string& filename) {
   std::cout << "Augmenting viewpoint path with viewpoints for sparse matching" << std::endl;
   planner_->augmentedViewpointPathForSparseMatching(viewpoint_path);
   std::cout << "Done" << std::endl;
-  if (viewpoint_path_branch_index_ != (std::size_t)-1 && viewpoint_path_branch_index_ < planner_->getViewpointPaths().size()) {
-    std::cout << "Exporting viewpoint path " << viewpoint_path_branch_index_ << std::endl;
+  if (selected_viewpoint_path_branch_index_ != (std::size_t)-1 && selected_viewpoint_path_branch_index_ < planner_->getViewpointPaths().size()) {
+    std::cout << "Exporting viewpoint path " << selected_viewpoint_path_branch_index_ << std::endl;
   }
   else {
     std::cout << "Exporting best viewpoint path" << std::endl;
@@ -1792,14 +2501,14 @@ void ViewerWidget::onExportViewpointPathAsJson(const std::string& filename) {
 
 void ViewerWidget::onExportViewpointPathAsText(const std::string& filename) {
   ViewpointPlanner::ViewpointPath* viewpoint_path;
-  if (viewpoint_path_branch_index_ != (std::size_t)-1 && viewpoint_path_branch_index_ < planner_->getViewpointPaths().size()) {
-    viewpoint_path = &planner_->getViewpointPaths()[viewpoint_path_branch_index_];
+  if (selected_viewpoint_path_branch_index_ != (std::size_t)-1 && selected_viewpoint_path_branch_index_ < planner_->getViewpointPaths().size()) {
+    viewpoint_path = &planner_->getViewpointPaths()[selected_viewpoint_path_branch_index_];
   }
   else {
     viewpoint_path = &planner_->getBestViewpointPath();
   }
-  if (viewpoint_path_branch_index_ != (std::size_t)-1 && viewpoint_path_branch_index_ < planner_->getViewpointPaths().size()) {
-    std::cout << "Exporting viewpoint path " << viewpoint_path_branch_index_ << std::endl;
+  if (selected_viewpoint_path_branch_index_ != (std::size_t)-1 && selected_viewpoint_path_branch_index_ < planner_->getViewpointPaths().size()) {
+    std::cout << "Exporting viewpoint path " << selected_viewpoint_path_branch_index_ << std::endl;
   }
   else {
     std::cout << "Exporting best viewpoint path" << std::endl;
@@ -1809,14 +2518,14 @@ void ViewerWidget::onExportViewpointPathAsText(const std::string& filename) {
 
 void ViewerWidget::onExportViewpointPathAsSparseReconstruction(const std::string& path) {
   ViewpointPlanner::ViewpointPath* viewpoint_path;
-  if (viewpoint_path_branch_index_ != (std::size_t)-1 && viewpoint_path_branch_index_ < planner_->getViewpointPaths().size()) {
-    viewpoint_path = &planner_->getViewpointPaths()[viewpoint_path_branch_index_];
+  if (selected_viewpoint_path_branch_index_ != (std::size_t)-1 && selected_viewpoint_path_branch_index_ < planner_->getViewpointPaths().size()) {
+    viewpoint_path = &planner_->getViewpointPaths()[selected_viewpoint_path_branch_index_];
   }
   else {
     viewpoint_path = &planner_->getBestViewpointPath();
   }
-  if (viewpoint_path_branch_index_ != (std::size_t)-1 && viewpoint_path_branch_index_ < planner_->getViewpointPaths().size()) {
-    std::cout << "Exporting viewpoint path as sparse reconstruction " << viewpoint_path_branch_index_ << std::endl;
+  if (selected_viewpoint_path_branch_index_ != (std::size_t)-1 && selected_viewpoint_path_branch_index_ < planner_->getViewpointPaths().size()) {
+    std::cout << "Exporting viewpoint path as sparse reconstruction " << selected_viewpoint_path_branch_index_ << std::endl;
   }
   else {
     std::cout << "Exporting best viewpoint path" << std::endl;
@@ -1880,10 +2589,12 @@ void ViewerWidget::sendViewpointPathToWebSocketClients() {
     return;
   }
   std::unique_lock<std::mutex> lock(mutex_);
+  std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
+
   const ViewpointPlanner::ViewpointPath* viewpoint_path;
-  if (viewpoint_path_branch_index_ != (std::size_t)-1 && viewpoint_path_branch_index_ < planner_->getViewpointPaths().size()) {
-    std::cout << "Exporting viewpoint path " << viewpoint_path_branch_index_ << std::endl;
-    viewpoint_path = &planner_->getViewpointPaths()[viewpoint_path_branch_index_];
+  if (selected_viewpoint_path_branch_index_ != (std::size_t)-1 && selected_viewpoint_path_branch_index_ < planner_->getViewpointPaths().size()) {
+    std::cout << "Exporting viewpoint path " << selected_viewpoint_path_branch_index_ << std::endl;
+    viewpoint_path = &planner_->getViewpointPaths()[selected_viewpoint_path_branch_index_];
   }
   else {
     std::cout << "Exporting best viewpoint path" << std::endl;
@@ -1948,14 +2659,74 @@ void ViewerWidget::sendSelectedPositionToWebSocketClients(const ViewpointPlanner
 ViewpointPlannerThread::ViewpointPlannerThread(ViewpointPlanner* planner, ViewerWidget* viewer_widget)
 : ait::PausableThread(), planner_(planner), viewer_widget_(viewer_widget),
   operation_(Operation::NOP),
-  alpha_(0), beta_(0), viewpoint_path_branch_index_(0) {
+  alpha_(0), beta_(0), viewpoint_path_branch_index_(0),
+  raycast_x_start_(0), raycast_x_end_(0),
+  raycast_y_start_(0), raycast_y_end_(0) {
   setPausedCallback([viewer_widget]() {
     viewer_widget->signalPlannerThreadPaused();
   });
 }
 
+void ViewpointPlannerThread::requestRaycast(const Viewpoint& viewpoint,
+                                            const std::size_t x_start, const std::size_t x_end,
+                                            const std::size_t y_start, const std::size_t y_end) {
+  raycast_viewpoint_ = viewpoint;
+  raycast_x_start_ = x_start;
+  raycast_x_end_ = x_end;
+  raycast_y_start_ = y_start;
+  raycast_y_end_ = y_end;
+  setOperation(Operation::RAYCAST);
+  signalContinue();
+}
+
+const Viewpoint& ViewpointPlannerThread::getRaycastViewpoint() const {
+  return raycast_viewpoint_;
+}
+
+std::size_t ViewpointPlannerThread::getRaycastXStart() const {
+  return raycast_x_start_;
+}
+
+std::size_t ViewpointPlannerThread::getRaycastXEnd() const {
+  return raycast_x_end_;
+}
+
+std::size_t ViewpointPlannerThread::getRaycastYStart() const {
+  return raycast_y_start_;
+}
+
+std::size_t ViewpointPlannerThread::getRaycastYEnd() const {
+  return raycast_y_end_;
+}
+
+const std::pair<ViewpointPlanner::VoxelWithInformationSet, float>& ViewpointPlannerThread::getRaycastResults() const {
+  return raycast_results_;
+}
+
+std::unordered_map<ViewpointPlanner::VoxelWrapper, ViewpointPlannerThread::Vector3, ViewpointPlanner::VoxelWrapper::Hash>
+ViewpointPlannerThread::getRaycastPoissonMeshNormals() const {
+  return raycast_poisson_mesh_normals_;
+}
+
+std::unordered_map<ViewpointPlanner::VoxelWrapper, float, ViewpointPlanner::VoxelWrapper::Hash>
+ViewpointPlannerThread::getRaycastPoissonMeshDepth() const {
+  return raycast_poisson_mesh_depth_;
+}
+
+std::unordered_map<ViewpointPlanner::VoxelWrapper, ViewpointPlannerThread::Vector2, ViewpointPlanner::VoxelWrapper::Hash>
+ViewpointPlannerThread::getRaycastScreenCoordinates() const {
+  return raycast_screen_coordinates_;
+}
+
+void ViewpointPlannerThread::requestPoissonMeshDump(const ait::Pose<float>& pose) {
+  dump_pose_ = pose;
+  setOperation(Operation::DUMP_POISSON_MESH);
+  signalContinue();
+}
+
 ViewpointPlannerThread::Result ViewpointPlannerThread::runIteration() {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::unique_lock<std::mutex> lock(mutex_);
+
   if (operation_ == VIEWPOINT_GRAPH) {
     std::cout << "Running iterations of generateNextViewpoint()" << std::endl;
     for (std::size_t i = 0; i < 10; ++i) {
@@ -1993,6 +2764,57 @@ ViewpointPlannerThread::Result ViewpointPlannerThread::runIteration() {
     viewer_widget_->signalViewpointsChanged();
     return Result::PAUSE;
   }
+  else if (operation_ == RAYCAST) {
+    std::cout << "Performing raycast" << std::endl;
+//#if WITH_CUDA
+//  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results = planner_->getRaycastHitVoxelsCuda(viewpoint);
+//#else
+//  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> raycast_results = planner_->getRaycastHitVoxels(viewpoint);
+//#endif
+    std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResultWithScreenCoordinates> tmp_raycast_results;
+#if WITH_CUDA
+    tmp_raycast_results =
+        planner_->getRaycastHitVoxelsWithScreenCoordinatesCuda(
+            raycast_viewpoint_, raycast_x_start_, raycast_x_end_, raycast_y_start_, raycast_y_end_);
+#else
+    tmp_raycast_results =
+        planner_->getRaycastHitVoxelsWithScreenCoordinates(
+            raycast_viewpoint_, raycast_x_start_, raycast_x_end_, raycast_y_start_, raycast_y_end_);
+#endif
+    raycast_results_.first.clear();
+    raycast_results_.second = 0;
+    for (const auto& result : tmp_raycast_results) {
+      const float information = planner_->computeViewpointObservationScore(
+          raycast_viewpoint_, result.intersection_result.node, result.screen_coordinates);
+      raycast_results_.first.emplace(result.intersection_result.node, information);
+      raycast_results_.second += information;
+      const Vector3 normal = planner_->computePoissonMeshNormalVector(
+          raycast_viewpoint_, result.screen_coordinates(0), result.screen_coordinates(1));
+      raycast_poisson_mesh_normals_.emplace(result.intersection_result.node, normal);
+      const float depth = planner_->computePoissonMeshDepth(
+          raycast_viewpoint_, result.screen_coordinates(0), result.screen_coordinates(1));
+      raycast_poisson_mesh_depth_.emplace(result.intersection_result.node, depth);
+      raycast_screen_coordinates_.emplace(result.intersection_result.node, result.screen_coordinates);
+    }
+//        planner_->getRaycastHitVoxelsWithInformationScore(
+//            raycast_viewpoint_, raycast_x_start_, raycast_x_end_, raycast_y_start_, raycast_y_end_);
+    viewer_widget_->signalRaycastFinished();
+    return Result::PAUSE;
+  }
+  else if (operation_ == DUMP_POISSON_MESH) {
+    std::cout << "Dumping poisson mesh" << std::endl;
+    if (!boost::filesystem::is_directory("dump")) {
+      boost::filesystem::create_directories("dump");
+    }
+    planner_->drawPoissonMesh(dump_pose_).save("dump/poisson_mesh_dump.png");
+    planner_->drawPoissonMeshNormals(dump_pose_).save("dump/poisson_mesh_normals_dump.png");
+    const QImage depth_image = planner_->drawPoissonMeshDepth(dump_pose_);
+    depth_image.save("dump/poisson_mesh_depth_dump.png");
+    const QImage depth_rgb_image = planner_->convertEncodedDepthImageToRGB(depth_image, 0, 100);
+    depth_rgb_image.save("dump/poisson_mesh_depth_rgb_dump.png");
+    planner_->dumpSparsePoints(planner_->getVirtualViewpoint(dump_pose_), "dump/sparse_points_dump.png");
+    return Result::PAUSE;
+  }
   else {
     std::cout << "Giving back stop result" << std::endl;
     return Result::STOP;
@@ -2003,29 +2825,11 @@ void ViewpointPlannerThread::updateViewpoints() {
 //  AIT_ASSERT(!this->isRunning() || this->isPaused());
   std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
   if (lock) {
+    std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
     updateViewpointsInternal();
   }
 }
 
 void ViewpointPlannerThread::updateViewpointsInternal() {
   std::lock_guard<std::mutex> lock(viewer_widget_->mutex_);
-  // Copy viewpoint graph and path to local copy for visualization
-  viewer_widget_->viewpoint_graph_copy_.clear();
-  for (auto it = planner_->getViewpointGraph().begin(); it != planner_->getViewpointGraph().end(); ++it) {
-    const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = it.node();
-    const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[viewpoint_index];
-    viewer_widget_->viewpoint_graph_copy_.push_back(std::make_tuple(
-        viewpoint_index, viewpoint_entry.viewpoint.pose(), viewpoint_entry.total_information));
-  }
-  viewer_widget_->viewpoint_path_copy_.clear();
-  viewer_widget_->viewpoint_path_order_copy_.clear();
-  if (!planner_->getViewpointPaths().empty()) {
-    const std::size_t path_index = viewer_widget_->viewpoint_path_branch_index_;
-    for (const ViewpointPlanner::ViewpointPathEntry& path_entry : planner_->getViewpointPaths()[path_index].entries) {
-      const ViewpointPlanner::ViewpointEntry& viewpoint_entry = planner_->getViewpointEntries()[path_entry.viewpoint_index];
-      viewer_widget_->viewpoint_path_copy_.push_back(std::make_tuple(
-          path_entry.viewpoint_index, viewpoint_entry.viewpoint.pose(), path_entry.local_information, path_entry.mvs_viewpoint));
-    }
-    viewer_widget_->viewpoint_path_order_copy_ = planner_->getViewpointPaths()[path_index].order;
-  }
 }

@@ -56,6 +56,12 @@ public:
   }
 
   template <typename T>
+  void addOptionalOption(const std::string& name) {
+    options_.add_options()
+        (getFullOptionName(name).c_str(), po::value<T>(), name.c_str());
+  }
+
+  template <typename T>
   void addOptionRequired(const std::string& name, T* value_ptr) {
     options_.add_options()
         (getFullOptionName(name).c_str(), po::value<T>(value_ptr)->required(), name.c_str());

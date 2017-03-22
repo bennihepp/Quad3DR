@@ -329,6 +329,23 @@ void OcTreeDrawer::updateRaycastVoxels(
   std::cout << "Weight range: [" << low_weight << ", " << high_weight << "]" << std::endl;
 }
 
+void OcTreeDrawer::updateSingleRaycastVoxel(
+    const OGLVoxelData& voxel, const OGLColorData& color, const OGLVoxelInfoData& info) {
+  std::vector<OGLVoxelData> voxel_data;
+  std::vector<OGLColorData> color_data;
+  std::vector<OGLVoxelInfoData> info_data;
+  voxel_data.push_back(voxel);
+  color_data.push_back(color);
+  info_data.push_back(info);
+  if (!raycast_drawer_) {
+    raycast_drawer_.reset(new VoxelDrawer());
+  }
+  raycast_drawer_->init();
+  configVoxelDrawer(*raycast_drawer_);
+  raycast_drawer_->setVoxelSizeFactor(kRaycastVoxelSizeFactor);
+  raycast_drawer_->upload(voxel_data, color_data, info_data);
+}
+
 void OcTreeDrawer::updateRaycastVoxels(
     const std::vector<std::pair<const ViewpointPlanner::VoxelType*, FloatType>>& raycast_voxels) {
   std::vector<OGLVoxelData> voxel_data;
@@ -603,6 +620,8 @@ void OcTreeDrawer::updateVoxelData() {
     configVoxelDrawer(voxel_drawer);
 //    std::cout << "Uploading " << voxel_data.at(occupancy_bin).size() << " voxels" << std::endl;
     voxel_drawer.upload(voxel_data.at(occupancy_bin), color_data.at(occupancy_bin), info_data.at(occupancy_bin));
+    voxel_drawer.setWeightRange(0, 1);
+    voxel_drawer.setInformationRange(0, 1);
   }
 
   for (const auto& entry : voxel_drawer_map_) {

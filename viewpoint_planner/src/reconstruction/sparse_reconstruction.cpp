@@ -160,6 +160,11 @@ bool PinholeCamera::isPointInViewport(const Vector2& point) const {
           && point(1) >= 0 && point(1) < height_;
 }
 
+bool PinholeCamera::isPointInViewport(const Eigen::Vector2i& point) const {
+  return point(0) >= 0 && point(0) < static_cast<int>(width_)
+          && point(1) >= 0 && point(1) < static_cast<int>(height_);
+}
+
 bool PinholeCamera::isPointInViewport(const Vector2& point, FloatType margin) const {
   return point(0) >= margin && point(0) < width_ - margin
           && point(1) >= margin && point(1) < height_ - margin;
@@ -255,7 +260,7 @@ SparseReconstruction::SparseReconstruction()
 
 SparseReconstruction::~SparseReconstruction() {}
 
-void SparseReconstruction::read(const std::string& path, const bool read_sfm_gps_transformation /*=true*/) {
+void SparseReconstruction::read(const std::string& path, const bool read_sfm_gps_transformation /*=false*/) {
   cameras_.clear();
   images_.clear();
   points3D_.clear();
@@ -310,7 +315,7 @@ void SparseReconstruction::computePoint3DNormalAndStatistics(Point3D& point) con
   std::vector<Vector3> normals;
   for (const auto& feature_entry : point.feature_track) {
     const ImageColmap& image = images_.at(feature_entry.image_id);
-    std::tuple<FloatType, Vector3> result = ait::computeDistanceAndDirection(point.getPosition(), image.pose().getWorldPosition());
+    std::tuple<FloatType, Vector3> result = bh::computeDistanceAndDirection(point.getPosition(), image.pose().getWorldPosition());
     distances.push_back(std::get<0>(result));
     normals.push_back(std::get<1>(result));
   }

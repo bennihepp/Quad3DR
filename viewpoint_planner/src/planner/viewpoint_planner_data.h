@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include <ait/eigen.h>
+#include <bh/eigen.h>
 #include <ait/mLib.h>
 #include <memory>
 #include <ait/boost.h>
@@ -15,9 +15,9 @@
 #include <boost/serialization/split_member.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/filesystem.hpp>
-#include <ait/common.h>
+#include <bh/common.h>
 #include <ait/options.h>
-#include <ait/geometry.h>
+#include <bh/math/geometry.h>
 #include "../octree/occupancy_map.h"
 #include "../reconstruction/dense_reconstruction.h"
 #include "../bvh/bvh.h"
@@ -34,22 +34,12 @@ private:
   friend class boost::serialization::access;
 
   template <typename Archive>
-  void save(Archive& ar, const unsigned int version) const {
+  void serialize(Archive& ar, const unsigned int version) {
     ar & occupancy;
     ar & observation_count;
     ar & weight;
     ar & normal;
   }
-
-  template <typename Archive>
-  void load(Archive& ar, const unsigned int version) {
-    ar & occupancy;
-    ar & observation_count;
-    ar & weight;
-    ar & normal;
-  }
-
-  BOOST_SERIALIZATION_SPLIT_MEMBER()
 };
 
 class ViewpointPlanner;
@@ -66,7 +56,8 @@ public:
 
     Options()
     : ait::ConfigOptions("viewpoint_planner.data", "ViewpointPlannerData options") {
-      addOption<std::string>("dense_reconstruction_path");
+      addOption<std::string>("dense_reconstruction_path", "");
+      addOption<bool>("dense_reconstruction_has_gps", false);
       addOption<std::string>("dense_points_filename", "");
       addOption<std::string>("poisson_mesh_filename");
       addOption<std::string>("raw_octree_filename");
@@ -97,6 +88,10 @@ public:
       addOption<FloatType>("distance_field_cutoff", &distance_field_cutoff);
       addOption<FloatType>("roi_falloff_distance", &roi_falloff_distance);
       addOption<bool>("weight_falloff_quadratic", &weight_falloff_quadratic);
+      addOption<FloatType>("weight_falloff_distance_start", &weight_falloff_distance_start);
+      addOption<FloatType>("voxel_information_lambda", &voxel_information_lambda);
+      addOption<std::size_t>("cuda_stack_size", 32 * 1024);
+      addOption<int>("cuda_gpu_id", 0);
     }
 
     ~Options() override {}
@@ -113,6 +108,9 @@ public:
     FloatType roi_falloff_distance = 10;
     FloatType distance_field_cutoff = 5;
     bool weight_falloff_quadratic = true;
+    FloatType weight_falloff_distance_start = 0;
+    // Factor in the exponential of the voxel information
+    FloatType voxel_information_lambda = FloatType(0.1);
   };
 
   static constexpr double OCCUPANCY_WEIGHT_DEPTH = 12;
@@ -123,11 +121,11 @@ public:
   using PointCloudType = ml::PointCloud<FloatType>;
   using MeshIOType = ml::MeshIO<FloatType>;
   using MeshType = ml::MeshData<FloatType>;
-  using BoundingBoxType = ait::BoundingBox3D<FloatType>;
+  using BoundingBoxType = bh::BoundingBox3D<FloatType>;
   using Vector3 = Eigen::Vector3f;
   using Vector3i = Eigen::Vector3i;
   using DistanceFieldType = ml::DistanceField3f;
-  using RegionType = ait::PolygonWithLowerAndUpperPlane<FloatType>;
+  using RegionType = bh::PolygonWithLowerAndUpperPlane<FloatType>;
 
   using RawOccupancyMapType = OccupancyMap<OccupancyNode>;
   using OccupancyMapType = OccupancyMap<AugmentedOccupancyNode>;
@@ -136,16 +134,39 @@ public:
 
   using TreeNavigatorType = TreeNavigator<OccupancyMapType, OccupancyMapType::NodeType>;
   using ConstTreeNavigatorType = TreeNavigator<const OccupancyMapType, const OccupancyMapType::NodeType>;
+  using CounterType = OccupancyMapType::NodeType::CounterType;
   using WeightType = OccupancyMapType::NodeType::WeightType;
 
   ViewpointPlannerData(const Options* options);
+
+  const OccupancyMapType& getOctree() const {
+    return *octree_;
+  }
+
+  OccupancyMapType& getOctree() {
+    return *octree_;
+  }
 
   const OccupiedTreeType& getOccupancyBVHTree() const {
     return occupied_bvh_;
   }
 
+  // TODO: Intersection and raycasting should be const in BVH tree
+  OccupiedTreeType& getOccupancyBVHTree() {
+    return occupied_bvh_;
+  }
+
   /// Check if an object can be placed at a position (i.e. is it free space)
   bool isValidObjectPosition(const Vector3& position, const Vector3& object_extent) const;
+
+  const reconstruction::DenseReconstruction& getReconstruction() const;
+
+  const DistanceFieldType& getDistanceField() const;
+
+  bool isInsideGrid(const Vector3& xyz) const;
+  Vector3i getGridIndices(const Vector3& xyz) const;
+  Vector3 getGridPosition(const Vector3i& indices) const;
+  Vector3 getGridPosition(int ix, int iy, int iz) const;
 
 private:
   friend class ViewpointPlanner;
@@ -168,7 +189,12 @@ private:
   /// Distance field to poisson mesh based on overall bounding box volume
   bool readMeshDistanceField(std::string df_filename, const std::string& mesh_filename);
 
+  void _readMeshDistanceField(const std::string& df_filename, DistanceFieldType* distance_field);
+  void _writeMeshDistanceField(const std::string& df_filename, const DistanceFieldType& distance_field);
+
   void updateWeights();
+
+  WeightType computeObservationCountFactor(CounterType observation_count) const;
 
   std::unique_ptr<RawOccupancyMapType>
   readRawOctree(const std::string& filename, bool binary=false) const;
@@ -185,11 +211,6 @@ private:
   void generateWeightGrid();
 
   void generateDistanceField();
-
-  bool isInsideGrid(const Vector3& xyz) const;
-  Vector3i getGridIndices(const Vector3& xyz) const;
-  Vector3 getGridPosition(const Vector3i& indices) const;
-  Vector3 getGridPosition(int ix, int iy, int iz) const;
 
   template <typename TreeT>
   static bool isTreeConsistent(const TreeT& tree);

@@ -1,5 +1,5 @@
-//==================================================
 // viewpoint_planner.h
+//==================================================
 //
 //  Copyright (c) 2016 Benjamin Hepp.
 //  Author: Benjamin Hepp
@@ -16,14 +16,27 @@
 #include <boost/archive/binary_oarchive.hpp>
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/utility.hpp>
+#include <ait/boost_serialization_utils.h>
+#if WITH_OPENGL_OFFSCREEN
+#include <QOpenGLContext>
+#include <QOpenGLFramebufferObject>
+#include <QOffscreenSurface>
+#include <QOpenGLFunctions>
+#include <QSurfaceFormat>
+#include <ait/qt_utils.h>
+#include <ait/color.h>
+#include "../rendering/triangle_drawer.h"
+#endif
 #include <rapidjson/document.h>
 #include <ait/common.h>
 #include <ait/options.h>
+#include <ait/eigen_options.h>
 #include <ait/random.h>
 #include <ait/eigen_utils.h>
 #include <ait/serialization.h>
 #include <ait/graph_boost.h>
-#include <ait/nn/approximate_nearest_neighbor.h>
+#include <bh/math/continuous_grid3d.h>
+#include <bh/nn/approximate_nearest_neighbor.h>
 #include "../mLib/mLib.h"
 #include "../octree/occupancy_map.h"
 #include "../reconstruction/dense_reconstruction.h"
@@ -43,11 +56,13 @@ using reconstruction::DenseReconstruction;
 
 class ViewpointPlanner {
 public:
+  using size_t = std::size_t;
   using FloatType = ViewpointPlannerData::FloatType;
   USE_FIXED_EIGEN_TYPES(FloatType)
   using BoundingBoxType = ViewpointPlannerData::BoundingBoxType;
+  using ContinuousGridType = bh::ContinuousGrid3D<FloatType, size_t>;
   using RegionType = ViewpointPlannerData::RegionType;
-  using RayType = ait::Ray<FloatType>;
+  using RayType = bh::Ray<FloatType>;
   using Pose = ait::Pose<FloatType>;
 
   static constexpr FloatType kDotProdEqualTolerance = FloatType { 1e-5 };
@@ -56,59 +71,99 @@ public:
   struct Options : ait::ConfigOptions {
     Options()
     : ait::ConfigOptions("viewpoint_planner", "ViewpointPlanner options") {
-      addOption<std::size_t>("rng_seed", &rng_seed);
+      addOption<bool>("enable_cuda", &enable_cuda);
+      addOption<bool>("enable_opengl", &enable_opengl);
+      addOption<bool>("dump_poisson_mesh_normals_image", &dump_poisson_mesh_normals_image);
+      addOption<bool>("dump_poisson_mesh_depth_image", &dump_poisson_mesh_depth_image);
+      addOption<bool>("dump_stereo_matching_images", &dump_stereo_matching_images);
+      addOption<size_t>("rng_seed", &rng_seed);
       addOption<FloatType>("virtual_camera_scale", &virtual_camera_scale);
+      addOption<FloatType>("virtual_camera_width", &virtual_camera_width);
+      addOption<FloatType>("virtual_camera_height", &virtual_camera_height);
+      addOption<FloatType>("virtual_camera_focal_length", &virtual_camera_focal_length);
       addOption<FloatType>("raycast_min_range", &raycast_min_range);
       addOption<FloatType>("raycast_max_range", &raycast_max_range);
       addOption<bool>("ignore_real_observed_voxels", &ignore_real_observed_voxels);
       addOption<FloatType>("drone_extent_x", 3);
       addOption<FloatType>("drone_extent_y", 3);
       addOption<FloatType>("drone_extent_z", 3);
+      addOption<Vector3>("drone_start_position", &drone_start_position);
+      addOptionalOption<Vector3>("sampling_bbox_min");
+      addOptionalOption<Vector3>("sampling_bbox_max");
       addOption<FloatType>("sampling_roi_factor", &sampling_roi_factor);
       addOption<FloatType>("pose_sample_min_radius", &pose_sample_min_radius);
       addOption<FloatType>("pose_sample_max_radius", &pose_sample_max_radius);
-      addOption<std::size_t>("pose_sample_num_trials", &pose_sample_num_trials);
-      addOption<std::size_t>("viewpoint_sample_count", &viewpoint_sample_count);
-      addOption<std::size_t>("viewpoint_min_voxel_count", &viewpoint_min_voxel_count);
-      addOption<bool>("viewpoint_generate_stereo_pairs", &viewpoint_generate_stereo_pairs);
+      addOption<size_t>("pose_sample_num_trials", &pose_sample_num_trials);
+      addOption<FloatType>("viewpoint_sample_without_reference_probability", &viewpoint_sample_without_reference_probability);
+      addOption<size_t>("viewpoint_min_voxel_count", &viewpoint_min_voxel_count);
       addOption<FloatType>("viewpoint_min_information", &viewpoint_min_information);
-      addOption<bool>("consider_triangulation", &consider_triangulation);
+      addOption<size_t>("viewpoint_sample_motion_and_matching_knn", &viewpoint_sample_motion_and_matching_knn);
+      addOption<FloatType>("viewpoint_information_factor", &viewpoint_information_factor);
+      addOption<bool>("viewpoint_generate_stereo_pairs", &viewpoint_generate_stereo_pairs);
       addOption<FloatType>("triangulation_min_angle_degrees", &triangulation_min_angle_degrees);
       addOption<FloatType>("triangulation_max_angle_degrees", &triangulation_max_angle_degrees);
       addOption<FloatType>("triangulation_max_dist_deviation_ratio", &triangulation_max_dist_deviation_ratio);
       addOption<FloatType>("triangulation_max_angular_deviation_degrees", &triangulation_max_angular_deviation_degrees);
-      addOption<FloatType>("triangulation_min_overlap_ratio", &triangulation_min_overlap_ratio);
-      addOption<std::size_t>("triangulation_knn", &triangulation_knn);
-      addOption<std::size_t>("triangulation_min_count", &triangulation_min_count);
-      addOption<std::size_t>("viewpoint_discard_dist_knn", &viewpoint_discard_dist_knn);
+      addOption<FloatType>("triangulation_min_voxel_overlap_ratio", &triangulation_min_voxel_overlap_ratio);
+      addOption<FloatType>("triangulation_min_information_overlap_ratio", &triangulation_min_information_overlap_ratio);
+      addOption<size_t>("triangulation_knn", &triangulation_knn);
+      addOption<size_t>("triangulation_min_count", &triangulation_min_count);
+      addOption<size_t>("viewpoint_count_grid_dimension", &viewpoint_count_grid_dimension);
+      addOption<size_t>("viewpoint_discard_dist_knn", &viewpoint_discard_dist_knn);
       addOption<FloatType>("viewpoint_discard_dist_thres_square", &viewpoint_discard_dist_thres_square);
-      addOption<std::size_t>("viewpoint_discard_dist_count_thres", &viewpoint_discard_dist_count_thres);
+      addOption<size_t>("viewpoint_discard_dist_count_thres", &viewpoint_discard_dist_count_thres);
       addOption<FloatType>("viewpoint_discard_dist_real_thres_square", &viewpoint_discard_dist_real_thres_square);
-      addOption<std::size_t>("viewpoint_motion_max_neighbors", &viewpoint_motion_max_neighbors);
+      addOption<FloatType>("viewpoint_path_discard_dist_thres_square", &viewpoint_path_discard_dist_thres_square);
+      addOption<size_t>("viewpoint_motion_max_neighbors", &viewpoint_motion_max_neighbors);
       addOption<FloatType>("viewpoint_motion_max_dist_square", &viewpoint_motion_max_dist_square);
-      addOption<std::size_t>("viewpoint_motion_min_connections", &viewpoint_motion_min_connections);
-      addOption<std::size_t>("viewpoint_motion_densification_max_depth", &viewpoint_motion_densification_max_depth);
-      addOption<std::size_t>("viewpoint_path_branches", &viewpoint_path_branches);
+      addOption<size_t>("viewpoint_motion_densification_max_depth", &viewpoint_motion_densification_max_depth);
+      addOption<FloatType>("viewpoint_motion_penalty_per_graph_vertex", &viewpoint_motion_penalty_per_graph_vertex);
+      addOption<size_t>("viewpoint_path_branches", &viewpoint_path_branches);
       addOption<FloatType>("viewpoint_path_initial_distance", &viewpoint_path_initial_distance);
       addOption<FloatType>("objective_parameter_alpha", &objective_parameter_alpha);
       addOption<FloatType>("objective_parameter_beta", &objective_parameter_beta);
-      addOption<FloatType>("voxel_information_lambda", &voxel_information_lambda);
-      addOption<FloatType>("voxel_min_sensor_size_ratio", &voxel_min_sensor_size_ratio);
-      addOption<std::size_t>("viewpoint_path_2opt_max_k_length", &viewpoint_path_2opt_max_k_length);
+      addOption<FloatType>("voxel_sensor_size_ratio_threshold", &voxel_sensor_size_ratio_threshold);
+      addOption<FloatType>("voxel_sensor_size_ratio_inv_falloff_factor", &voxel_sensor_size_ratio_inv_falloff_factor);
+      addOption<bool>("incidence_ignore_dot_product_sign", &incidence_ignore_dot_product_sign);
+      addOption<FloatType>("incidence_angle_threshold_degrees", &incidence_angle_threshold_degrees);
+      addOption<FloatType>("incidence_angle_inv_falloff_factor_degrees", &incidence_angle_inv_falloff_factor_degrees);
+      addOption<FloatType>("sparse_matching_depth_tolerance", &sparse_matching_depth_tolerance);
+      addOption<FloatType>("sparse_matching_dot_product_threshold", &sparse_matching_dot_product_threshold);
+      addOption<FloatType>("sparse_matching_score_threshold", &sparse_matching_score_threshold);
+      addOption<FloatType>("sparse_matching_max_distance_deviation_factor", &sparse_matching_max_distance_deviation_factor);
+      addOption<FloatType>("sparse_matching_max_normal_deviation_factor", &sparse_matching_max_normal_deviation_factor);
+      addOption<FloatType>("sparse_matching_min_distance", &sparse_matching_min_distance);
+      addOption<FloatType>("sparse_matching_min_angular_distance", &sparse_matching_min_angular_distance);
+      addOption<size_t>("viewpoint_path_2opt_max_k_length", &viewpoint_path_2opt_max_k_length);
       addOption<std::string>("viewpoint_graph_filename", &viewpoint_graph_filename);
       // TODO:
-      addOption<std::size_t>("num_sampled_poses", &num_sampled_poses);
-      addOption<std::size_t>("num_planned_viewpoints", &num_planned_viewpoints);
+      addOption<size_t>("num_sampled_poses", &num_sampled_poses);
+      addOption<size_t>("num_planned_viewpoints", &num_planned_viewpoints);
       addOption<std::string>("motion_planner_log_filename", &motion_planner_log_filename);
     }
 
     ~Options() override {}
 
+    // Whether to enable CUDA
+    bool enable_cuda = true;
+    // Whether to enable OpenGL
+    bool enable_opengl = true;
+    // Whether to dump the poisson mesh normals image after rendering
+    bool dump_poisson_mesh_normals_image = false;
+    // Whether to dump the poisson mesh depth image after rendering
+    bool dump_poisson_mesh_depth_image = false;
+    // Whether to write out stereo matching image pairs when generating viewpoint path
+    bool dump_stereo_matching_images = false;
+
     // Random number generator seed (0 will seed from current time)
-    std::size_t rng_seed = 0;
+    size_t rng_seed = 0;
 
     // Scale factor from real camera to virtual camera
     FloatType virtual_camera_scale = 0.05f;
+    // Parameters for virtual camera (overriding scale factor)
+    FloatType virtual_camera_width = -1;
+    FloatType virtual_camera_height = -1;
+    FloatType virtual_camera_focal_length = -1;
 
     // Min and max range for raycast
     FloatType raycast_min_range = 0;
@@ -119,6 +174,9 @@ public:
 
     // Viewpoint sampling parameters
 
+    // Start position of drone. Viewpoint sampling starts from here to ensure connectivity.
+    Vector3 drone_start_position = Vector3(0, 0, 0);
+
     // Region of interest dilation for viewpoint sampling
     FloatType sampling_roi_factor = 2;
     // Spherical shell for viewpoint sampling
@@ -126,18 +184,21 @@ public:
     FloatType pose_sample_max_radius = 5;
 
     // Number of trials for viewpoint position sampling
-    std::size_t pose_sample_num_trials = 100;
-    // Number of viewpoints to sample per iteration
-    std::size_t viewpoint_sample_count = 10;
+    size_t pose_sample_num_trials = 100;
+    // Probability of sampling a new viewpoint independent of a reference viewpoint
+    FloatType viewpoint_sample_without_reference_probability = 0.1f;
     // Ensure that every viewpoint is part of a stereo pair
     bool viewpoint_generate_stereo_pairs;
     // Minimum voxel count for viewpoints
-    std::size_t viewpoint_min_voxel_count = 100;
+    size_t viewpoint_min_voxel_count = 100;
     // Minimum information for viewpoints
     FloatType viewpoint_min_information = 10;
+    // Number of neighbours to check for reachability and matchability when generating new viewpoint entry
+    size_t viewpoint_sample_motion_and_matching_knn = 20;
 
-    // Whether to check for triangulation constraint
-    bool consider_triangulation = true;
+    // Factor by which information of a viewpoint is multiplied (i.e. to encourage redundancy)
+    FloatType viewpoint_information_factor = FloatType(1 / 3.0);
+
     // Minimum angle between two views so that a voxel can be triangulated
     FloatType triangulation_min_angle_degrees = 5;
     // Maximum angle between two views so that a voxel can be triangulated
@@ -146,35 +207,43 @@ public:
     FloatType triangulation_max_dist_deviation_ratio = FloatType(0.1);
     // Maximum angular deviation between stereo viewpoints
     FloatType triangulation_max_angular_deviation_degrees = 20;
+    // Minimum ratio of voxel overlap for a viewpoint to be used for a stereo pair
+    FloatType triangulation_min_voxel_overlap_ratio = 0.4f;
     // Minimum ratio of information overlap for a viewpoint to be used for a stereo pair
-    FloatType triangulation_min_overlap_ratio = 0.8f;
+    FloatType triangulation_min_information_overlap_ratio = 0.2f;
     // Number of nearest neighbors to consider for stereo pair search
-    std::size_t triangulation_knn = 50;
+    size_t triangulation_knn = 50;
     // Minimum number of viewpairs that can triangulate a voxel to be observed
-    std::size_t triangulation_min_count = 2;
+    size_t triangulation_min_count = 2;
+
+    // Dimension of the viewpoint count grid (x, y and z dimension)
+    size_t viewpoint_count_grid_dimension = 100;
 
     // For checking whether a sampled viewpoint is too close to existing ones
     //
     // How many nearest neighbors to consider
-    std::size_t viewpoint_discard_dist_knn = 10;
+    size_t viewpoint_discard_dist_knn = 10;
     // Squared distance considered to be too close
     FloatType viewpoint_discard_dist_thres_square = 4;
     // How many other viewpoints need to be too close for the sampled viewpoint to be discarded
-    std::size_t viewpoint_discard_dist_count_thres = 3;
+    size_t viewpoint_discard_dist_count_thres = 3;
     // Squared distance to a real viewpoint considered to be too close
     FloatType viewpoint_discard_dist_real_thres_square = 9;
 
+    // Squared minimum distance to other viewpoints on a viewpoint path
+    FloatType viewpoint_path_discard_dist_thres_square = 4;
+
     // Maximum number of neighbors to consider for finding a motion path
-    std::size_t viewpoint_motion_max_neighbors = 10;
+    size_t viewpoint_motion_max_neighbors = 10;
     // Maximum distance between viewpoints for finding a motion path
     FloatType viewpoint_motion_max_dist_square = 10;
-    // Minimum number of connections that need to be found for a viewpoint to be accepted
-    std::size_t viewpoint_motion_min_connections = 3;
     // Number of connections to traverse in the graph for densifying edges
-    std::size_t viewpoint_motion_densification_max_depth = 5;
+    size_t viewpoint_motion_densification_max_depth = 5;
+    // Motion penalty for each viewpoint graph vertex on a motion path
+    FloatType viewpoint_motion_penalty_per_graph_vertex = 0;
 
     // Number of viewpoint path branches to explore in parallel
-    std::size_t viewpoint_path_branches = 10;
+    size_t viewpoint_path_branches = 10;
     // Minimum distance between initial viewpoints on viewpoint path branches
     FloatType viewpoint_path_initial_distance = 3;
 
@@ -182,24 +251,55 @@ public:
     FloatType objective_parameter_alpha = 0;
     // Objective factor for motion distance
     FloatType objective_parameter_beta = 0;
-    // Factor in the exponential of the voxel information
-    FloatType voxel_information_lambda = FloatType(0.1);
-    // Threshold for projected sensor size that gives full information
-    FloatType voxel_min_sensor_size_ratio = FloatType(0.005);
+    // Whether to ignore the dot-product sign when computing incidence information factor
+    bool incidence_ignore_dot_product_sign = false;
+    // Incidence angle below which the full information is achieved
+    FloatType incidence_angle_threshold_degrees = 30;
+    // Inverse information falloff factor above the incidence angle threshold
+    FloatType incidence_angle_inv_falloff_factor_degrees = 30;
+    // Relative voxel size on sensor above which full information is achieved
+    FloatType voxel_sensor_size_ratio_threshold = FloatType(0.002);
+    // Inverse information falloff factor above the sensor size threshold
+    FloatType voxel_sensor_size_ratio_inv_falloff_factor = FloatType(0.001);
+
+    // Depth tolerance when deciding whether a 3d point is visible from a viewpoint
+    FloatType sparse_matching_depth_tolerance = FloatType(0.2);
+    // Minimum dot product between viewpoint orientations for a point to be matchable
+    FloatType sparse_matching_dot_product_threshold = FloatType(0.8);
+    // Threshold for sparse matching score
+    FloatType sparse_matching_score_threshold = FloatType(50);
+    // Within how many standard deviations of the sparse point distance a point is still visible
+    FloatType sparse_matching_max_distance_deviation_factor = 3;
+    // Within how many standard deviations of the sparse point normal dot product a point is still visible
+    FloatType sparse_matching_max_normal_deviation_factor = 3;
+    // Distance threshold below which viewpoints are assumed to be matchable
+    FloatType sparse_matching_min_distance = FloatType(1);
+    // Angular distance threshold below which viewpoints are assumed to be matchable
+    FloatType sparse_matching_min_angular_distance = 10 * FloatType(M_PI / 180.0);
 
     // Maximum segment length that is reversed by 2 Opt
-    std::size_t viewpoint_path_2opt_max_k_length = 15;
+    size_t viewpoint_path_2opt_max_k_length = 15;
 
     // Filename of serialized viewpoint graph
     std::string viewpoint_graph_filename = "";
 
     // TODO: Needed?
-    std::size_t num_sampled_poses = 100;
-    std::size_t num_planned_viewpoints = 10;
+    size_t num_sampled_poses = 100;
+    size_t num_planned_viewpoints = 10;
 
     // Log file for OMPL motion planner
     std::string motion_planner_log_filename = "motion_planner.log";
   };
+
+  friend class VoxelMapSaver;
+  friend class VoxelMapLoader;
+  friend class VoxelWithInformationSetSaver;
+  friend class VoxelWithInformationSetLoader;
+  friend class ViewpointEntrySaver;
+  friend class ViewpointEntryLoader;
+  friend class ViewpointPathSaver;
+  friend class ViewpointPathEntriesLoader;
+  friend class ViewpointPathLoader;
 
   using PointCloudType = ViewpointPlannerData::PointCloudType;
   using MeshType = ViewpointPlannerData::MeshType;
@@ -211,12 +311,31 @@ public:
   using OccupancyType = OccupancyMapType::NodeType::OccupancyType;
   using CounterType = OccupancyMapType::NodeType::CounterType;
   using WeightType = OccupancyMapType::NodeType::WeightType;
+  using OccupiedTreeType = ViewpointPlannerData::OccupiedTreeType;
   using VoxelType = ViewpointPlannerData::OccupiedTreeType::NodeType;
 
   using MotionPlannerType = MotionPlanner<FloatType>;
-  using Motion = typename MotionPlannerType::Motion;
+  using SE3Motion = typename MotionPlannerType::Motion;
 
-  class ViewpointEntrySerializer;
+  /// Voxel node and it's corresponding amount of information
+  struct VoxelWrapper {
+    VoxelWrapper(const VoxelType* voxel)
+    : voxel(voxel) {}
+
+    const VoxelType* voxel;
+
+    bool operator==(const VoxelWrapper& other) const {
+      return voxel == other.voxel;
+    }
+
+    struct Hash {
+      size_t operator()(const VoxelWrapper& voxel_with_information) const {
+        size_t val { 0 };
+              boost::hash_combine(val, voxel_with_information.voxel);
+              return val;
+      }
+    };
+  };
 
   /// Voxel node and it's corresponding amount of information
   struct VoxelWithInformation {
@@ -230,9 +349,17 @@ public:
       return voxel == other.voxel && information == other.information;
     }
 
+    struct VoxelHash {
+      size_t operator()(const VoxelWithInformation& voxel_with_information) const {
+        size_t val { 0 };
+              boost::hash_combine(val, voxel_with_information.voxel);
+              return val;
+      }
+    };
+
     struct Hash {
-      std::size_t operator()(const VoxelWithInformation& voxel_with_information) const {
-        std::size_t val { 0 };
+      size_t operator()(const VoxelWithInformation& voxel_with_information) const {
+        size_t val { 0 };
               boost::hash_combine(val, voxel_with_information.voxel);
               boost::hash_combine(val, voxel_with_information.information);
               return val;
@@ -240,7 +367,8 @@ public:
     };
   };
 
-  using VoxelWithInformationSet = std::unordered_set<VoxelWithInformation, VoxelWithInformation::Hash>;
+  using VoxelWithInformationSet = std::unordered_set<VoxelWithInformation, VoxelWithInformation::VoxelHash>;
+  using VoxelMap = std::unordered_map<VoxelWrapper, FloatType, VoxelWrapper::Hash>;
 
   /// Describes a viewpoint, the set of voxels observed by it and the corresponding information
   struct ViewpointEntry {
@@ -287,9 +415,6 @@ public:
     VoxelWithInformationSet voxel_set;
 
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-
-  private:
-    friend class ViewpointEntrySerializer;
   };
 
   using ViewpointEntryVector = std::vector<ViewpointEntry>;
@@ -306,7 +431,7 @@ public:
         using std::swap;
         swap(this->index1, this->index2);
       }
-      AIT_ASSERT_DBG(this->index1 <= this->index2);
+      AIT_ASSERT(this->index1 <= this->index2);
     }
 
     ViewpointEntryIndex index1;
@@ -317,8 +442,8 @@ public:
     }
 
     struct Hash {
-      std::size_t operator()(const ViewpointIndexPair& index_pair) const {
-        std::size_t val { 0 };
+      size_t operator()(const ViewpointIndexPair& index_pair) const {
+        size_t val { 0 };
         boost::hash_combine(val, index_pair.index1);
         boost::hash_combine(val, index_pair.index2);
         return val;
@@ -336,116 +461,9 @@ public:
     }
   };
 
-  class VoxelWithInformationSetSaver {
-  public:
-    VoxelWithInformationSetSaver(const ViewpointPlannerData::OccupiedTreeType& bvh_tree) {
-      // Compute consistent ordering of BVH nodes
-      std::size_t voxel_index = 0;
-      for (const ViewpointPlannerData::OccupiedTreeType::NodeType& node : bvh_tree) {
-        voxel_index_map_.emplace(&node, voxel_index);
-        ++voxel_index;
-      }
-    }
-
-    template <typename Archive>
-    void save(const VoxelWithInformationSet& voxel_set, Archive& ar, const unsigned int version) const {
-      ar & voxel_set.size();
-      for (const VoxelWithInformation& voxel_with_information : voxel_set) {
-        std::size_t voxel_index = voxel_index_map_.at(voxel_with_information.voxel);
-        ar & voxel_index;
-        ar & voxel_with_information.information;
-      }
-    }
-
-  private:
-    std::unordered_map<const VoxelType*, std::size_t> voxel_index_map_;
-  };
-
-  class VoxelWithInformationSetLoader {
-  public:
-    VoxelWithInformationSetLoader(ViewpointPlannerData::OccupiedTreeType* bvh_tree) {
-      // Compute consistent ordering of BVH nodes
-      std::size_t voxel_index = 0;
-      for (ViewpointPlannerData::OccupiedTreeType::NodeType& node : *bvh_tree) {
-        index_voxel_map_.emplace(voxel_index, &node);
-        ++voxel_index;
-      }
-    }
-
-    template <typename Archive>
-    void load(VoxelWithInformationSet* voxel_set, Archive& ar, const unsigned int version) const {
-      std::size_t num_voxels;
-      ar & num_voxels;
-      for (std::size_t i = 0; i < num_voxels; ++i) {
-        std::size_t voxel_index;
-        ar & voxel_index;
-        VoxelType* voxel = index_voxel_map_.at(voxel_index);
-        FloatType information;
-        ar & information;
-        VoxelWithInformation voxel_with_information(voxel, information);
-        voxel_set->emplace(std::move(voxel_with_information));
-      }
-    }
-
-  private:
-    std::unordered_map<std::size_t, VoxelType*> index_voxel_map_;
-  };
-
-  class ViewpointEntrySaver {
-  public:
-    ViewpointEntrySaver(const ViewpointEntryVector& entries, const ViewpointPlannerData::OccupiedTreeType& bvh_tree)
-    : entries_(entries), voxel_set_saver_(bvh_tree) {}
-
-  private:
-    // Boost serialization
-    friend class boost::serialization::access;
-
-    template <typename Archive>
-    void serialize(Archive& ar, const unsigned int version) const {
-      ar & entries_.size();
-      for (const ViewpointEntry& entry : entries_) {
-        // Save viewpoint
-        ar & entry.viewpoint.pose();
-        ar & entry.total_information;
-        voxel_set_saver_.save(entry.voxel_set, ar, version);
-      }
-    }
-
-    const ViewpointEntryVector& entries_;
-    const VoxelWithInformationSetSaver voxel_set_saver_;
-  };
-
-  class ViewpointEntryLoader {
-  public:
-    ViewpointEntryLoader(ViewpointEntryVector* entries, ViewpointPlannerData::OccupiedTreeType* bvh_tree, SparseReconstruction* reconstruction)
-    : entries_(entries), voxel_set_loader_(bvh_tree), reconstruction_(reconstruction) {}
-
-  private:
-    // Boost serialization
-    friend class boost::serialization::access;
-
-    template <typename Archive>
-    void serialize(Archive& ar, const unsigned int version) {
-      const PinholeCamera* camera = static_cast<PinholeCamera*>(&(reconstruction_->getCameras().begin()->second));
-      std::size_t num_entries;
-      ar & num_entries;
-      entries_->resize(num_entries);
-      for (ViewpointEntry& entry : *entries_) {
-        Pose pose;
-        ar & pose;
-        entry.viewpoint = Viewpoint(camera, pose);
-        ar & entry.total_information;
-        voxel_set_loader_.load(&entry.voxel_set, ar, version);
-      }
-    }
-
-    ViewpointEntryVector* entries_;
-    const VoxelWithInformationSetLoader voxel_set_loader_;
-    SparseReconstruction* reconstruction_;
-  };
-
   /// Describes a viewpoint and the information it adds to the previous viewpoints
   struct ViewpointPathEntry {
+    // TODO: Make non-default constructor to ensure proper index and viewpoint
     ViewpointPathEntry()
     : viewpoint_index((ViewpointEntryIndex)-1),
       local_information(std::numeric_limits<FloatType>::lowest()),
@@ -453,7 +471,8 @@ public:
       local_motion_distance(std::numeric_limits<FloatType>::max()),
       acc_motion_distance(std::numeric_limits<FloatType>::max()),
       local_objective(std::numeric_limits<FloatType>::lowest()),
-      acc_objective(std::numeric_limits<FloatType>::lowest()) {}
+      acc_objective(std::numeric_limits<FloatType>::lowest()),
+      mvs_viewpoint(true) {}
 
     ViewpointEntryIndex viewpoint_index;
     // TODO: Is it necessary to save all the accumulated information with a path entry?
@@ -463,10 +482,13 @@ public:
     FloatType acc_motion_distance;
     FloatType local_objective;
     FloatType acc_objective;
+    bool mvs_viewpoint;
+    Viewpoint viewpoint;
 
   private:
     // Boost serialization
     friend class boost::serialization::access;
+    friend class ViewpointPathEntriesLoader;
 
     template <typename Archive>
     void serialize(Archive& ar, const unsigned int version) {
@@ -477,25 +499,149 @@ public:
       ar & acc_motion_distance;
       ar & local_objective;
       ar & acc_objective;
+      if (version > 0) {
+        ar & mvs_viewpoint;
+      }
+      else {
+        mvs_viewpoint = true;
+      }
     }
   };
 
   struct ViewpointMotion {
-    ViewpointMotion(ViewpointEntryIndex from_index, ViewpointEntryIndex to_index, Motion motion)
-    : from_index(from_index), to_index(to_index), motion(motion) {}
+   public:
+    using Iterator = std::vector<ViewpointEntryIndex>::iterator;
+    using ConstIterator = std::vector<ViewpointEntryIndex>::const_iterator;
 
-    ViewpointEntryIndex from_index;
-    ViewpointEntryIndex to_index;
-    Motion motion;
+    explicit ViewpointMotion() {}
+
+    explicit ViewpointMotion(const std::vector<ViewpointEntryIndex>& viewpoint_indices, const std::vector<SE3Motion>& se3_motions)
+    : viewpoint_indices_(viewpoint_indices), se3_motions_(se3_motions) {
+#if !AIT_RELEASE
+      AIT_ASSERT(viewpoint_indices_.size() >= 2);
+      AIT_ASSERT(se3_motions_.size() == viewpoint_indices_.size() - 1);
+#endif
+    }
+
+    explicit ViewpointMotion(std::vector<ViewpointEntryIndex>&& viewpoint_indices, std::vector<SE3Motion>&& se3_motions)
+    : viewpoint_indices_(std::move(viewpoint_indices)), se3_motions_(std::move(se3_motions)) {
+#if !AIT_RELEASE
+      AIT_ASSERT(viewpoint_indices_.size() >= 2);
+      AIT_ASSERT(se3_motions_.size() == viewpoint_indices_.size() - 1);
+#endif
+    }
+
+    bool isValid() const {
+      return !viewpoint_indices_.empty();
+    }
+    ViewpointEntryIndex fromIndex() const {
+      return viewpoint_indices_.front();
+    }
+
+    ViewpointEntryIndex toIndex() const {
+      return viewpoint_indices_.back();
+    }
+
+    Iterator begin() {
+      return viewpoint_indices_.begin();
+    }
+
+    Iterator end() {
+      return viewpoint_indices_.end();
+    }
+
+    ConstIterator begin() const {
+      return viewpoint_indices_.begin();
+    }
+
+    ConstIterator end() const {
+      return viewpoint_indices_.end();
+    }
+
+    const std::vector<ViewpointEntryIndex>& viewpointIndices() const {
+      return viewpoint_indices_;
+    }
+
+    const std::vector<SE3Motion>& se3Motions() const {
+      return se3_motions_;
+    }
+
+    FloatType distance() const {
+      const FloatType dist = std::accumulate(
+          se3_motions_.begin(), se3_motions_.end(), FloatType(0), [] (const FloatType value, const SE3Motion& se3_motion) -> FloatType {
+        // Sanity check
+//#if !AIT_RELEASE
+//        AIT_ASSERT(se3_motion.poses.size() >= 2);
+//        FloatType local_dist = 0;
+//        for (auto pose_it = se3_motion.poses.begin() + 1; pose_it != se3_motion.poses.end(); ++pose_it) {
+//          const auto prev_pose_it = pose_it - 1;
+//          local_dist += (pose_it->getWorldPosition() - prev_pose_it->getWorldPosition()).norm();
+//        }
+//        AIT_ASSERT(ait::isApproxEqual(se3_motion.distance, local_dist, FloatType(1e-2)));
+//#endif
+        return value + se3_motion.distance;
+      });
+      return dist;
+    }
+
+    void append(const ViewpointMotion& other) {
+      if (isValid()) {
+        AIT_ASSERT(toIndex() == other.fromIndex());
+        for (auto it = other.viewpointIndices().begin() + 1; it != other.viewpointIndices().end(); ++it) {
+          viewpoint_indices_.push_back(*it);
+          const SE3Motion& se3_motion = other.se3Motions()[it - 1 - other.viewpointIndices().begin()];
+          se3_motions_.push_back(se3_motion);
+        }
+      }
+      else {
+        *this = other;
+      }
+    }
+
+    void reverse() {
+#if !AIT_RELEASE
+      const FloatType dist_before = distance();
+#endif
+      std::reverse(viewpoint_indices_.begin(), viewpoint_indices_.end());
+      std::reverse(se3_motions_.begin(), se3_motions_.end());
+      for (SE3Motion& se3_motion : se3_motions_) {
+        std::reverse(se3_motion.poses.begin(), se3_motion.poses.end());
+      }
+#if !AIT_RELEASE
+      const FloatType dist_after = distance();
+      AIT_ASSERT(ait::isApproxEqual(dist_before, dist_after, FloatType(1e-2)));
+#endif
+    }
+
+    ViewpointMotion getReverse() const {
+      ViewpointMotion copy(viewpoint_indices_, se3_motions_);
+      copy.reverse();
+      return copy;
+    }
+
+  private:
+    // Boost serialization
+    friend class boost::serialization::access;
+
+    template <typename Archive>
+    void serialize(Archive& ar, const unsigned int version) {
+     ar & viewpoint_indices_;
+     ar & se3_motions_;
+    }
+
+    std::vector<ViewpointEntryIndex> viewpoint_indices_;
+    std::vector<SE3Motion> se3_motions_;
   };
 
   struct ViewpointPath {
     // Viewpoint entries on the path
     std::vector<ViewpointPathEntry> entries;
     // Indices into entries array ordered according to the flight path
-    std::vector<std::size_t> order;
-    // Set of voxels that are observed on the whole path
-    VoxelWithInformationSet observed_voxel_set;
+    std::vector<size_t> order;
+//    // Set of voxels that are observed on the whole path
+//    VoxelWithInformationSet observed_voxel_set;
+    // Map with voxels and partial information on the whole path
+    VoxelMap observed_voxel_map;
     // Accumulated information over the whole path
     FloatType acc_information;
     // Accumulated motion distance over the whole path
@@ -519,82 +665,15 @@ public:
 
   struct ViewpointPathComputationData {
     // Viewpoint entries sorted by ascending order of their novel information for the corresponding viewpoint
-    std::vector<std::pair<ViewpointEntryIndex, FloatType>> sorted_new_informations;
+    std::vector<std::tuple<ViewpointEntryIndex, FloatType, bool>> sorted_new_informations;
     // Number of viewpoints in the entries array that have been connected to each other
-    std::size_t num_connected_entries = 0;
+    size_t num_connected_entries = 0;
     struct VoxelTriangulation {
-      std::size_t num_triangulated = 0;
+      size_t num_triangulated = 0;
       std::vector<ViewpointEntryIndex> observing_entries;
     };
     std::unordered_map<const VoxelType*, VoxelTriangulation> voxel_observation_counts;
     std::unordered_map<const VoxelType*, std::vector<std::pair<ViewpointEntryIndex, ViewpointEntryIndex>>> triangulated_voxel_to_path_entries_map;
-  };
-
-  class ViewpointPathSaver {
-  public:
-    ViewpointPathSaver(const std::vector<ViewpointPath>& paths,
-        const std::vector<ViewpointPathComputationData>& comp_datas,
-        const ViewpointPlannerData::OccupiedTreeType& bvh_tree)
-    : paths_(paths), comp_datas_(comp_datas), voxel_set_saver_(bvh_tree) {}
-
-  private:
-    // Boost serialization
-    friend class boost::serialization::access;
-
-    template <typename Archive>
-    void serialize(Archive& ar, const unsigned int version) const {
-      ar & paths_.size();
-      for (std::size_t i = 0; i < paths_.size(); ++i) {
-        const ViewpointPath& path = paths_[i];
-        const ViewpointPathComputationData& comp_data = comp_datas_[i];
-        ar & path.entries;
-        ar & path.order;
-        ar & path.acc_information;
-        ar & path.acc_motion_distance;
-        ar & path.acc_objective;
-        voxel_set_saver_.save(path.observed_voxel_set, ar, version);
-        ar & comp_data.sorted_new_informations;
-      }
-    }
-
-    const std::vector<ViewpointPath>& paths_;
-    const std::vector<ViewpointPathComputationData>& comp_datas_;
-    const VoxelWithInformationSetSaver voxel_set_saver_;
-  };
-
-  class ViewpointPathLoader {
-  public:
-    ViewpointPathLoader(std::vector<ViewpointPath>* paths,
-        std::vector<ViewpointPathComputationData>* comp_datas,
-        ViewpointPlannerData::OccupiedTreeType* bvh_tree)
-    : paths_(paths), comp_datas_(comp_datas), voxel_set_loader_(bvh_tree) {}
-
-  private:
-    // Boost serialization
-    friend class boost::serialization::access;
-
-    template <typename Archive>
-    void serialize(Archive& ar, const unsigned int version) {
-      std::size_t num_paths;
-      ar & num_paths;
-      paths_->resize(num_paths);
-      comp_datas_->resize(num_paths);
-      for (std::size_t i = 0; i < paths_->size(); ++i) {
-        ViewpointPath& path = (*paths_)[i];
-        ViewpointPathComputationData& comp_data = (*comp_datas_)[i];
-        ar & path.entries;
-        ar & path.order;
-        ar & path.acc_information;
-        ar & path.acc_motion_distance;
-        ar & path.acc_objective;
-        voxel_set_loader_.load(&path.observed_voxel_set, ar, version);
-        ar & comp_data.sorted_new_informations;
-      }
-    }
-
-    std::vector<ViewpointPath>* paths_;
-    std::vector<ViewpointPathComputationData>* comp_datas_;
-    VoxelWithInformationSetLoader voxel_set_loader_;
   };
 
   // Wrapper for computations on a viewpoint path
@@ -615,21 +694,32 @@ public:
   };
 
   using ViewpointGraph = Graph<ViewpointEntryIndex, FloatType>;
-  using ViewpointANN = ait::ApproximateNearestNeighbor<FloatType, 3>;
-  using FeatureViewpointMap = std::unordered_map<std::size_t, std::vector<const Viewpoint*>>;
+  using ViewpointANN = bh::ApproximateNearestNeighbor<FloatType, 3>;
+  using FeatureViewpointMap = std::unordered_map<size_t, std::vector<const Viewpoint*>>;
 
 
   ViewpointPlanner(const Options* options,
       const MotionPlannerType::Options* motion_options, std::unique_ptr<ViewpointPlannerData> data);
 
+  const Options getOptions() const;
+
+  const ViewpointPlannerData& getPlannerData() const;
+
+  ViewpointPlannerData& getPlannerData();
+
   /// Get virtual camera
   const PinholeCamera& getVirtualCamera() const;
 
-  /// Set size of virtual camera used for raycasting.
-  void setVirtualCamera(std::size_t virtual_width, std::size_t virtual_height, const Matrix4x4& virtual_intrinsics);
+  const Vector3& getDroneExtent() const;
 
   /// Set size of virtual camera used for raycasting by scaling a real camera.
   void setScaledVirtualCamera(CameraId camera_id, FloatType scale_factor);
+
+  /// Set size of virtual camera used for raycasting.
+  void setVirtualCamera(size_t virtual_width, size_t virtual_height, const FloatType focal_length);
+
+  /// Set size of virtual camera used for raycasting.
+  void setVirtualCamera(size_t virtual_width, size_t virtual_height, const Matrix4x4& virtual_intrinsics);
 
   /// Reset planning (i.e. viewpoint entries, graph and path)
   void reset();
@@ -654,16 +744,112 @@ public:
 
   void exportViewpointPathAsJson(const std::string& filename, const ViewpointPath& viewpoint_path) const;
 
+  void exportViewpointPathAsText(const std::string& filename, const ViewpointPath& viewpoint_path) const;
+
+  void exportViewpointPathAsSparseReconstruction(const std::string& path, const ViewpointPath& viewpoint_path) const;
+
+  bool isSparsePointVisible(const Viewpoint& viewpoint, const Point3D& point3d) const;
+
+  bool isSparsePointMatchable(const Viewpoint& viewpoint1, const Viewpoint& viewpoint2, const Point3D& point3d) const;
+
+  QImage drawSparsePoints(
+      const Viewpoint& viewpoint, const FloatType sparse_point_size = FloatType(1.1)) const;
+
+  QImage drawSparsePoints(
+      const ViewpointEntryIndex viewpoint_index, const FloatType sparse_point_size = FloatType(1.1)) const;
+
+  void dumpSparsePoints(const Viewpoint& viewpoint,
+                             const std::string& filename,
+                             const FloatType sparse_point_size = FloatType(1.1)) const;
+
+  void dumpSparsePoints(const ViewpointEntryIndex viewpoint_index,
+                             const std::string& filename,
+                             const FloatType sparse_point_size = FloatType(1.1)) const;
+
+  void dumpSparsePoints(const ViewpointEntryIndex viewpoint_index,
+                             const FloatType sparse_point_size = FloatType(1.1)) const;
+
+  QImage drawSparseMatching(
+      const Viewpoint& viewpoint1, const Viewpoint& viewpoint2,
+      const bool draw_lines = true,
+      const FloatType sparse_point_size = FloatType(1.1), const FloatType match_line_width = FloatType(0.05)) const;
+
+  QImage drawSparseMatching(
+      const ViewpointEntryIndex viewpoint_index1, const ViewpointEntryIndex viewpoint_index2,
+      const bool draw_lines = true,
+      const FloatType sparse_point_size = FloatType(1.1), const FloatType match_line_width = FloatType(0.05)) const;
+
+  void dumpSparseMatching(
+      const ViewpointEntryIndex viewpoint_index1, const ViewpointEntryIndex viewpoint_index2,
+      const std::string& filename,
+      const bool draw_lines = true,
+      const FloatType sparse_point_size = FloatType(1.1), const FloatType match_line_width = FloatType(0.05)) const;
+
+  void dumpSparseMatching(
+      const ViewpointEntryIndex viewpoint_index1, const ViewpointEntryIndex viewpoint_index2,
+      const bool draw_lines = true,
+      const FloatType sparse_point_size = FloatType(1.1), const FloatType match_line_width = FloatType(0.05)) const;
+
+  void dumpSparseMatching(
+      const Viewpoint& viewpoint1, const Viewpoint& viewpoint2,
+      const std::string& filename,
+      const bool draw_lines = true,
+      const FloatType sparse_point_size = FloatType(1.1), const FloatType match_line_width = FloatType(0.05)) const;
+
+  std::unordered_set<Point3DId> computeVisibleSparsePoints(
+      const Viewpoint& viewpoint,
+      const SparseReconstruction::Point3DMapType::const_iterator first,
+      const SparseReconstruction::Point3DMapType::const_iterator last) const;
+
+  std::unordered_set<Point3DId> computeVisibleSparsePoints(const Viewpoint& viewpoint) const;
+
+  // Return visible sparse points for a specific viewpoint entry (computes them if not already cached)
+  const std::unordered_set<Point3DId>& getCachedVisibleSparsePoints(const ViewpointEntryIndex viewpoint_index) const;
+
+  FloatType computeSparseMatchingScore(
+      const Viewpoint& ref_viewpoint, const Viewpoint& other_viewpoint,
+      const std::unordered_set<Point3DId>& ref_visible_points,
+      const std::unordered_set<Point3DId>& other_visible_points) const;
+
+  FloatType computeSparseMatchingScore(
+      const Viewpoint& ref_viewpoint, const Viewpoint& other_viewpoint) const;
+
+  FloatType computeSparseMatchingScore(
+      const ViewpointEntryIndex viewpoint_index1, const ViewpointEntryIndex viewpoint_index2) const;
+
+  bool isSparseMatchable(
+      const Viewpoint& ref_viewpoint, const Viewpoint& other_viewpoint,
+      const std::unordered_set<Point3DId>& ref_visible_points,
+      const std::unordered_set<Point3DId>& other_visible_points) const;
+
+  bool isSparseMatchable(
+      const ViewpointEntryIndex viewpoint_index1, const ViewpointEntryIndex viewpoint_index2) const;
+
+  bool isSparseMatchable(const Viewpoint& ref_viewpoint, const Viewpoint& other_viewpoint) const;
+
+  void augmentedViewpointPathForSparseMatching(ViewpointPath* viewpoint_path);
+
   RegionType getRoi() const {
     return data_->roi_;
   }
 
   BoundingBoxType getRoiBbox() const {
-    return data_->roi_.getBoundingBox();
+    return data_->roi_bbox_;
+  }
+
+  BoundingBoxType getPositiveWeightBbox() const {
+    BoundingBoxType positive_weight_bbox(
+        data_->roi_bbox_.getMinimum().array() - data_->options_.roi_falloff_distance,
+        data_->roi_bbox_.getMaximum().array() + data_->options_.roi_falloff_distance);
+    return positive_weight_bbox;
   }
 
   BoundingBoxType getBvhBbox() const {
     return data_->bvh_bbox_;
+  }
+
+  BoundingBoxType getPoseSampleBbox() const {
+    return pose_sample_bbox_;
   }
 
   const OccupancyMapType* getOctree() const {
@@ -674,12 +860,28 @@ public:
     return data_->occupied_bvh_;
   }
 
+  bool hasReconstruction() const {
+      return static_cast<bool>(data_->reconstruction_);
+  }
+
   const DenseReconstruction* getReconstruction() const {
       return data_->reconstruction_.get();
   }
 
+  bool hasGpsTransformation() const {
+    return hasReconstruction() && data_->reconstruction_->hasSfmGpsTransformation();
+  }
+
+  bool hasDensePoints() const {
+      return static_cast<bool>(data_->dense_points_);
+  }
+
   const PointCloudType* getDensePoints() const {
     return data_->dense_points_.get();
+  }
+
+  bool hasMesh() const {
+      return static_cast<bool>(data_->poisson_mesh_);
   }
 
   const MeshType* getMesh() const {
@@ -706,6 +908,11 @@ public:
     return viewpoint_paths_;
   }
 
+  /// Return viewpoint paths for reading. Mutex needs to be locked.
+  std::vector<ViewpointPath>& getViewpointPaths() {
+    return viewpoint_paths_;
+  }
+
   /// Return additional computation data for viewpoint paths. Mutex needs to be locked.
   const std::vector<ViewpointPathComputationData>& getViewpointPathsComputationData() const {
     return viewpoint_paths_data_;
@@ -715,38 +922,64 @@ public:
   bool hasViewpointMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index) const;
 
   /// Return the motion between two viewpoints.
-  Motion getViewpointMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index) const;
+  ViewpointMotion getViewpointMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index) const;
 
   /// Adds a viewpoint motion to the graph. Reverses the order depending on the index ordering (see getViewpointMotion).
-  void addViewpointMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index, const Motion& motion);
-  void addViewpointMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index, Motion&& motion);
+//  void addViewpointMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index, const Motion& motion);
+//  void addViewpointMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index, Motion&& motion);
+  void addViewpointMotion(const ViewpointMotion& motion);
+  void addViewpointMotion(ViewpointMotion&& motion);
 
   /// Return best viewpoint path for reading. Mutex needs to be locked.
   const ViewpointPath& getBestViewpointPath() const;
 
+  /// Return best viewpoint path for reading. Mutex needs to be locked.
+  ViewpointPath& getBestViewpointPath();
+
   /// Acquire lock to acces viewpoint entries (including graph and path) or reset the planning
   std::unique_lock<std::mutex> acquireLock();
+
+#if WITH_OPENGL_OFFSCREEN
+
+  /// Acquire lock for using any OpenGL context
+  std::unique_lock<std::mutex> acquireOpenGLLock() const;
+
+#endif
 
   // Pose and viewpoint sampling
 
   template <typename IteratorT>
-  std::tuple<bool, ViewpointPlanner::Pose, std::size_t>
+  std::tuple<bool, ViewpointPlanner::Pose, size_t>
   sampleSurroundingPose(IteratorT first, IteratorT last) const;
+
+  template <typename IteratorT>
+  IteratorT sampleViewpointByGridCounts(IteratorT first, IteratorT last) const;
+
+  void updateViewpointSamplingDistribution();
 
 //  template <typename IteratorT>
 //  std::pair<bool, Pose> sampleSurroundingPoseFromEntries(IteratorT first, IteratorT last) const;
 
   std::pair<bool, Pose> sampleSurroundingPose(const Pose& pose) const;
 
-  std::pair<bool, Pose> samplePose(std::size_t max_trials = (std::size_t)-1) const;
+  std::pair<bool, Pose> samplePose(const size_t max_trials = (size_t)-1,
+       const bool biased_orientation = true) const;
 
   std::pair<bool, Pose> samplePose(const BoundingBoxType& bbox,
-      const Vector3& object_extent, std::size_t max_trials = (std::size_t)-1) const;
+      const Vector3& object_extent, size_t max_trials = (size_t)-1,
+      const bool biased_orientation = true) const;
 
-  std::pair<bool, ViewpointPlanner::Vector3> samplePosition(std::size_t max_trials = (std::size_t)-1) const;
+  std::pair<bool, Pose> samplePose(const RegionType& region,
+      const Vector3& object_extent, size_t max_trials = (size_t)-1,
+      const bool biased_orientation = true) const;
+
+  std::pair<bool, ViewpointPlanner::Vector3> samplePosition(const size_t max_trials = (size_t)-1) const;
 
   std::pair<bool, ViewpointPlanner::Vector3> samplePosition(const BoundingBoxType& bbox,
-      const Vector3& object_extent, std::size_t max_trials = (std::size_t)-1) const;
+      const Vector3& object_extent, size_t max_trials = (size_t)-1) const;
+
+  std::pair<bool, ViewpointPlanner::Vector3> samplePosition(const RegionType& region,
+      const Vector3& object_extent, size_t max_trials = (size_t)-1) const;
 
   Pose::Quaternion sampleOrientation() const;
 
@@ -761,17 +994,22 @@ public:
   /// Check if an object can be placed at a position (i.e. is it free space)
   bool isValidObjectPosition(const Vector3& position, const Vector3& object_extent) const;
 
-  // TODO: remove
-  void run();
-
   /// Generate a new viewpoint entry and add it to the graph.
   bool generateNextViewpointEntry();
 
   /// Compute motions between viewpoints and update the graph with their cost.
   void computeViewpointMotions();
 
+  /// Compute the novel observation information that a viewpoint will generate
+  FloatType evaluateNovelViewpointInformation(
+      const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data,
+      const ViewpointEntryIndex viewpoint_index);
+
   /// Find the next best viewpoint to add to the viewpoint paths.
   bool findNextViewpointPathEntries(const FloatType alpha, const FloatType beta);
+
+  /// Initialize data structures for finding viewpoint paths
+  void initializeViewpointPathEntries(const FloatType alpha, const FloatType beta);
 
   /// Find initial viewpoints on viewpoint paths
   void findInitialViewpointPathEntries(const FloatType alpha, const FloatType beta);
@@ -779,14 +1017,40 @@ public:
   /// Find the next best viewpoint to add to the viewpoint paths and use parameters from options.
   bool findNextViewpointPathEntries();
 
+  bool isValidViewpointPathEntry(
+      const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data,
+      const ViewpointEntryIndex viewpoint_index,
+      const bool ignore_if_already_on_path = false) const;
+
   /// Compute new information score of a new viewpoint for a given viewpoint path
-  FloatType computeNewInformation(const std::size_t viewpoint_path_index, const ViewpointEntryIndex new_viewpoint_index) const;
+  FloatType computeNewInformation(const size_t viewpoint_path_index, const ViewpointEntryIndex new_viewpoint_index) const;
 
   /// Compute the connected components of the graph and return a pair of the component labels and the number of components.
-  const std::pair<std::vector<std::size_t>, std::size_t>& getConnectedComponents() const;
+  const std::pair<std::vector<size_t>, size_t>& getConnectedComponents() const;
 
   /// Compute a viewpoint tour for all paths
   void computeViewpointTour();
+
+  /// Add a path entry to a viewpoint path
+  void addViewpointPathEntry(const size_t viewpoint_path_index,
+                             const ViewpointEntryIndex viewpoint_index,
+                             const bool ignore_observed_voxels = false);
+
+  /// Add a path entry to a viewpoint path
+  void addViewpointPathEntry(const size_t viewpoint_path_index,
+                             const Pose& pose,
+                             const bool ignore_observed_voxels = false);
+
+  /// Add a path entry to a viewpoint path
+  bool addViewpointPathEntryWithStereoPair(const size_t viewpoint_path_index,
+                                           const ViewpointEntryIndex viewpoint_index,
+                                           const bool ignore_observed_voxels = false);
+
+  /// Add a path entry together with a corresponding stereo viewpoint.
+  /// If a stereo viewpoint can be found returns true. Otherwise returns false.
+  bool addViewpointPathEntryWithStereoPair(const size_t viewpoint_path_index,
+                                           const Pose& pose,
+                                           const bool ignore_observed_voxels = false);
 
   // Raycasting and information computation
 
@@ -801,9 +1065,38 @@ public:
   /// Perform raycast on the BVH tree on a limited window around the center.
   /// Returns a vector of hit voxels with additional info.
   std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxels(
-      const Viewpoint& viewpoint, const std::size_t width, const std::size_t height) const;
+      const Viewpoint& viewpoint, const size_t width, const size_t height) const;
+
+  /// Perform raycast on the BVH tree on a limited window around the center.
+  /// Returns a vector of hit voxels with additional info.
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult>
+  getRaycastHitVoxels(
+      const Viewpoint& viewpoint,
+      const size_t x_start, const size_t x_end,
+      const size_t y_start, const size_t y_end) const;
+
+  /// Perform raycast on the BVH tree.
+  /// Returns a vector of hit voxels with additional info.
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResultWithScreenCoordinates>
+  getRaycastHitVoxelsWithScreenCoordinates(
+      const Viewpoint& viewpoint) const;
+
+  /// Perform raycast on the BVH tree on a limited window around the center.
+  /// Returns a vector of hit voxels with additional info.
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResultWithScreenCoordinates>
+  getRaycastHitVoxelsWithScreenCoordinates(
+      const Viewpoint& viewpoint, const size_t width, const size_t height) const;
+
+  /// Perform raycast on the BVH tree on a limited window around the center.
+  /// Returns a vector of hit voxels with additional info.
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResultWithScreenCoordinates>
+  getRaycastHitVoxelsWithScreenCoordinates(
+      const Viewpoint& viewpoint,
+      const size_t x_start, const size_t x_end,
+      const size_t y_start, const size_t y_end) const;
 
 #if WITH_CUDA
+
   /// Perform raycast on the BVH tree.
   /// Returns a vector of hit voxels with additional info.
   std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxelsCuda(
@@ -812,24 +1105,89 @@ public:
   /// Perform raycast on the BVH tree on a limited window around the center.
   /// Returns a vector of hit voxels with additional info.
   std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxelsCuda(
-      const Viewpoint& viewpoint, const std::size_t width, const std::size_t height) const;
+      const Viewpoint& viewpoint, const size_t width, const size_t height) const;
+
+  /// Perform raycast on the BVH tree.
+  /// Returns a vector of hit voxels with additional info.
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult>
+  getRaycastHitVoxelsCuda(
+      const Viewpoint& viewpoint,
+      const size_t x_start, const size_t x_end,
+      const size_t y_start, const size_t y_end) const;
+
+  /// Perform raycast on the BVH tree.
+  /// Returns a vector of hit voxels with additional info.
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResultWithScreenCoordinates>
+  getRaycastHitVoxelsWithScreenCoordinatesCuda(
+      const Viewpoint& viewpoint) const;
+
+  /// Perform raycast on the BVH tree on a limited window around the center.
+  /// Returns a vector of hit voxels with additional info.
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResultWithScreenCoordinates>
+  getRaycastHitVoxelsWithScreenCoordinatesCuda(
+      const Viewpoint& viewpoint, const size_t width, const size_t height) const;
+
+  /// Perform raycast on the BVH tree.
+  /// Returns a vector of hit voxels with additional info.
+  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResultWithScreenCoordinates>
+  getRaycastHitVoxelsWithScreenCoordinatesCuda(
+      const Viewpoint& viewpoint,
+      const size_t x_start, const size_t x_end,
+      const size_t y_start, const size_t y_end) const;
+
 #endif
 
   /// Perform raycast on the BVH tree.
   /// Returns the set of hit voxels with corresponding information + the total information of all voxels.
   std::pair<VoxelWithInformationSet, FloatType>
-    getRaycastHitVoxelsWithInformationScore(const Viewpoint& viewpoint) const;
+    getRaycastHitVoxelsWithInformationScore(
+            const Viewpoint& viewpoint,
+            const bool ignore_voxels_with_zero_information = false) const;
 
-  /// Returns the information score for a single hit voxel.
-  FloatType computeInformationScore(const Viewpoint& viewpoint, const VoxelType* node) const;
+  /// Perform raycast on the BVH tree on a centered window with specific size.
+  /// Returns the set of hit voxels with corresponding information + the total information of all voxels.
+  std::pair<VoxelWithInformationSet, FloatType>
+    getRaycastHitVoxelsWithInformationScore(
+            const Viewpoint& viewpoint, const size_t width, const size_t height,
+            const bool ignore_voxels_with_zero_information = false) const;
 
-  /// Returns the information score for a single hit voxel result.
-  FloatType computeInformationScore(const Viewpoint& viewpoint,
+  /// Perform raycast on the BVH tree.
+  /// Returns the set of hit voxels with corresponding information + the total information of all voxels.
+  std::pair<VoxelWithInformationSet, FloatType>
+    getRaycastHitVoxelsWithInformationScore(
+        const Viewpoint& viewpoint,
+        const size_t x_start, const size_t x_end,
+        const size_t y_start, const size_t y_end,
+        const bool ignore_voxels_with_zero_information = false) const;
+
+  /// Returns the observation factor in [0, 1] for a single voxel.
+  FloatType computeViewpointObservationFactor(const Viewpoint& viewpoint, const VoxelType* node) const;
+
+  /// Returns the observation factor in [0, 1] for a single voxel.
+  FloatType computeViewpointObservationFactor(
+      const Viewpoint& viewpoint, const VoxelType* node, const Vector2& screen_coordinates) const;
+
+  /// Returns the observation score for a voxel.
+  FloatType computeViewpointObservationScore(const Viewpoint& viewpoint, const VoxelType* node) const;
+
+  /// Returns the observation score for a voxel.
+  FloatType computeViewpointObservationScore(
+      const Viewpoint& viewpoint, const VoxelType* node, const Vector2& screen_coordinates) const;
+
+  /// Returns the observation score for a single hit voxel result.
+  FloatType computeViewpointObservationScore(const Viewpoint& viewpoint,
       const ViewpointPlannerData::OccupiedTreeType::IntersectionResult& result) const;
 
-  /// Returns the information score for a container of VoxelWithInformation objects.
+  /// Returns the observation score for a single hit voxel result.
+  FloatType computeViewpointObservationScore(const Viewpoint& viewpoint,
+      const ViewpointPlannerData::OccupiedTreeType::IntersectionResultWithScreenCoordinates& result) const;
+
+  /// Returns the observation score for a container of VoxelWithInformation objects.
   template <typename Iterator>
   FloatType computeInformationScore(const Viewpoint& viewpoint, Iterator first, Iterator last) const;
+
+  /// Compute information weighted center position of observed voxels
+  Vector3 computeInformationVoxelCenter(const ViewpointEntry& viewpoint_entry) const;
 
   // Matching score computation
 
@@ -851,10 +1209,49 @@ public:
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
+#if WITH_OPENGL_OFFSCREEN
+
+  QImage drawPoissonMesh(const ViewpointEntryIndex viewpoint_index) const;
+  QImage drawPoissonMesh(const Viewpoint& viewpoint) const;
+  QImage drawPoissonMesh(const Pose& pose) const;
+  QImage drawPoissonMesh(const QMatrix4x4& pvm_matrix) const;
+  QImage drawPoissonMeshNormals(const ViewpointEntryIndex viewpoint_index) const;
+  QImage drawPoissonMeshNormals(const Viewpoint& viewpoint) const;
+  QImage drawPoissonMeshNormals(const Pose& pose) const;
+  QImage drawPoissonMeshNormals(const QMatrix4x4& pvm_matrix) const;
+  QImage drawPoissonMeshDepth(const ViewpointEntryIndex viewpoint_index) const;
+  QImage drawPoissonMeshDepth(const Viewpoint& viewpoint) const;
+  QImage drawPoissonMeshDepth(const Pose& pose) const;
+  QImage drawPoissonMeshDepth(const QMatrix4x4& pvm_matrix, const QMatrix4x4& vm_matrix) const;
+
+  Vector3 computePoissonMeshNormalVector(const Viewpoint& viewpoint, const Vector3& position) const;
+
+  Vector3 computePoissonMeshNormalVector(const Viewpoint& viewpoint,
+                                         const size_t x, const size_t y) const;
+
+  FloatType computePoissonMeshDepth(const Viewpoint& viewpoint, const Vector3& position) const;
+
+  FloatType computePoissonMeshDepth(const Viewpoint& viewpoint,
+                                         const size_t x, const size_t y) const;
+
+  ait::Color4<uint8_t> encodeDepthValue(const FloatType depth) const;
+
+  FloatType decodeDepthValue(const ait::Color4<uint8_t>& color) const;
+
+  FloatType decodeDepthValue(const QColor& color) const;
+
+  QImage convertEncodedDepthImageToRGB(const QImage& encoded_image, const FloatType min_depth, const FloatType max_depth) const;
+
+#endif
+
 private:
   /// Remove duplicate hit voxels from raycast results
   void removeDuplicateRaycastHitVoxels(
       std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult>* raycast_results) const;
+
+  /// Remove duplicate hit voxels from raycast results
+  void removeDuplicateRaycastHitVoxels(
+      std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResultWithScreenCoordinates>* raycast_results) const;
 
   /// Remove points that are occluded from the given pose.
   /// A point needs to be dist_margin behind a voxel surface to be removed.
@@ -867,29 +1264,43 @@ private:
   WeightType computeResolutionInformationFactor(const Viewpoint& viewpoint, const VoxelType* node) const;
 
   /// Compute incidence information factor based on incidence angle
+  WeightType computeIncidenceInformationFactor(
+      const Viewpoint& viewpoint, const VoxelType* node, const Vector3& normal_vector) const;
+
+  /// Compute incidence information factor based on incidence angle
   WeightType computeIncidenceInformationFactor(const Viewpoint& viewpoint, const VoxelType* node) const;
 
-  /// Add a viewpoint entry to the graph.
-  void addViewpointEntry(ViewpointEntry&& viewpoint_entry);
+  /// Compute incidence information factor based on incidence angle.
+  /// Screen coordinates are provided to retrieve normal vector.
+  WeightType computeIncidenceInformationFactor(
+      const Viewpoint& viewpoint, const VoxelType* node, const Vector2& screen_coordinates) const;
 
-  /// Add a viewpoint entry. This also computes motion distances to other viewpoints and updates edges in the graph.
-  void addViewpointEntryAndMotions(ViewpointEntry&& viewpoint_entry, const std::vector<ViewpointMotion>& motions);
+  /// Add a viewpoint entry to the graph.
+  ViewpointEntryIndex addViewpointEntry(ViewpointEntry&& viewpoint_entry);
 
   /// Add a viewpoint entry without acquiring a lock. Returns the index of the new viewpoint entry.
   ViewpointEntryIndex addViewpointEntryWithoutLock(ViewpointEntry&& viewpoint_entry);
 
   /// Add a path entry to a viewpoint path
-  void addViewpointPathEntry(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data,
-      const ViewpointPathEntry& new_path_entry);
+  void addViewpointPathEntryWithoutLock(ViewpointPath *viewpoint_path, ViewpointPathComputationData *comp_data,
+                                        const ViewpointPathEntry &new_path_entry,
+                                        const bool ignore_observed_voxels = false);
+
+  /// Add stereo viewpoint to a viewpoint path
+  void addStereoViewpointPathEntryWithoutLock(ViewpointPath *viewpoint_path, ViewpointPathComputationData *comp_data,
+                                              const ViewpointPathEntry &first_path_entry,
+                                              const ViewpointPathEntry &second_path_entry,
+                                              const bool add_second_entry = true);
 
   /// Find a matching viewpoint for stereo matching. If no suitable viewpoint with enough overlap is already in the graph
   /// a new viewpoint is added. Returns a pair indicating whether the stereo viewpoint is already on the path (true) or not (false)
   /// and the index of the corresponding viewpoint entry. Must be called with lock.
   std::pair<bool, ViewpointEntryIndex> findMatchingStereoViewpointWithoutLock(
-      ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data, const ViewpointPathEntry& path_entry);
-
-  /// Find motion paths from provided viewpoint to neighbors in the viewpoint graph.
-  std::vector<ViewpointMotion> findViewpointMotions(const Pose& from_pose, std::size_t tentative_viewpoint_index);
+      const ViewpointPath& viewpoint_path,
+      const ViewpointPathComputationData& comp_data,
+      const ViewpointEntryIndex& viewpoint_index,
+      const bool ignore_sparse_matching = false,
+      const bool ignore_graph_component = false);
 
   /// Find motion paths from provided viewpoint to neighbors in the viewpoint graph.
   std::vector<ViewpointMotion> findViewpointMotions(const ViewpointEntryIndex from_index);
@@ -906,7 +1317,7 @@ private:
   void initializeViewpointPathInformations(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data);
 
   /// Compute and update information scores of other viewpoints given a path.
-  void updateViewpointPathInformations(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data) const;
+  void updateViewpointPathInformations(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data);
 
   /// Returns the best next viewpoint index.
   std::pair<ViewpointEntryIndex, FloatType> getBestNextViewpoint(
@@ -923,24 +1334,31 @@ private:
 
   /// Compute an upper bound on the information value of a given path
   FloatType computeViewpointPathInformationUpperBound(
-      const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data, const std::size_t max_num_viewpoints) const;
+      const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data, const size_t max_num_viewpoints) const;
 
   /// Report info of current viewpoint paths
   void reportViewpointPathsStats() const;
 
   /// Compute approx. shortest cycle to cover all viewpoints in the path (i.e. solve TSP problem)
-  std::vector<std::size_t> computeApproximateShortestCycle(const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data);
+  std::vector<size_t> computeApproximateShortestCycle(const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data);
 
   /// Reorders the viewpoint path to an approx. shortest cycle covering all viewpoints (i.e. TSP solution)
   void solveApproximateTSP(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data);
 
   /// Ensures that all viewpoints on a path are connected by searching for shortest motion paths if necessary
-  void ensureConnectedViewpointPath(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data);
+  void ensureConnectedViewpointPath(
+      ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data, const bool recompute_all = false);
 
   /// Uses 2 Opt to improve the viewpoint tour
   void improveViewpointTourWith2Opt(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data);
 
-  /// Find shortest motion between two viewpoints using A-Star on the viewpoint graph. Returns true if successful.
+  /// Find shortest motion between two viewpoints using A-Star on the viewpoint graph.
+  ViewpointMotion findShortestMotionAStar(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index);
+
+  /// Optimize viewpoint motion by reducing redundant in-between viewpoints
+  ViewpointMotion optimizeViewpointMotion(const ViewpointMotion& motion) const;
+
+  /// Find shortest motion between two viewpoints and add resulting motions to the graph. Returns true if a motion was found.
   bool findAndAddShortestMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index);
 
   /// Find shortest motion between a new viewpoint and existing viewpoints using A-Star on the viewpoint graph. Returns true if successful.
@@ -948,16 +1366,44 @@ private:
   bool findAndAddShortestMotions(const ViewpointEntryIndex from_index, Iterator to_index_first, Iterator to_index_last);
 
   /// Computes the length of a viewpoint tour (cycle)
-  FloatType computeTourLength(const ViewpointPath& viewpoint_path, const std::vector<std::size_t>& order) const;
+  FloatType computeTourLength(const ViewpointPath& viewpoint_path, const std::vector<size_t>& order) const;
 
   /// Returns a new tour order where the path from k_start to k_end is reversed
-  std::vector<std::size_t> swap2Opt(
+  std::vector<size_t> swap2Opt(
       ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data,
-      const std::size_t k_start, const std::size_t k_end) const;
+      const size_t k_start, const size_t k_end) const;
 
-private:
   /// Create a subgraph with the nodes from a viewpoint path
   ViewpointPathGraphWrapper createViewpointPathGraph(const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data);
+
+#if WITH_OPENGL_OFFSCREEN
+
+  /// Initialize OpenGL offscreen surface for rendering mesh normals
+  void initializeOpenGL() const;
+
+  void clearOpenGL() const;
+
+  /// Upload poisson mesh to GPU for rendering
+  void uploadPoissonMesh() const;
+
+  void bindOpenGLFbo() const;
+  void releaseOpenGLFbo() const;
+
+  void beginOpenGLDrawing() const;
+  void finishOpenGLDrawing() const;
+
+  QMatrix4x4 getPvmMatrixFromViewpoint(const Viewpoint& viewpoint) const;
+  QMatrix4x4 getPvmMatrixFromPose(const Pose& pose) const;
+  QMatrix4x4 getVmMatrixFromViewpoint(const Viewpoint& viewpoint) const;
+  QMatrix4x4 getVmMatrixFromPose(const Pose& pose) const;
+
+  mutable Pose cached_poisson_mesh_normals_pose_;
+  mutable QImage cached_poisson_mesh_normals_image_;
+
+  mutable Pose cached_poisson_mesh_depth_pose_;
+  mutable QImage cached_poisson_mesh_depth_image_;
+
+#endif
 
   mutable ait::Random<FloatType, std::int64_t> random_;
 
@@ -969,6 +1415,9 @@ private:
   FloatType triangulation_min_sin_angle_square_;
   FloatType triangulation_max_sin_angle_square_;
   FloatType triangulation_max_angular_deviation_;
+  FloatType incidence_angle_threshold_;
+  FloatType incidence_angle_falloff_factor_;
+  FloatType voxel_sensor_size_ratio_falloff_factor_;
 
   std::unique_ptr<ViewpointPlannerData> data_;
   PinholeCamera virtual_camera_;
@@ -977,28 +1426,57 @@ private:
 
   MotionPlannerType motion_planner_;
 
+  // Counter of failed viewpoint entry samples. Reset to 0 after each successfull sample.
+  size_t num_of_failed_viewpoint_entry_samples_;
   // All tentative viewpoints
   ViewpointEntryVector viewpoint_entries_;
+  // Cached visible sparse points
+  mutable std::unordered_map<ViewpointEntryIndex, std::unordered_set<reconstruction::Point3DId>> cached_visible_sparse_points_;
+  // Mutex for cached visible sparse points
+  mutable std::mutex cached_visible_sparse_points_mutex_;
   // Number of real viewpoints at the beginning of the viewpoint_entries_ vector
   // These need to be distinguished because they could be in non-free space of the map
-  std::size_t num_real_viewpoints_;
+  size_t num_real_viewpoints_;
   // Approximate nearest neighbor index for viewpoints
   ViewpointANN viewpoint_ann_;
   // Graph of tentative viewpoints with motion distances
   ViewpointGraph viewpoint_graph_;
+  // Grid of viewpoint counts in the sampling space
+  ContinuousGridType viewpoint_count_grid_;
+  // Mapping from viewpoint to grid indices
+  std::vector<Eigen::Vector3s> viewpoint_grid_indices_;
+  // Probability for sampling a new viewpoint in a grid cell
+  std::vector<FloatType> grid_cell_probabilities_;
+  // Discrete distribution to sample from viewpoints
+  mutable std::discrete_distribution<size_t> viewpoint_sampling_distribution_;
+  // Size of viewpoint graph when distribution was last updated
+  size_t viewpoint_sampling_distribution_update_size_;
   // Connected components of viewpoint graph
-  mutable std::pair<std::vector<std::size_t>, std::size_t> viewpoint_graph_components_;
+  mutable std::pair<std::vector<size_t>, size_t> viewpoint_graph_components_;
   // Flag indicating whether connected components are valid
   mutable bool viewpoint_graph_components_valid_;
   // Motion description of the connections in the viewpoint graph (indexed by viewpoint id pair)
-  std::unordered_map<ViewpointIndexPair, Motion, ViewpointIndexPair::Hash> viewpoint_graph_motions_;
+  std::unordered_map<ViewpointIndexPair, ViewpointMotion, ViewpointIndexPair::Hash> viewpoint_graph_motions_;
+  /// Flag indicating whether viewpoint paths have been initialized
+  bool viewpoint_paths_initialized_;
   // Current viewpoint paths
   std::vector<ViewpointPath> viewpoint_paths_;
   // Data used for computation of viewpoint paths
   std::vector<ViewpointPathComputationData> viewpoint_paths_data_;
   // Map from triangle index to viewpoints that project features into it
   FeatureViewpointMap feature_viewpoint_map_;
+
+#if WITH_OPENGL_OFFSCREEN
+  mutable std::mutex opengl_mutex_;
+  mutable std::mutex poisson_mesh_cache_mutex_;
+  mutable QOffscreenSurface* opengl_surface_;
+  mutable QOpenGLContext* opengl_context_;
+  mutable QOpenGLFramebufferObject* opengl_fbo_;
+  mutable TriangleDrawer* poisson_mesh_drawer_;
+#endif
 };
+
+BOOST_CLASS_VERSION(ViewpointPlanner::ViewpointPathEntry, 2)
 
 #include "viewpoint_planner.hxx"
 

@@ -16,7 +16,7 @@ DenseReconstruction::DenseReconstruction() {}
 
 DenseReconstruction::~DenseReconstruction() {}
 
-void DenseReconstruction::read(const std::string& path, const bool read_sfm_gps_transformation /*=true*/) {
+void DenseReconstruction::read(const std::string& path, const bool read_sfm_gps_transformation /*=false*/) {
   path_ = path;
   depth_maps_.clear();
   normal_maps_.clear();

@@ -121,6 +121,15 @@ public:
   }
 
   __host__ __device__
+  FloatT maxCoeff() const {
+    FloatT max = vector_[0];
+    for (std::size_t i = 1; i < Rows; ++i) {
+      max = std::max(max, vector_[i]);
+    }
+    return max;
+  }
+
+  __host__ __device__
   FloatT squaredNorm() const {
     FloatT squared_norm = 0;
     for (std::size_t i = 0; i < Rows; ++i) {

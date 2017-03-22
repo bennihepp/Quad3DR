@@ -7,14 +7,25 @@
 //==================================================
 #pragma once
 
+#include "../bh/eigen.h"
+/*
+#include <cstddef>
 #include <Eigen/Dense>
 #include <Eigen/StdVector>
 #include <unordered_map>
 
 namespace Eigen
 {
+//    using Mat4f = Eigen::Matrix<float, 4, 4>;
+//    using Mat4d = Eigen::Matrix<double, 4, 4>;
+//    using Mat3f = Eigen::Matrix<float, 3, 3>;
+//    using Mat3d = Eigen::Matrix<double, 3, 3>;
+
     using Matrix3x4d = Matrix<double, 3, 4>;
     using Matrix3x4f = Matrix<float, 3, 4>;
+    using Vector2s = Matrix<std::size_t, 3, 1>;
+    using Vector3s = Matrix<std::size_t, 3, 1>;
+    using Vector4s = Matrix<std::size_t, 3, 1>;
 }
 
 EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Vector2f)
@@ -50,3 +61,4 @@ EIGEN_DEFINE_STL_VECTOR_SPECIALIZATION(Eigen::Quaterniond)
     using Matrix3x4 = Eigen::Matrix<FloatType, 3, 4>; \
     using Quaternion = Eigen::Quaternion<FloatType>; \
     using AngleAxis = Eigen::AngleAxis<FloatType>;
+*/

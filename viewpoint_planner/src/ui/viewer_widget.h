@@ -37,6 +37,7 @@
 #include <qglviewer.h>
 #include <ait/thread.h>
 #include <ait/options.h>
+#include <boost/any.hpp>
 #include <QOpenGLFunctions>
 #include <QOpenGLFunctions_3_3_Core>
 
@@ -52,6 +53,8 @@ class ViewerWidget;
 
 class ViewpointPlannerThread : public ait::PausableThread {
 public:
+  USE_FIXED_EIGEN_TYPES(float);
+
   enum Operation {
     NOP,
     VIEWPOINT_GRAPH,
@@ -59,6 +62,8 @@ public:
     VIEWPOINT_PATH,
     VIEWPOINT_PATH_TSP,
     VIEWPOINT_UPDATE,
+    RAYCAST,
+    DUMP_POISSON_MESH,
   };
 
   ViewpointPlannerThread(ViewpointPlanner* planner, ViewerWidget* viewer_widget);
@@ -81,6 +86,29 @@ public:
 
   void updateViewpoints();
 
+  void requestRaycast(const Viewpoint& viewpoint,
+                      const std::size_t x_start, const std::size_t x_end,
+                      const std::size_t y_start, const std::size_t y_end);
+
+  const Viewpoint& getRaycastViewpoint() const;
+  std::size_t getRaycastXStart() const;
+  std::size_t getRaycastXEnd() const;
+  std::size_t getRaycastYStart() const;
+  std::size_t getRaycastYEnd() const;
+
+  const std::pair<ViewpointPlanner::VoxelWithInformationSet, float>& getRaycastResults() const;
+
+  std::unordered_map<ViewpointPlanner::VoxelWrapper, Vector3, ViewpointPlanner::VoxelWrapper::Hash>
+  getRaycastPoissonMeshNormals() const;
+
+  std::unordered_map<ViewpointPlanner::VoxelWrapper, float, ViewpointPlanner::VoxelWrapper::Hash>
+  getRaycastPoissonMeshDepth() const;
+
+  std::unordered_map<ViewpointPlanner::VoxelWrapper, Vector2, ViewpointPlanner::VoxelWrapper::Hash>
+  getRaycastScreenCoordinates() const;
+
+  void requestPoissonMeshDump(const ait::Pose<float>& pose);
+
 protected:
   Result runIteration() override;
 
@@ -94,6 +122,19 @@ private:
   double alpha_;
   double beta_;
   std::size_t viewpoint_path_branch_index_;
+
+  Viewpoint raycast_viewpoint_;
+  std::size_t raycast_x_start_;
+  std::size_t raycast_x_end_;
+  std::size_t raycast_y_start_;
+  std::size_t raycast_y_end_;
+
+  std::pair<ViewpointPlanner::VoxelWithInformationSet, float> raycast_results_;
+  std::unordered_map<ViewpointPlanner::VoxelWrapper, Vector3, ViewpointPlanner::VoxelWrapper::Hash> raycast_poisson_mesh_normals_;
+  std::unordered_map<ViewpointPlanner::VoxelWrapper, float, ViewpointPlanner::VoxelWrapper::Hash> raycast_poisson_mesh_depth_;
+  std::unordered_map<ViewpointPlanner::VoxelWrapper, Vector2, ViewpointPlanner::VoxelWrapper::Hash> raycast_screen_coordinates_;
+
+  ait::Pose<float> dump_pose_;
 };
 
 class CustomCamera : public qglviewer::Camera {
@@ -139,6 +180,8 @@ class ViewerWidget : public QGLViewer//, protected QOpenGLFunctions_3_3_Core
 
   const int kScreenshotQuality = 90;
 
+  const int kSelectionClickTimeMs = 500;
+
 public:
 
   struct Options : ait::ConfigOptions {
@@ -160,6 +203,7 @@ public:
   using FloatType = float;
   USE_FIXED_EIGEN_TYPES(FloatType);
   using Pose = ait::Pose<FloatType>;
+  using Color4 = typename ViewpointDrawer<FloatType>::Color4;
 
   static ViewerWidget* create(const Options& options, ViewpointPlanner* planner, ViewerSettingsPanel* settings_panel,
       ViewerPlannerPanel* planner_panel, QWidget *parent = nullptr) {
@@ -185,11 +229,22 @@ public:
   void showRegionOfInterest(const ViewpointPlanner::RegionType& roi);
   void showBvhBbox(const ViewpointPlanner::BoundingBoxType& bvh_bbox);
   void showViewpointGraph(const std::size_t selected_index = (std::size_t)-1);
+  void uploadViewpointGraphDrawerViewpointsWithoutLock(
+          const size_t selected_index,
+          const bool use_selection_mode = false);
   void showViewpointGraphMotions(const std::size_t selected_index);
   void showViewpointPath(const std::size_t selected_index = (std::size_t)-1);
   void showViewpointPathMotions(const std::size_t selected_index = (std::size_t)-1);
+  void uploadViewpointPathDrawerViewpointsWithoutLock(
+          const size_t selected_index,
+          const bool use_selection_mode = false);
   void showSparseReconstruction(const SparseReconstruction* sparse_recon);
   void resetView();
+
+
+  Color4 readPixelColor(const size_t x, const size_t y) const;
+  size_t colorToSelectionIndex(const Color4& color) const;
+  Color4 selectionIndexToColor(const size_t index) const;
 
   Pose getCameraPose() const;
   void setCameraPose(const Pose& camera_pose);
@@ -199,11 +254,17 @@ public:
   QSize sizeHint() const override;
   int heightForWidth(int w) const override;
 
+  void updateGL() override;
+
 public slots:
     // Settings panel slots
   void refreshTree();
   void setDrawRaycast(bool draw_raycast);
   void captureRaycast();
+  void captureRaycastWithCurrentInformation();
+  void captureInformationVoxelCenter();
+  void captureRaycast(
+      const std::size_t x_start, const std::size_t x_end, const std::size_t y_start, const std::size_t y_end);
   void captureRaycastWindow(const std::size_t width, const std::size_t height);
   void setOccupancyBinThreshold(double occupancy_bin_threshold);
   void setColorFlags(uint32_t color_flags);
@@ -268,6 +329,11 @@ public slots:
   void setViewpointColorMode(std::size_t color_mode);
   void setViewpointGraphComponent(int component);
 
+  void onRaycastFinished();
+
+  void signalRaycastFinished();
+
+
 protected slots:
   void updateViewpoints();
   void onPlannerThreadPaused();
@@ -278,82 +344,106 @@ protected slots:
 signals:
   void viewpointsChanged();
   void plannerThreadPaused();
+  void raycastFinished();
 
 protected:
-    void draw() override;
-    void drawWithNames() override;
-    void init() override;
-    void initAxesDrawer();
+  enum SelectableObjectType {
+    INVALID,
+    VIEWPOINT_GRAPH_ENTRY,
+    VIEWPOINT_PATH_ENTRY,
+  };
 
-    void postDraw() override;
-    void postSelection(const QPoint&) override;
+  void draw() override;
+  void drawWithNames() override;
+  void init() override;
+  void initAxesDrawer();
 
-    void wheelEvent(QWheelEvent* event) override;
-    void keyPressEvent(QKeyEvent *event) override;
-    void saveScreenshot(const std::string& filename);
+  void postDraw() override;
+  void postSelection(const QPoint&) override;
 
-    qglviewer::Vec eigenToQglviewer(const Vector3& eig_vec) const;
-    Vector3 qglviewerToEigen(const qglviewer::Vec& qgl_vec) const;
-    qglviewer::Quaternion eigenToQglviewer(const Quaternion& eig_quat) const;
-    Quaternion qglviewerToEigen(const qglviewer::Quaternion& qgl_quat) const;
+  std::pair<SelectableObjectType, boost::any> selectObject(const size_t x, const size_t y);
+  std::pair<size_t, Color4> addSelectableObject(const SelectableObjectType type, const boost::any& value);
 
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  void wheelEvent(QWheelEvent* event) override;
+  void keyPressEvent(QKeyEvent *event) override;
+  void mousePressEvent(QMouseEvent* event) override;
+  void mouseReleaseEvent(QMouseEvent* event) override;
+  void mouseMoveEvent(QMouseEvent* event) override;
+  void saveScreenshot(const std::string& filename);
+
+  qglviewer::Vec eigenToQglviewer(const Vector3& eig_vec) const;
+  Vector3 qglviewerToEigen(const qglviewer::Vec& qgl_vec) const;
+  qglviewer::Quaternion eigenToQglviewer(const Quaternion& eig_quat) const;
+  Quaternion qglviewerToEigen(const qglviewer::Quaternion& qgl_quat) const;
+
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
 private:
-    friend class ViewpointPlannerThread;
+  friend class ViewpointPlannerThread;
 
-    enum ViewpointColorMode : std::size_t {
-      Fixed = 1,
-      Component = 2,
-      Information = 3,
-      Indexed = 4,
-    };
+  enum ViewpointColorMode : std::size_t {
+    Fixed = 1,
+    Component = 2,
+    Information = 3,
+    Indexed = 4,
+  };
 
-    std::vector<std::pair<std::string, ViewerWidget::ViewpointColorMode>> getAvailableViewpointColorModes() const;
+  std::vector<std::pair<std::string, ViewerWidget::ViewpointColorMode>> getAvailableViewpointColorModes() const;
 
-    Options options_;
+  Options options_;
 
-    WebSocketServer* web_socket_server_;
+  WebSocketServer* web_socket_server_;
 
-    CustomCamera custom_camera_;
-    double z_near_coefficient_;
+  CustomCamera custom_camera_;
+  double z_near_coefficient_;
 
-    std::mutex mutex_;
+  std::mutex mutex_;
 
-    ViewpointPlanner* planner_;
-    bool initialized_;
-    ViewerSettingsPanel* settings_panel_;
-    ViewerPlannerPanel* planner_panel_;
-    const ViewpointPlanner::OccupancyMapType* octree_;
-    const SparseReconstruction* sparse_recon_;
-    const ViewpointPlanner::PointCloudType* dense_points_;
-    FloatType dense_points_size_;
-    const ViewpointPlanner::MeshType* poisson_mesh_;
+  ViewpointPlanner* planner_;
+  bool initialized_;
+  ViewerSettingsPanel* settings_panel_;
+  ViewerPlannerPanel* planner_panel_;
+  std::vector<std::pair<SelectableObjectType, boost::any>> selection_list_;
+  QTimer selection_timer_;
 
-    FloatType aspect_ratio_;
-    LineDrawer axes_drawer_;
-    OcTreeDrawer octree_drawer_;
-    SparseReconstructionDrawer sparce_recon_drawer_;
-    PointDrawer dense_points_drawer_;
-    TriangleDrawer poisson_mesh_drawer_;
-    LineDrawer poisson_mesh_normal_drawer_;
-    LineDrawer region_of_interest_drawer_;
-    LineDrawer bvh_bbox_drawer_;
-    FloatType bbox_line_width_;
+  size_t selected_viewpoint_graph_entry_index_;
+  size_t selected_viewpoint_path_branch_index_;
+  size_t selected_viewpoint_path_entry_index_;
 
-    ViewpointDrawer<FloatType> viewpoint_graph_drawer_;
-    ViewpointDrawer<FloatType> viewpoint_path_drawer_;
-    LineDrawer viewpoint_motion_line_drawer_;
-    FloatType viewpoint_motion_line_width_;
-    FloatType min_information_filter_;
-    ViewpointColorMode viewpoint_color_mode_;
-    int viewpoint_selected_component_;
+  const ViewpointPlanner::OccupancyMapType* octree_;
+  const SparseReconstruction* sparse_recon_;
+  const ViewpointPlanner::PointCloudType* dense_points_;
+  FloatType dense_points_size_;
+  const ViewpointPlanner::MeshType* poisson_mesh_;
+
+  FloatType aspect_ratio_;
+  LineDrawer axes_drawer_;
+  OcTreeDrawer octree_drawer_;
+  SparseReconstructionDrawer sparce_recon_drawer_;
+  PointDrawer dense_points_drawer_;
+  TriangleDrawer poisson_mesh_drawer_;
+  LineDrawer poisson_mesh_normal_drawer_;
+  LineDrawer region_of_interest_drawer_;
+  LineDrawer bvh_bbox_drawer_;
+  FloatType bbox_line_width_;
+
+  ViewpointDrawer<FloatType> viewpoint_graph_drawer_;
+  ViewpointDrawer<FloatType> viewpoint_path_drawer_;
+  LineDrawer viewpoint_motion_line_drawer_;
+  FloatType viewpoint_motion_line_width_;
+  FloatType min_information_filter_;
+  ViewpointColorMode viewpoint_color_mode_;
+  int viewpoint_selected_component_;
 
 //    QTimer* process_timer_;
-    ViewpointPlannerThread planner_thread_;
-    std::vector<std::tuple<ViewpointPlanner::ViewpointEntryIndex, Pose, FloatType>> viewpoint_graph_copy_;
-    std::vector<std::tuple<ViewpointPlanner::ViewpointEntryIndex, Pose, FloatType, bool>> viewpoint_path_copy_;
-    std::vector<std::size_t> viewpoint_path_order_copy_;
-    std::size_t viewpoint_path_branch_index_;
+  ViewpointPlannerThread planner_thread_;
+  std::size_t viewpoint_path_branch_index_;
 
+  enum RaycastMode {
+    DEFAULT,
+    WITH_CURRENT_INFORMATION,
+    INFORMATION_VOXEL_CENTER,
+  };
+
+  RaycastMode raycast_mode_;
 };

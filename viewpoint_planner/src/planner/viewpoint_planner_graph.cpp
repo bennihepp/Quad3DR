@@ -1,65 +1,96 @@
 //==================================================
-// viewpoint_planner_tsp.cpp
+// viewpoint_planner_graph.cpp
 //
-//  Copyright (c) 2017 Benjamin Hepp.
+//  Copyright (c) 2016 Benjamin Hepp.
 //  Author: Benjamin Hepp
-//  Created on: Jan 4, 2017
+//  Created on: Mar 9, 2017
 //==================================================
 
 #include "viewpoint_planner.h"
-#include <boost/graph/graph_traits.hpp>
-#include <boost/graph/adjacency_list.hpp>
 #include <boost/graph/connected_components.hpp>
-#include <boost/graph/astar_search.hpp>
-#include <boost/graph/metric_tsp_approx.hpp>
 
-using std::swap;
+ViewpointPlanner::ViewpointEntryIndex ViewpointPlanner::addViewpointEntryWithoutLock(ViewpointEntry&& viewpoint_entry) {
+  const ViewpointEntryIndex viewpoint_index = viewpoint_entries_.size();
+  const Vector3 viewpoint_position = viewpoint_entry.viewpoint.pose().getWorldPosition();
+//  std::cout << "Adding position to ANN index" << std::endl;
+  viewpoint_ann_.addPoint(viewpoint_position);
+//  std::cout << "Putting viewpoint entry into array" << std::endl;
+  if (viewpoint_entries_.capacity() == viewpoint_entries_.size()) {
+    std::cout << "Increasing capacity for viewpoint entries" << std::endl;
+    const size_t new_viewpoint_entries_capacity = (size_t)std::ceil(1.25 * viewpoint_entries_.size());
+    viewpoint_entries_.reserve(new_viewpoint_entries_capacity);
+  }
+  viewpoint_entries_.emplace_back(std::move(viewpoint_entry));
+//  std::cout << "Adding node to viewpoint graph" << std::endl;
+  viewpoint_graph_.addNode(viewpoint_index);
+  viewpoint_graph_components_valid_ = false;
+#if !AIT_RELEASE
+  AIT_ASSERT(viewpoint_count_grid_.isInsideGrid(viewpoint_position));
+#endif
+  viewpoint_count_grid_(viewpoint_position) += 1;
+  viewpoint_grid_indices_.push_back(viewpoint_count_grid_.getGridIndices(viewpoint_position));
+  // Check if viewpoint sampling distribution should be updated
+  const size_t increase_since_last_update = viewpoint_entries_.size() - viewpoint_sampling_distribution_update_size_;
+  const FloatType relative_increase_since_last_update = increase_since_last_update / FloatType(viewpoint_entries_.size());
+  if (viewpoint_entries_.size() >= num_real_viewpoints_
+      && relative_increase_since_last_update >= FloatType(0.05)) {
+    std::cout << "Updating viewpoint sampling distribution" << std::endl;
+    updateViewpointSamplingDistribution();
+    viewpoint_sampling_distribution_update_size_ = viewpoint_entries_.size();
+  }
+  return viewpoint_index;
+}
 
-namespace {
-
-struct astar_found_goal {};
-
-template <typename Graph>
-class astar_goal_visitor : public boost::default_astar_visitor {
-public:
-  using Vertex = typename boost::graph_traits<Graph>::vertex_descriptor;
-
-  astar_goal_visitor(Vertex goal)
-  : goal_(goal) {}
-
-//  void examine_vertex()
-  void finish_vertex(Vertex v, Graph& g) {
-    if (v == goal_) {
-      throw astar_found_goal();
+void ViewpointPlanner::updateViewpointSamplingDistribution() {
+  std::vector<FloatType> weights;
+  weights.reserve(viewpoint_entries_.size());
+  const auto grid_count_lambda = [&](const ViewpointEntry& entry) {
+    const Vector3 viewpoint_position = entry.viewpoint.pose().getWorldPosition();
+    return viewpoint_count_grid_(viewpoint_position);
+  };
+  const auto max_it = std::max_element(viewpoint_entries_.begin() + num_real_viewpoints_, viewpoint_entries_.end(),
+                                       [&] (const ViewpointEntry& entry1, const ViewpointEntry& entry2) {
+    return grid_count_lambda(entry1) < grid_count_lambda(entry2);
+  });
+  const FloatType max_grid_count = grid_count_lambda(*max_it);
+  FloatType exp_factor = 20;
+  if (viewpoint_entries_.size() >= num_real_viewpoints_ + 100) {
+    exp_factor = 1;
+  }
+  for (auto it = viewpoint_entries_.begin() + num_real_viewpoints_; it != viewpoint_entries_.end(); ++it) {
+    const FloatType grid_count = grid_count_lambda(*it);
+    AIT_ASSERT(grid_count > 0);
+    const FloatType weight = std::exp(-grid_count * exp_factor / max_grid_count);
+    weights.push_back(weight);
+  }
+  viewpoint_sampling_distribution_ = std::discrete_distribution<size_t>(weights.begin(), weights.end());
+//  // Display non-empty grid cells
+  if (viewpoint_entries_.size() >= num_real_viewpoints_ + 100) {
+  //  std::cout << "Viewpoint grid:" << std::endl;
+    for (size_t ix = 0; ix < viewpoint_count_grid_.getDimX(); ++ix) {
+      for (size_t iy = 0; iy < viewpoint_count_grid_.getDimY(); ++iy) {
+        for (size_t iz = 0; iz < viewpoint_count_grid_.getDimZ(); ++iz) {
+          const size_t index = viewpoint_count_grid_.getIndex(ix, iy, iz);
+          const FloatType grid_count = viewpoint_count_grid_(ix, iy, iz);
+          const FloatType probability = std::exp(-grid_count * 20 / max_grid_count);
+          grid_cell_probabilities_[index] = probability;
+  //        if (grid_count > 0) {
+  //          std::cout << "  grid element (" << ix << ", " << iy << ", " << iz << ") has " << grid_count << " viewpoints" << std::endl;
+  //        }
+        }
+      }
     }
   }
-
-private:
-  Vertex goal_;
-};
-
-template <typename ViewpointPlanner, typename CostType>
-class astar_distance_heuristic : public boost::astar_heuristic<typename ViewpointPlanner::ViewpointGraph::BoostGraph, CostType> {
-public:
-  using Vertex = typename boost::graph_traits<typename ViewpointPlanner::ViewpointGraph::BoostGraph>::vertex_descriptor;
-
-  astar_distance_heuristic(ViewpointPlanner& planner, Vertex goal)
-  : planner_(planner) {
-    typename ViewpointPlanner::ViewpointEntryIndex goal_index = planner_.getViewpointGraph().getNode(goal);
-    goal_viewpoint_ = planner_.getViewpointEntries()[goal_index];
+  else {
+    std::fill(grid_cell_probabilities_.begin(), grid_cell_probabilities_.end(), 1);
   }
+}
 
-  CostType operator()(Vertex v) {
-    typename ViewpointPlanner::ViewpointEntryIndex index = planner_.getViewpointGraph().getNode(v);
-    typename ViewpointPlanner::ViewpointEntry viewpoint = planner_.getViewpointEntries()[index];
-    return (goal_viewpoint_.viewpoint.pose().getWorldPosition() - viewpoint.viewpoint.pose().getWorldPosition()).norm();
-  }
-
-private:
-  ViewpointPlanner& planner_;
-  typename ViewpointPlanner::ViewpointEntry goal_viewpoint_;
-};
-
+ViewpointPlanner::ViewpointEntryIndex ViewpointPlanner::addViewpointEntry(ViewpointEntry&& viewpoint_entry) {
+  std::unique_lock<std::mutex> lock(mutex_);
+  const ViewpointEntryIndex viewpoint_index = addViewpointEntryWithoutLock(std::move(viewpoint_entry));
+  lock.unlock();
+  return viewpoint_index;
 }
 
 const std::pair<std::vector<std::size_t>, std::size_t>& ViewpointPlanner::getConnectedComponents() const {
@@ -72,329 +103,262 @@ const std::pair<std::vector<std::size_t>, std::size_t>& ViewpointPlanner::getCon
   return viewpoint_graph_components_;
 }
 
-bool ViewpointPlanner::findAndAddShortestMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index) {
+bool ViewpointPlanner::generateNextViewpointEntry() {
   const bool verbose = true;
 
-  ViewpointGraph::Vertex start = viewpoint_graph_.getVertexByNode(from_index);
-  ViewpointGraph::Vertex goal = viewpoint_graph_.getVertexByNode(to_index);
-  if (start == goal) {
-    if (verbose) {
-      std::cout << "viewpoints are the same so no connection is necessary" << std::endl;
-    }
-    return true;
+  // If we have failed to sample the second viewpoint too many times we clear the viewpoint graph and start over again.
+  const std::size_t max_failed_second_viewpoint_entry_samples = 50;
+  if (viewpoint_entries_.size() == num_real_viewpoints_ + 1
+      && num_of_failed_viewpoint_entry_samples_ >= max_failed_second_viewpoint_entry_samples) {
+    std::cout << "WARNING: Too many failed attempts to sample the second viewpoints. Resetting viewpoint graph." << std::endl;
+    reset();
   }
-  if (viewpoint_graph_.isConnected(start, goal)) {
-    if (verbose) {
-      std::cout << "viewpoints already connected" << std::endl;
-    }
-    return true;
+
+  // Sample viewpoint and add it to the viewpoint graph
+
+  bool found_sample;
+  Pose sampled_pose;
+  ViewpointEntryIndex reference_viewpoint_index = (ViewpointEntryIndex)-1;
+
+//  if (verbose) {
+//    std::cout << "Trying to sample viewpoint" << std::endl;
+//  }
+  if (viewpoint_entries_.size() <= num_real_viewpoints_ && options_.isSet("drone_start_position")) {
+    const Pose drone_start_pose = Pose::createFromImageToWorldTransformation(options_.drone_start_position, Quaternion::Identity());
+    std::tie(found_sample, sampled_pose) = sampleSurroundingPose(drone_start_pose);
   }
-  std::vector<ViewpointGraph::Vertex> predecessors(viewpoint_graph_.size());
-  std::vector<FloatType> distances(viewpoint_graph_.size());
-  bool found_goal = false;
-  try {
-    boost::astar_search(viewpoint_graph_.boostGraph(),
-        start,
-        astar_distance_heuristic<ViewpointPlanner, FloatType>(*this, goal),
-        boost::visitor(astar_goal_visitor<const ViewpointGraph::BoostGraph>(goal)).
-        predecessor_map(&predecessors.front()).
-        distance_map(&distances.front()));
-  } catch (const astar_found_goal& fg) {
-    FloatType motion_distance = distances[goal];
-    found_goal = true;
-    if (verbose) {
-      std::cout << "  Found path to " << to_index << " with distance " << motion_distance
-          << ", line of sight distance is "
-          << (viewpoint_entries_[from_index].viewpoint.pose().getWorldPosition() - viewpoint_entries_[to_index].viewpoint.pose().getWorldPosition()).norm() << std::endl;
+  else {
+    const bool sample_without_reference = random_.sampleBernoulli(options_.viewpoint_sample_without_reference_probability);
+    if (sample_without_reference) {
+      std::tie(found_sample, sampled_pose) = samplePose(pose_sample_bbox_, drone_extent_);
     }
-    std::vector<ViewpointEntryIndex> reverse_viewpoint_indices_path;
-    for (ViewpointGraph::Vertex v = goal;; v = predecessors[v]) {
-      if (verbose) {
-        std::cout << "   " << viewpoint_graph_.getNode(v) << std::endl;
+    else {
+      const auto viewpoint_it = sampleViewpointByGridCounts(
+          viewpoint_entries_.cbegin() + num_real_viewpoints_, viewpoint_entries_.cend());
+      if (viewpoint_it == viewpoint_entries_.cend()) {
+        found_sample = false;
       }
-      reverse_viewpoint_indices_path.push_back(viewpoint_graph_.getNode(v));
-      if (predecessors[v] == v) {
+      else {
+        const Pose& reference_pose = viewpoint_it->viewpoint.pose();
+        std::tie(found_sample, sampled_pose) = sampleSurroundingPose(reference_pose);
+        const size_t grid_index = viewpoint_count_grid_.getIndex(viewpoint_count_grid_.getGridIndices(reference_pose.getWorldPosition()));
+        const FloatType prob = grid_cell_probabilities_[grid_index];
+        const FloatType u = random_.sampleUniform();
+        if (u > prob) {
+          found_sample = false;
+        }
+      }
+    }
+  }
+  if (!found_sample) {
+//    if (verbose) {
+//      std::cout << "Failed to sample pose." << i << std::endl;
+//    }
+    ++num_of_failed_viewpoint_entry_samples_;
+    return false;
+  }
+
+  const Viewpoint viewpoint = getVirtualViewpoint(sampled_pose);
+
+  // Check distance to other viewpoints and discard if too close
+  const std::size_t dist_knn = options_.viewpoint_discard_dist_knn;
+  const FloatType dist_thres_square = options_.viewpoint_discard_dist_thres_square;
+  const std::size_t dist_count_thres = options_.viewpoint_discard_dist_count_thres;
+  const FloatType dist_real_thres_square = options_.viewpoint_discard_dist_real_thres_square;
+  static std::vector<ViewpointANN::IndexType> knn_indices;
+  static std::vector<ViewpointANN::DistanceType> knn_distances;
+  knn_indices.resize(dist_knn);
+  knn_distances.resize(dist_knn);
+  viewpoint_ann_.knnSearch(sampled_pose.getWorldPosition(), dist_knn, &knn_indices, &knn_distances);
+  std::size_t too_close_count = 0;
+//  for (ViewpointANN::IndexType viewpoint_index : knn_indices) {
+//    const ViewpointEntry& other_viewpoint = viewpoint_entries_[viewpoint_index];
+//    FloatType dist_square = (pose.getWorldPosition() - other_viewpoint.viewpoint.pose().getWorldPosition()).squaredNorm();
+  for (std::size_t i = 0; i < knn_distances.size(); ++i) {
+    const ViewpointANN::DistanceType dist_square = knn_distances[i];
+    const ViewpointEntryIndex viewpoint_index = knn_indices[i];
+    if (viewpoint_index < num_real_viewpoints_ && dist_square < dist_real_thres_square) {
+//      if (verbose) {
+//        std::cout << "Rejected: Too close to real viewpoint" << std::endl;
+//      }
+      ++num_of_failed_viewpoint_entry_samples_;
+      return false;
+    }
+//    std::cout << "dist_square=" << dist_square << std::endl;
+    if (dist_square < dist_thres_square) {
+      ++too_close_count;
+//      if (verbose) {
+//        std::cout << "dist_square=" << dist_square << std::endl;
+//      }
+      if (too_close_count > dist_count_thres) {
         break;
       }
     }
-    AIT_ASSERT(reverse_viewpoint_indices_path.back() == from_index);
-    AIT_ASSERT(reverse_viewpoint_indices_path.front() == to_index);
-    // Densify viewpoint graph motions (add all shortest paths that were found to the graph)
-    for (auto from_it = reverse_viewpoint_indices_path.rbegin(); from_it < reverse_viewpoint_indices_path.rend(); ++from_it) {
-      Motion motion;
-      motion.distance = 0;
-      motion.cost = 0;
-      for (auto to_it = from_it + 1; to_it < reverse_viewpoint_indices_path.rend(); ++to_it) {
-        const ViewpointEntryIndex idx1 = *(to_it - 1);
-        const ViewpointEntryIndex idx2 = *to_it;
-        const Motion& sub_motion = getViewpointMotion(idx1, idx2);
-        motion.distance += sub_motion.distance;
-        motion.cost += sub_motion.cost;
-        for (const Pose& pose : sub_motion.poses) {
-          motion.poses.push_back(pose);
-        }
-        addViewpointMotion(*from_it, idx2, motion);
-      }
-    }
-    AIT_ASSERT(viewpoint_graph_.numEdges() == viewpoint_graph_motions_.size());
-  }
-  if (verbose && !found_goal) {
-    std::cout << "Could not find a motion from " << from_index << " to " << to_index << std::endl;
-  }
-  //  AIT_ASSERT(found_goal);
-  return found_goal;
-}
-
-ViewpointPlanner::ViewpointPathGraphWrapper ViewpointPlanner::createViewpointPathGraph(
-    const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data) {
-  const bool verbose = false;
-
-  using BoostGraph = ViewpointPathGraphWrapper::BoostGraph;
-  using Vertex = ViewpointPathGraphWrapper::Vertex;
-  using IndexMap = ViewpointPathGraphWrapper::IndexMap;
-  using WeightProperty = ViewpointPathGraphWrapper::WeightProperty;
-
-  if (verbose) {
-    std::cout << "Building subgraph for viewpoint path" << std::endl;
-  }
-  ViewpointPathGraphWrapper graph_wrapper;
-  graph_wrapper.graph = BoostGraph(comp_data.num_connected_entries);
-  graph_wrapper.index_map = boost::get(boost::vertex_index, graph_wrapper.graph);
-  std::unordered_map<Vertex, ViewpointEntryIndex>& viewpoint_indices = graph_wrapper.viewpoint_indices;
-  std::unordered_map<ViewpointEntryIndex, Vertex>& viewpoint_index_to_vertex_map = graph_wrapper.viewpoint_index_to_vertex_map;
-  BoostGraph& graph = graph_wrapper.graph;
-
-  if (verbose) {
-    for (std::size_t i = 0; i < comp_data.num_connected_entries; ++i) {
-      const ViewpointEntryIndex index1 = viewpoint_path.entries[i].viewpoint_index;
-      for (std::size_t j = i+1; j < comp_data.num_connected_entries; ++j) {
-        const ViewpointEntryIndex index2 = viewpoint_path.entries[j].viewpoint_index;
-        std::cout << "Viewpoint " << index1 << " connected to " << index2 << "? "
-            << viewpoint_graph_.isConnectedByNode(index1, index2) << std::endl;
-      }
-    }
   }
 
-  // Fill maps for viewpoint index to node and vice versa
-  for (std::size_t i = 0; i < comp_data.num_connected_entries; ++i) {
-    Vertex v1 = boost::vertex(i, graph);
-    const ViewpointPathEntry& path_entry = viewpoint_path.entries[i];
-    viewpoint_indices.emplace(v1, path_entry.viewpoint_index);
-    viewpoint_index_to_vertex_map.emplace(path_entry.viewpoint_index, v1);
+//  // Test code for approximate nearest neighbor search
+//  static std::vector<ViewpointANN::IndexType> knn_indices2;
+//  static std::vector<ViewpointANN::DistanceType> knn_distances2;
+//  knn_indices2.resize(dist_knn);
+//  knn_distances2.resize(dist_knn);
+//  viewpoint_ann_.knnSearchExact(pose.getWorldPosition(), dist_knn, &knn_indices2, &knn_distances2);
+//  std::size_t too_close_count2 = 0;
+//  for (ViewpointANN::IndexType viewpoint_index : knn_indices2) {
+//    const ViewpointEntry& other_viewpoint = viewpoint_entries_[viewpoint_index];
+//    FloatType dist_square = (pose.getWorldPosition() - other_viewpoint.viewpoint.pose().getWorldPosition()).squaredNorm();
+////    std::cout << "dist_square=" << dist_square << std::endl;
+//    if (dist_square < dist_thres_square) {
+//      ++too_close_count2;
+////      if (verbose) {
+////        std::cout << "dist_square=" << dist_square << std::endl;
+////      }
+//      if (too_close_count2 > dist_count_thres) {
+//        break;
+//      }
+//    }
+//  }
+//  // This is not necessarily true because of approximate nearest neighbor search but for testing we can quickly see if there is a bug.
+//  if (too_close_count != too_close_count2) {
+//    std::cerr << "TEST ERROR: too_close_count != too_close_count2" << std::endl;
+//    std::cerr << "too_close_count=" << too_close_count << ", too_close_count2=" << too_close_count2 << std::endl;
+//  }
+//  if (too_close_count > too_close_count2) {
+//    std::cout << "too_close_count > too_close_count2" << std::endl;
+//    for (std::size_t i = 0; i < knn_indices.size(); ++i) {
+//      std::cout << "knn_indices[" << i << "]=" << knn_indices[i] << std::endl;
+//      std::cout << "knn_distances[" << i << "]=" << knn_distances[i] << std::endl;
+//      std::cout << "getPoint(" << i << ")=" << viewpoint_ann_.getPoint(i) << std::endl;
+//      std::cout << "viewpoint_entry[" << knn_indices[i] << "]=" << viewpoint_entries_[knn_indices[i]].viewpoint.pose().getWorldPosition().transpose() << std::endl;
+//      std::cout << "knn_indices2[" << i << "]=" << knn_indices2[i] << std::endl;
+//      std::cout << "knn_distances2[" << i << "]=" << knn_distances2[i] << std::endl;
+//      std::cout << "viewpoint_entry[" << knn_indices2[i] << "]=" << viewpoint_entries_[knn_indices2[i]].viewpoint.pose().getWorldPosition().transpose() << std::endl;
+//    }
+//  }
+//  AIT_ASSERT(too_close_count <= too_close_count2);
+//  // End of testing code
+//  if (verbose) {
+//    std::cout << "too_close_count=" << too_close_count << std::endl;
+//  }
+
+  if (too_close_count > dist_count_thres) {
+//    if (verbose) {
+//      std::cout << "Rejected: Too close to other viewpoints" << std::endl;
+//    }
+    ++num_of_failed_viewpoint_entry_samples_;
+    return false;
   }
-  // Add edges to graph
-  for (std::size_t i = 0; i < comp_data.num_connected_entries; ++i) {
-    Vertex v1 = boost::vertex(i, graph);
-    const ViewpointPathEntry& path_entry = viewpoint_path.entries[i];
-    auto edges = viewpoint_graph_.getEdgesByNode(path_entry.viewpoint_index);
-    for (auto it = edges.begin(); it != edges.end(); ++it) {
-      // TODO: There should be no loops in the graph. Could be removed
-      if (path_entry.viewpoint_index == it.targetNode()) {
+
+  bool found_motion = false;
+  SE3Motion se3_motion;
+  if (reference_viewpoint_index == (ViewpointEntryIndex)-1 && viewpoint_entries_.size() > num_real_viewpoints_) {
+    // Make sure we can find at least one neighbour that is reachable and matchable. Otherwise, discard.
+    const std::size_t knn = options_.viewpoint_sample_motion_and_matching_knn;
+    static std::vector<ViewpointANN::IndexType> knn_indices;
+    static std::vector<ViewpointANN::DistanceType> knn_distances;
+    knn_indices.resize(knn);
+    knn_distances.resize(knn);
+    viewpoint_ann_.knnSearch(sampled_pose.getWorldPosition(), knn, &knn_indices, &knn_distances);
+    for (std::size_t i = 0; i < knn_distances.size(); ++i) {
+      const ViewpointANN::DistanceType dist_square = knn_distances[i];
+      const ViewpointEntryIndex other_viewpoint_index = knn_indices[i];
+      if (other_viewpoint_index < num_real_viewpoints_) {
         continue;
       }
-      auto it_target = viewpoint_index_to_vertex_map.find(it.targetNode());
-      if (it_target != viewpoint_index_to_vertex_map.end()) {
-        Vertex v2 = it_target->second;
-        boost::add_edge(v1, v2, WeightProperty(it.weight()), graph);
-//        if (verbose) {
-//          std::cout << "Adding edge from " << v1 << " to " << v2 << std::endl;
-//        }
+      const Viewpoint& other_viewpoint = viewpoint_entries_[other_viewpoint_index].viewpoint;
+      const std::unordered_set<Point3DId>& visible_points = computeVisibleSparsePoints(viewpoint);
+      const std::unordered_set<Point3DId>& other_visible_points = getCachedVisibleSparsePoints(other_viewpoint_index);
+      const bool matchable = isSparseMatchable(viewpoint, other_viewpoint, visible_points, other_visible_points);
+      if (!matchable) {
+        continue;
+      }
+      const Pose& other_pose = other_viewpoint.pose();
+      std::tie(se3_motion, found_motion) = motion_planner_.findMotion(other_pose, sampled_pose);
+      if (found_motion) {
+        reference_viewpoint_index = other_viewpoint_index;
+        break;
       }
     }
-  }
-
-  if (verbose) {
-    IndexMap index_map = boost::get(boost::vertex_index, graph);
-    std::cout << "Number of edges: " << boost::num_edges(graph) << std::endl;
-    boost::graph_traits<BoostGraph>::edge_iterator ei, ei_end;
-    for (boost::tie(ei, ei_end) = boost::edges(graph); ei != ei_end; ++ei) {
-      std::cout << "  edge from " << index_map[boost::source(*ei, graph)] << " (" << boost::source(*ei, graph) << ")"
-          << " to " << index_map[boost::target(*ei, graph)] << " (" << boost::target(*ei, graph) << ")"
-          << " with weight " << boost::get(boost::edge_weight, graph, *ei) << std::endl;
+    if (!found_motion) {
+      std::cout << "Unable to find motion to new sampled pose" << std::endl;
+      ++num_of_failed_viewpoint_entry_samples_;
+      return false;
     }
-  }
-
-  return graph_wrapper;
-}
-
-std::vector<std::size_t>
-ViewpointPlanner::computeApproximateShortestCycle(const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data) {
-  const bool verbose = false;
-
-  if (comp_data.num_connected_entries == 0) {
-    if (verbose) {
-      std::cout << "Trying to find shortest cycle for empty viewpoint set" << std::endl;
-    }
-    return std::vector<std::size_t>();
-  }
-
-  using BoostGraph = ViewpointPathGraphWrapper::BoostGraph;
-  using Vertex = ViewpointPathGraphWrapper::Vertex;
-
-  ViewpointPathGraphWrapper graph_wrapper = createViewpointPathGraph(viewpoint_path, comp_data);
-  BoostGraph& graph = graph_wrapper.graph;
-
-  if (verbose) {
-    std::cout << "Solving TSP" << std::endl;
-  }
-  // Solve TSP
-  std::vector<Vertex> tsp_tour;
-  boost::metric_tsp_approx_tour(graph, std::back_inserter(tsp_tour));
-  if (verbose) {
-    std::cout << "Boost TSP tour: " << std::endl;
-    for (const Vertex& vertex : tsp_tour) {
-      std::cout << vertex << std::endl;
-    }
-  }
-  std::vector<std::size_t> viewpoint_tsp_tour;
-  viewpoint_tsp_tour.resize(tsp_tour.size() - 1);
-  std::transform(tsp_tour.begin(), tsp_tour.end() - 1, viewpoint_tsp_tour.begin(),
-      [&](const Vertex& v) {
-    return graph_wrapper.index_map[v];
-  });
-  if (verbose) {
-    std::cout << "Viewpoint TSP tour: " << std::endl;
-    for (const std::size_t i : viewpoint_tsp_tour) {
-      const ViewpointEntryIndex viewpoint_index = viewpoint_path.entries[i].viewpoint_index;
-      std::cout << viewpoint_index << std::endl;
-    }
-  }
-  return viewpoint_tsp_tour;
-}
-
-void ViewpointPlanner::ensureConnectedViewpointPath(
-    ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data) {
-  for (std::size_t i = comp_data->num_connected_entries; i < viewpoint_path->entries.size(); ++i) {
-    const ViewpointPathEntry& path_entry = viewpoint_path->entries[i];
-    // Ensure that the new viewpoints are connected to all other viewpoints in the path
-    bool found_motions = findAndAddShortestMotions(
-        path_entry.viewpoint_index, viewpoint_path->entries.begin(), viewpoint_path->entries.begin() + i);
-
-    if (!found_motions) {
-      std::cout << "Could not find motion path for viewpoint on path" << path_entry.viewpoint_index << std::endl;
-    }
-    AIT_ASSERT(found_motions);
-    ++comp_data->num_connected_entries;
-  }
-}
-
-void ViewpointPlanner::solveApproximateTSP(
-    ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data) {
-  const bool verbose = true;
-
-  std::vector<std::size_t> viewpoint_tsp_tour = computeApproximateShortestCycle(*viewpoint_path, *comp_data);
-  viewpoint_path->order = std::move(viewpoint_tsp_tour);
-  // TODO: Remove
-//  std::vector<ViewpointPathEntry> old_path_entries = std::move(viewpoint_path->entries);
-//  viewpoint_path->entries.clear();
-////  if (comp_data != nullptr) {
-////    comp_data->sorted_new_informations.clear();
-////  }
-//  for (const ViewpointEntryIndex viewpoint_index : viewpoint_tsp_tour) {
-//    auto it = std::find_if(old_path_entries.begin(), old_path_entries.end(), [&](const ViewpointPathEntry& entry) -> bool {
-//      return entry.viewpoint_index == viewpoint_index;
-//    });
-//    ViewpointPathEntry path_entry = std::move(*it);
-//    viewpoint_path->entries.push_back(std::move(path_entry));
-////    if (comp_data != nullptr) {
-////      if (comp_data->sorted_new_informations.empty()) {
-////        initializeViewpointPathInformations(viewpoint_path, comp_data);
-////      }
-////      else {
-////        updateViewpointPathInformations(viewpoint_path, comp_data);
-////      }
-////    }
-//  }
-  if (verbose) {
-    std::cout << "After reordering" << std::endl;
-    for (const std::size_t i : viewpoint_path->order) {
-      std::cout << "  i=" << i << " entry=" << viewpoint_path->entries[i].viewpoint_index << std::endl;
-    }
-  }
-}
-
-std::vector<std::size_t> ViewpointPlanner::swap2Opt(
-    ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data,
-    const std::size_t k_start, const std::size_t k_end) const {
-  std::vector<std::size_t> new_order(viewpoint_path->order.size());
-  for (std::size_t i = 0; i < k_start; ++i) {
-    new_order[i] = viewpoint_path->order[i];
-  }
-  for (std::size_t i = 0; i <= k_end - k_start; ++i) {
-    new_order[k_start + i] = viewpoint_path->order[k_end - i];
-  }
-  for (std::size_t i = k_end + 1; i < new_order.size(); ++i) {
-    new_order[i] = viewpoint_path->order[i];
-  }
-  return new_order;
-}
-
-ViewpointPlanner::FloatType ViewpointPlanner::computeTourLength(const ViewpointPath& viewpoint_path, const std::vector<std::size_t>& order) const {
-  if (order.empty()) {
-    return 0;
-  }
-  FloatType tour_length = 0;
-  for (auto it = order.begin(); it != order.end(); ++it) {
-    auto next_it = it + 1;
-    if (next_it == order.end()) {
-      next_it = order.begin();
-    }
-    const ViewpointEntryIndex from_index = viewpoint_path.entries[*it].viewpoint_index;
-    const ViewpointEntryIndex to_index = viewpoint_path.entries[*next_it].viewpoint_index;
-    const FloatType dist = viewpoint_graph_.getWeightByNode(from_index, to_index);
-    if (dist != getViewpointMotion(from_index, to_index).distance) {
-      std::cout << "dist != getViewpointMotion(from_index, to_index).distance " << __FILE__ << ":" << __LINE__ << std::endl;
-      AIT_PRINT_VALUE(dist);
-      AIT_PRINT_VALUE(getViewpointMotion(from_index, to_index).distance);
-    }
-//    AIT_ASSERT(dist == getViewpointMotion(from_index, to_index).distance);
-    tour_length += dist;
-  }
-  return tour_length;
-}
-
-void ViewpointPlanner::improveViewpointTourWith2Opt(
-    ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data) {
-  const bool verbose = true;
-  const std::size_t max_k_length = options_.viewpoint_path_2opt_max_k_length;
-
-  if (verbose) {
-    std::cout << "Improving tour with 2 Opt" << std::endl;
-  }
-
-  const FloatType initial_tour_length = computeTourLength(*viewpoint_path, viewpoint_path->order);
-  FloatType shortest_tour_length = initial_tour_length;
-  bool improvement_made;
-  do {
-    improvement_made = false;
-    for (std::size_t k_start = 1; k_start < viewpoint_path->order.size(); ++k_start) {
-      const std::size_t max_k_end = std::min(k_start + max_k_length, viewpoint_path->order.size());
-      for (std::size_t k_end = k_start + 1; k_end < max_k_end; ++k_end) {
-        std::vector<std::size_t> new_order = swap2Opt(viewpoint_path, comp_data, k_start, k_end);
-        const FloatType new_tour_length = computeTourLength(*viewpoint_path, new_order);
-        if (new_tour_length < shortest_tour_length) {
-          viewpoint_path->order = std::move(new_order);
-          shortest_tour_length = new_tour_length;
-          improvement_made = true;
-        }
+    FloatType motion_distance = 0;
+    if (se3_motion.poses.size() >= 2) {
+      for (auto pose_it = se3_motion.poses.begin() + 1; pose_it != se3_motion.poses.end(); ++pose_it) {
+        motion_distance += (pose_it->getWorldPosition() - (pose_it - 1)->getWorldPosition()).norm();
       }
     }
-  } while (improvement_made);
-  if (verbose) {
-    if (shortest_tour_length < initial_tour_length) {
-      std::cout << "After 2 Opt" << std::endl;
-      for (const std::size_t i : viewpoint_path->order) {
-        std::cout << "  i=" << i << " entry=" << viewpoint_path->entries[i].viewpoint_index << std::endl;
-      }
-      std::cout << "Improved tour length from " << initial_tour_length << " to " << shortest_tour_length << std::endl;
+#if !AIT_RELEASE
+    AIT_ASSERT(ait::isApproxEqual(se3_motion.distance, motion_distance, FloatType(1e-2)));
+#endif
+  }
+  else if (reference_viewpoint_index != (ViewpointEntryIndex)-1
+      && reference_viewpoint_index >= num_real_viewpoints_) {
+    // Make sure that reference viewpoint is reachable and matchable. Otherwise, discard.
+    const Viewpoint& other_viewpoint = viewpoint_entries_[reference_viewpoint_index].viewpoint;
+    const bool matchable = isSparseMatchable(viewpoint, other_viewpoint);
+    if (!matchable) {
+      std::cout << "Unable to match sample reference from new sampled viewpoint" << std::endl;
+      ++num_of_failed_viewpoint_entry_samples_;
+      return false;
     }
-    else {
-      std::cout << "Unable to improve tour with 2 Opt" << std::endl;
+    const Pose& other_pose = other_viewpoint.pose();
+    std::tie(se3_motion, found_motion) = motion_planner_.findMotion(other_pose, sampled_pose);
+    if (!found_motion) {
+      std::cout << "Unable to find motion from sample reference to new sampled pose" << std::endl;
+      ++num_of_failed_viewpoint_entry_samples_;
+      return false;
     }
   }
-  if (verbose) {
-    const FloatType tour_length_lower_bound = initial_tour_length / 2;
-    std::cout << "Current tour: length=" << shortest_tour_length << ", lower bound=" << tour_length_lower_bound
-        << ", ratio=" << (shortest_tour_length / tour_length_lower_bound) << std::endl;
+
+  // Compute observed voxels and information and discard if too few voxels or too little information
+  try {
+    const bool ignore_voxels_with_zero_information = true;
+    std::pair<VoxelWithInformationSet, FloatType> raycast_result =
+        getRaycastHitVoxelsWithInformationScore(viewpoint, ignore_voxels_with_zero_information);
+    VoxelWithInformationSet& voxel_set = raycast_result.first;
+    FloatType total_information = raycast_result.second;
+  //    if (verbose) {
+  //      std::cout << "voxel_set.size()=" << voxel_set.size() << std::endl;
+  //    }
+    if (voxel_set.size() < options_.viewpoint_min_voxel_count) {
+      if (verbose) {
+        std::cout << "voxel_set.size() < options_.viewpoint_min_voxel_count" << std::endl;
+      }
+      ++num_of_failed_viewpoint_entry_samples_;
+      return false;
+    }
+  //  if (verbose) {
+  //    std::cout << "total_information=" << total_information << std::endl;
+  //  }
+    if (total_information < options_.viewpoint_min_information) {
+      if (verbose) {
+        std::cout << "total_information < options_.viewpoint_min_information" << std::endl;
+      }
+      ++num_of_failed_viewpoint_entry_samples_;
+      return false;
+    }
+
+  //  if (verbose) {
+  //    std::cout << "pose=" << pose << ", voxel_set=" << voxel_set.size() << ", total_information=" << total_information << std::endl;
+  //  }
+
+    const ViewpointEntryIndex new_viewpoint_index = addViewpointEntry(
+        ViewpointEntry(Viewpoint(&virtual_camera_, sampled_pose), total_information, std::move(voxel_set)));
+
+    if (found_motion) {
+      ViewpointMotion motion({ new_viewpoint_index, reference_viewpoint_index }, { se3_motion });
+      addViewpointMotion(std::move(motion));
+    }
+
+    num_of_failed_viewpoint_entry_samples_ = 0;
+    return true;
+  }
+
+  // TODO: Should be a exception for raycast
+  catch (const ait::Error& err) {
+    std::cout << "Raycast failed: " << err.what() << std::endl;
+    return false;
   }
 }

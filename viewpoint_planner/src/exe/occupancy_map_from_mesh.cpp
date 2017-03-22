@@ -16,7 +16,7 @@
 #include <ait/eigen.h>
 #include <ait/options.h>
 #include <ait/eigen_options.h>
-#include <ait/geometry.h>
+#include <ait/math/geometry.h>
 
 #include "../octree/occupancy_map.h"
 

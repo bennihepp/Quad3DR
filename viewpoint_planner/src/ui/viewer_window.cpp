@@ -33,11 +33,13 @@ ViewerWindow::ViewerWindow(const Options& options, ViewpointPlanner* planner, QW
     viewer_widget_ = ViewerWidget::create(options, planner_, settings_panel_, planner_panel_, this);
     this->setCentralWidget(viewer_widget_);
     viewer_widget_->showOctree(planner_->getOctree());
-    viewer_widget_->showSparseReconstruction(planner_->getReconstruction());
-    if (planner_->getDensePoints() != nullptr) {
+    if (planner_->hasReconstruction()) {
+      viewer_widget_->showSparseReconstruction(planner_->getReconstruction());
+    }
+    if (planner_->hasDensePoints()) {
       viewer_widget_->showDensePoints(planner_->getDensePoints());
     }
-    if (planner_->getMesh() != nullptr) {
+    if (planner_->hasMesh()) {
       viewer_widget_->showPoissonMesh(planner_->getMesh());
     }
 
@@ -49,8 +51,14 @@ ViewerWindow::ViewerWindow(const Options& options, ViewpointPlanner* planner, QW
     double extent_x, extent_y, extent_z;
     planner_->getOctree()->getMetricSize(extent_x, extent_y, extent_z);
     info_panel_->setExtent(QVector3D(extent_x, extent_y, extent_z));
-    info_panel_->setNumOfImages(planner_->getReconstruction()->getImages().size());
-    info_panel_->setNumOfSparsePoints(planner_->getReconstruction()->getPoints3D().size());
+    if (planner_->hasReconstruction()) {
+      info_panel_->setNumOfImages(planner_->getReconstruction()->getImages().size());
+      info_panel_->setNumOfSparsePoints(planner_->getReconstruction()->getPoints3D().size());
+    }
+    else {
+      info_panel_->setNumOfImages(0);
+      info_panel_->setNumOfSparsePoints(0);
+    }
 }
 
 ViewerWindow::~ViewerWindow() {}

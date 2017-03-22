@@ -45,7 +45,8 @@ std::pair<bool, boost::program_options::variables_map> process_commandline(int a
     octomap_options.add_options()
       ("resolution", po::value<FloatType>()->default_value(0.1), "Octomap resolution")
       ("max-range", po::value<FloatType>()->default_value(std::numeric_limits<FloatType>().max()), "Max integration range")
-      ("map-file", po::value<string>()->default_value("output_map.ot"), "Octomap output file")
+      ("in-map-file", po::value<string>(), "Octomap input file")
+      ("out-map-file", po::value<string>()->default_value("output_map.ot"), "Octomap output file")
       ("lazy-eval", po::bool_switch()->default_value(true), "Only update inner nodes once at the end")
       ("dense", po::bool_switch()->default_value(true), "Make a dense tree by inserting unknown nodes")
       ("no-display", po::bool_switch()->default_value(false), "Do not show depth maps")
@@ -89,9 +90,18 @@ int main(int argc, char** argv) {
 
   cout << "Loading dense reconstruction" << endl;
   DenseReconstruction reconstruction;
-  reconstruction.read(vm["mvs-workspace"].as<string>());
+  const bool read_sfm_gps_transformation = false;
+  reconstruction.read(vm["mvs-workspace"].as<string>(), read_sfm_gps_transformation);
 
-  OccupancyMapType tree (vm["resolution"].as<FloatType>());
+  std::unique_ptr<OccupancyMapType> tree;
+  if (vm.count("in-map-file") > 0) {
+    tree = OccupancyMapType::read(vm["in-map-file"].as<std::string>());
+    std::cout << "Loaded octree" << std::endl;
+    std::cout << "Input octree has " << tree->getNumLeafNodes() << " leaf nodes and " << tree->size() << " total nodes" << std::endl;
+  }
+  else {
+    tree.reset(new OccupancyMapType(vm["resolution"].as<FloatType>()));
+  }
 
   FloatType max_range = vm["max-range"].as<FloatType>();
 
@@ -158,13 +168,13 @@ int main(int argc, char** argv) {
         pc.push_back(p);
       }
     }
-    tree.insertPointCloud(pc, sensor_origin, max_range, vm["lazy-eval"].as<bool>());
+    tree->insertPointCloud(pc, sensor_origin, max_range, vm["lazy-eval"].as<bool>());
   }
 
   if (vm["set-all-unknown"].as<bool>()) {
     std::cout << "Setting all occupied nodes to unknown nodes" << std::endl;
-    for (auto it = tree.begin_tree(); it != tree.end_tree(); ++it) {
-      if (tree.isNodeOccupied(&(*it))) {
+    for (auto it = tree->begin_tree(); it != tree->end_tree(); ++it) {
+      if (tree->isNodeOccupied(&(*it))) {
         it->setObservationCount(0);
         it->setOccupancy(0.5f);
       }
@@ -172,13 +182,13 @@ int main(int argc, char** argv) {
   }
 
   if (vm["dense"].as<bool>()) {
-    std::cout << "Octree has " << tree.getNumLeafNodes() << " leaf nodes and " << tree.size() << " total nodes" << std::endl;
+    std::cout << "Octree has " << tree->getNumLeafNodes() << " leaf nodes and " << tree->size() << " total nodes" << std::endl;
     std::cout << "Filling unknown nodes" << std::endl;
-    for (auto it = tree.begin_tree(); it != tree.end_tree(); ++it) {
+    for (auto it = tree->begin_tree(); it != tree->end_tree(); ++it) {
       if (!it.isLeaf()) {
         for (size_t i = 0; i < 8; ++i) {
-          if (!tree.nodeChildExists(&(*it), i)) {
-            tree.createNodeChild(&(*it), i);
+          if (!tree->nodeChildExists(&(*it), i)) {
+            tree->createNodeChild(&(*it), i);
             it->setOccupancy(0.5f);
             it->setObservationCount(0);
           }
@@ -189,20 +199,20 @@ int main(int argc, char** argv) {
 
   if (vm["lazy-eval"].as<bool>()) {
     std::cout << "Updating inner nodes" << std::endl;
-    tree.updateInnerOccupancy();
+    tree->updateInnerOccupancy();
   }
 
-  std::cout << "Octree has " << tree.getNumLeafNodes() << " leaf nodes and " << tree.size() << " total nodes" << std::endl;
+  std::cout << "Octree has " << tree->getNumLeafNodes() << " leaf nodes and " << tree->size() << " total nodes" << std::endl;
   std::cout << "Metric extents:" << std::endl;
   double x, y, z;
-  tree.getMetricSize(x, y, z);
+  tree->getMetricSize(x, y, z);
   std::cout << "  size=(" << x << ", " << y << ", " << z << ")" << std::endl;
-  tree.getMetricMin(x, y, z);
+  tree->getMetricMin(x, y, z);
   std::cout << "   min=(" << x << ", " << y << ", " << z << ")" << std::endl;
-  tree.getMetricMax(x, y, z);
+  tree->getMetricMax(x, y, z);
   std::cout << "   max=(" << x << ", " << y << ", " << z << ")" << std::endl;
 
 
-  tree.write(vm["map-file"].as<string>());
-//    tree.writeBinary(vm["map-file"].as<string>() + ".bt");
+  tree->write(vm["out-map-file"].as<string>());
+//    tree->writeBinary(vm["map-file"].as<string>() + ".bt");
 }

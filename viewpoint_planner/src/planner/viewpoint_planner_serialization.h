@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include "viewpoint_planner.h"
+
 class VoxelMapSaver {
 public:
   using FloatType = ViewpointPlanner::FloatType;
@@ -61,12 +63,14 @@ public:
     for (std::size_t i = 0; i < num_voxels; ++i) {
       std::size_t voxel_index;
       ar & voxel_index;
-      VoxelType* voxel = index_voxel_map_.at(voxel_index);
       FloatType information;
       ar & information;
 //        VoxelWithInformation voxel_with_information(voxel, information);
 //        voxel_map->emplace(std::move(voxel_with_information));
-      voxel_map->emplace(voxel, information);
+      if (voxel_map != nullptr) {
+        VoxelType* voxel = index_voxel_map_.at(voxel_index);
+        voxel_map->emplace(voxel, information);
+      }
     }
   }
 
@@ -183,13 +187,18 @@ private:
   void serialize(Archive& ar, const unsigned int version) {
     std::size_t num_entries;
     ar & num_entries;
-    entries_->resize(num_entries);
-    for (ViewpointEntry& entry : *entries_) {
+    const size_t entries_capacity = (size_t)std::ceil(1.25 * num_entries);
+    std::cout << "Reserving capacity for " << entries_capacity << " viewpoint entries" << std::endl;
+    entries_->clear();
+    entries_->reserve(entries_capacity);
+    for (size_t i = 0; i < num_entries; ++i) {
+      ViewpointEntry entry;
       Pose pose;
       ar & pose;
       entry.viewpoint = Viewpoint(camera_, pose);
       ar & entry.total_information;
       voxel_set_loader_.load(&entry.voxel_set, ar, version);
+      entries_->push_back(std::move(entry));
     }
   }
 
@@ -211,8 +220,10 @@ public:
     ar & path_entries_.size();
     for (const ViewpointPathEntry& path_entry : path_entries_) {
       ar & path_entry;
+      AIT_PRINT_VALUE(path_entry.viewpoint_index);
       if (version > 1) {
         ar & path_entry.viewpoint.pose();
+        AIT_PRINT_VALUE(path_entry.viewpoint.pose());
       }
     }
   }
@@ -243,11 +254,11 @@ private:
       const ViewpointPath& path = paths_[i];
       const ViewpointPathComputationData& comp_data = comp_datas_[i];
       if (boost::serialization::version<ViewpointPathEntry>::value > 1) {
-        ar & path.entries;
-      }
-      else {
         ViewpointPathEntriesSaver vpes(path.entries);
         vpes.serialize(ar, boost::serialization::version<ViewpointPathEntry>::value);
+      }
+      else {
+        ar & path.entries;
       }
       ar & path.order;
       ar & path.acc_information;
@@ -282,9 +293,11 @@ public:
     for (std::size_t i = 0; i < num_of_entries; ++i) {
       ViewpointPathEntry path_entry;
       ar & path_entry;
+      AIT_PRINT_VALUE(path_entry.viewpoint_index);
       if (version > 1) {
         Pose pose;
         ar & pose;
+        AIT_PRINT_VALUE(pose);
         path_entry.viewpoint = Viewpoint(camera_, pose);
       }
       else {
@@ -326,17 +339,19 @@ public:
       ViewpointPath& path = (*paths_)[i];
       ViewpointPathComputationData& comp_data = (*comp_datas_)[i];
       if (boost::serialization::version<ViewpointPathEntry>::value > 1) {
-        ar & path.entries;
-      }
-      else {
         ViewpointPathEntriesLoader vpel(&path.entries, viewpoint_entries_, camera_);
         vpel.serialize(ar, boost::serialization::version<ViewpointPathEntry>::value);
+      }
+      else {
+        ar & path.entries;
       }
       ar & path.order;
       ar & path.acc_information;
       ar & path.acc_motion_distance;
       ar & path.acc_objective;
-      voxel_map_loader_.load(&path.observed_voxel_map, ar, version);
+      //      voxel_map_loader_.load(&path.observed_voxel_map, ar, version);
+      ViewpointPlanner::VoxelMap* no_voxel_map = nullptr;
+      voxel_map_loader_.load(no_voxel_map, ar, version);
 //        voxel_set_loader_.load(&path.observed_voxel_set, ar, version);
       ar & comp_data.sorted_new_informations;
     }

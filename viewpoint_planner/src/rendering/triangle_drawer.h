@@ -93,10 +93,16 @@ public:
         program_.removeAllShaders();
       }
 
-      program_.create();
-      program_.addShaderFromSourceFile(QOpenGLShader::Vertex, ":/shaders/triangles.v.glsl");
-      program_.addShaderFromSourceFile(QOpenGLShader::Fragment, ":/shaders/triangles.f.glsl");
-      program_.link();
+      bool success;
+
+      success = program_.create();
+      AIT_ASSERT(success);
+      success = program_.addShaderFromSourceFile(QOpenGLShader::Vertex, ":/shaders/triangles.v.glsl");
+      AIT_ASSERT(success);
+      success = program_.addShaderFromSourceFile(QOpenGLShader::Fragment, ":/shaders/triangles.f.glsl");
+      AIT_ASSERT(success);
+      success = program_.link();
+      AIT_ASSERT(success);
 
       if (normals_program_.isLinked()) {
         normals_program_.release();
@@ -104,10 +110,29 @@ public:
 
       }
 
-      normals_program_.create();
-      normals_program_.addShaderFromSourceFile(QOpenGLShader::Vertex, ":/shaders/triangles_normals.v.glsl");
-      normals_program_.addShaderFromSourceFile(QOpenGLShader::Fragment, ":/shaders/triangles_normals.f.glsl");
-      normals_program_.link();
+      success = normals_program_.create();
+      AIT_ASSERT(success);
+      success = normals_program_.addShaderFromSourceFile(QOpenGLShader::Vertex, ":/shaders/triangles_normals.v.glsl");
+      AIT_ASSERT(success);
+      success = normals_program_.addShaderFromSourceFile(QOpenGLShader::Fragment, ":/shaders/triangles_normals.f.glsl");
+      AIT_ASSERT(success);
+      success = normals_program_.link();
+      AIT_ASSERT(success);
+
+      if (depth_program_.isLinked()) {
+        depth_program_.release();
+        depth_program_.removeAllShaders();
+
+      }
+
+      success = depth_program_.create();
+      AIT_ASSERT(success);
+      success = depth_program_.addShaderFromSourceFile(QOpenGLShader::Vertex, ":/shaders/triangles_depth.v.glsl");
+      AIT_ASSERT(success);
+      success = depth_program_.addShaderFromSourceFile(QOpenGLShader::Fragment, ":/shaders/triangles_depth.f.glsl");
+      AIT_ASSERT(success);
+      success = depth_program_.link();
+      AIT_ASSERT(success);
 
       vao_.create();
       vbo_.create();
@@ -119,6 +144,8 @@ public:
     void upload(const std::vector<OGLTriangleData>& triangle_data) {
         num_triangles_ = triangle_data.size();
         has_normals_ = false;
+
+        bool success;
 
         program_.bind();
         vao_.bind();
@@ -137,12 +164,32 @@ public:
         vao_.release();
         program_.release();
 
-        program_.link();
+        success = program_.link();
+        AIT_ASSERT(success);
+
+        depth_program_.bind();
+        vao_.bind();
+        vbo_.bind();
+
+        depth_program_.enableAttributeArray(0);
+        depth_program_.setAttributeBuffer(0, GL_FLOAT, 0, 3, sizeof(OGLVertexDataRGBA));
+
+        depth_program_.enableAttributeArray(1);
+        depth_program_.setAttributeBuffer(1, GL_FLOAT, 3 * sizeof(float), 4, sizeof(OGLVertexDataRGBA));
+
+        vbo_.release();
+        vao_.release();
+        depth_program_.release();
+
+        success = depth_program_.link();
+        AIT_ASSERT(success);
     }
 
     void upload(const std::vector<OGLTriangleWithNormalData>& triangle_normal_data) {
       num_triangles_ = triangle_normal_data.size();
       has_normals_ = true;
+
+      bool success;
 
       program_.bind();
       vao_.bind();
@@ -167,7 +214,8 @@ public:
       vao_.release();
       program_.release();
 
-      program_.link();
+      success = program_.link();
+      AIT_ASSERT(success);
 
       normals_program_.bind();
       normals_vao_.bind();
@@ -192,7 +240,27 @@ public:
       normals_vao_.release();
       normals_program_.release();
 
-      normals_program_.link();
+      success = normals_program_.link();
+      AIT_ASSERT(success);
+
+      depth_program_.bind();
+      vbo_.bind();
+      vao_.bind();
+
+      // Vertex
+      depth_program_.enableAttributeArray(0);
+      depth_program_.setAttributeBuffer(0, GL_FLOAT, 0, 3, sizeof(OGLVertexNormalDataRGBA));
+
+      // Color
+      depth_program_.enableAttributeArray(1);
+      depth_program_.setAttributeBuffer(1, GL_FLOAT, 6 * sizeof(float), 4, sizeof(OGLVertexNormalDataRGBA));
+
+      vbo_.release();
+      vao_.release();
+      depth_program_.release();
+
+      success = depth_program_.link();
+      AIT_ASSERT(success);
     }
 
     void draw(const QMatrix4x4& pvm_matrix) {
@@ -259,6 +327,40 @@ public:
       normals_program_.release();
     }
 
+    void drawDepth(const QMatrix4x4& pvm_matrix, const QMatrix4x4& vm_matrix) {
+      if (!draw_triangles_ || num_triangles_ == 0 || !has_normals_) {
+          return;
+      }
+
+      depth_program_.bind();
+      vao_.bind();
+
+      depth_program_.setUniformValue("u_pvm_matrix", pvm_matrix);
+      depth_program_.setUniformValue("u_vm_matrix", vm_matrix);
+
+      glDrawArrays(GL_TRIANGLES, 0, 3 * num_triangles_);
+
+      vao_.release();
+      depth_program_.release();
+    }
+
+    void drawDepth(const QMatrix4x4& pvm_matrix, const QMatrix4x4& vm_matrix, QOpenGLFunctions* gl_functions) {
+      if (!draw_triangles_ || num_triangles_ == 0 || !has_normals_) {
+          return;
+      }
+
+      depth_program_.bind();
+      vao_.bind();
+
+      depth_program_.setUniformValue("u_pvm_matrix", pvm_matrix);
+      depth_program_.setUniformValue("u_vm_matrix", vm_matrix);
+
+      gl_functions->glDrawArrays(GL_TRIANGLES, 0, 3 * num_triangles_);
+
+      vao_.release();
+      depth_program_.release();
+    }
+
 private:
     bool draw_triangles_;
     size_t num_triangles_;
@@ -269,4 +371,5 @@ private:
     QOpenGLVertexArrayObject normals_vao_;
     QOpenGLBuffer normals_vbo_;
     QOpenGLShaderProgram normals_program_;
+    QOpenGLShaderProgram depth_program_;
 };

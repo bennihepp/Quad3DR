@@ -6,6 +6,8 @@
  */
 #pragma once
 
+#include "../bh/eigen_serialization.h"
+/*
 #include <boost/serialization/array.hpp>
 #include "eigen.h"
 
@@ -85,3 +87,4 @@ namespace boost {
 
 //}
 }
+*/

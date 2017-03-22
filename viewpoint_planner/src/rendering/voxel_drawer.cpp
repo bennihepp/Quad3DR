@@ -408,7 +408,6 @@ void VoxelDrawer::setWeightRange(const float low_weight, const float high_weight
 void VoxelDrawer::setInformationRange(const float low_information, const float high_information) {
   information_color_scale_ = 1 / (float)(high_information - low_information);
   information_color_offset_ = low_information;
-  std::cout << "information_color_scale=" << information_color_scale_ << ", information_color_offset=" << information_color_offset_ << std::endl;
 }
 
 void VoxelDrawer::setMinOccupancy(const float min_occupancy) {

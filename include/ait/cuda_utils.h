@@ -63,24 +63,24 @@ private:
 
 class CudaManager {
 public:
-  static void deviceReset() {
-    CUDA_SAFE_CALL(cudaDeviceReset());
-  }
-
   static int getDeviceCount() {
     int device_count;
     CUDA_SAFE_CALL(cudaGetDeviceCount(&device_count));
     return device_count;
   }
 
-  static int getDevice() {
-    int device;
-    CUDA_SAFE_CALL(cudaGetDevice(&device));
-    return device;
+  static int getActiveGpuId() {
+    int gpu_id;
+    CUDA_SAFE_CALL(cudaGetDevice(&gpu_id));
+    return gpu_id;
   }
 
-  static void setDevice(const int device) {
-    CUDA_SAFE_CALL(cudaSetDevice(device));
+  static void setActiveGpuId(const int gpu_id) {
+    CUDA_SAFE_CALL(cudaSetDevice(gpu_id));
+  }
+
+  static void deviceReset() {
+    CUDA_SAFE_CALL(cudaDeviceReset());
   }
 
   static std::size_t getStackSize() {
@@ -94,8 +94,66 @@ public:
   }
 };
 
+class CudaDevice {
+public:
+  CudaDevice(const int gpu_id, const bool do_activate = true)
+  : gpu_id_(gpu_id) {
+    if (do_activate) {
+      activate();
+    }
+  }
+
+  int getId() const {
+    return gpu_id_;
+  }
+
+  void activate() {
+    CUDA_SAFE_CALL(cudaSetDevice(gpu_id_));
+  }
+
+  void reset() {
+    activate();
+    CUDA_SAFE_CALL(cudaDeviceReset());
+  }
+
+  std::size_t getStackSize() {
+    activate();
+    std::size_t stack_size;
+    CUDA_SAFE_CALL(cudaDeviceGetLimit(&stack_size, cudaLimitStackSize));
+    return stack_size;
+  }
+
+  void setStackSize(const std::size_t stack_size) {
+    activate();
+    CUDA_SAFE_CALL(cudaDeviceSetLimit(cudaLimitStackSize, stack_size));
+  }
+
+  static CudaDevice getActivateDevice(const bool do_activate = true) {
+    return CudaDevice(ait::CudaManager::getActiveGpuId(), do_activate);
+  }
+
+private:
+  int gpu_id_;
+};
+
 class CudaUtils {
 public:
+
+  static std::pair<size_t, size_t> computeGridAndBlockSize(const size_t num_threads, const size_t threads_per_block) {
+    return std::make_pair(computeGridSize(num_threads, threads_per_block),
+                          computeBlockSize(num_threads, threads_per_block));
+  }
+
+  static size_t computeGridSize(const size_t num_threads, const size_t threads_per_block) {
+    const std::size_t grid_size = (num_threads + threads_per_block - 1) / threads_per_block;
+    return grid_size;
+  }
+
+  static size_t computeBlockSize(const size_t num_threads, const size_t threads_per_block) {
+    const std::size_t block_size = std::min(num_threads, threads_per_block);
+    return block_size;
+  }
+
   template <typename T>
   static T* allocate() {
     T* ptr;
