@@ -7,6 +7,9 @@
 
 namespace bh {
 
+#pragma GCC push_options
+#pragma GCC optimize("O0")
+
 template<typename FloatT, std::size_t dimension, typename NormT>
 ApproximateNearestNeighbor<FloatT, dimension, NormT>::ApproximateNearestNeighbor(
         std::size_t num_trees, NormT norm)
@@ -53,6 +56,7 @@ void ApproximateNearestNeighbor<FloatT, dimension, NormT>::clear() {
 //    delete[] point_ptr;
 //  }
   points_.clear();
+  points_size_ = 0;
 }
 
 template<typename FloatT, std::size_t dimension, typename NormT>
@@ -98,7 +102,8 @@ void ApproximateNearestNeighbor<FloatT, dimension, NormT>::addPoint(
   }
   FlannPointType& flann_point = addPointInternal(point);
   FlannMatrix flann_mat(&flann_point[0], 1, dimension);
-  index_.addPoints(flann_mat, (float) rebuild_threshold);
+  index_.addPoints(flann_mat, (float)rebuild_threshold);
+  ++points_size_;
 }
 
 template<typename FloatT, std::size_t dimension, typename NormT>
@@ -224,7 +229,7 @@ void ApproximateNearestNeighbor<FloatT, dimension, NormT>::knnSearchExact(
     }
     if (dist_square < (*distances)[distances->size() - 1]) {
       (*distances)[distances->size() - 1] = dist_square;
-      (*indices)[distances->size() - 1] = i / 3;
+      (*indices)[distances->size() - 1] = i;
     }
     // Fix ordering of nearest neighbors
     for (std::size_t j = distances->size() - 1; j > 0; --j) {
@@ -353,3 +358,5 @@ auto ApproximateNearestNeighbor<FloatT, dimension, NormT>::getFlannIndex() -> fl
 };
 
 }
+
+#pragma GCC pop_options

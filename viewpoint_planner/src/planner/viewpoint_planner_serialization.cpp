@@ -45,12 +45,10 @@ void ViewpointPlanner::loadViewpointGraph(const std::string& filename) {
   }
   std::cout << "Regenerating density field" << std::endl;
   viewpoint_count_grid_.setAllValues(0);
-  viewpoint_grid_indices_.clear();
   for (const ViewpointEntry& viewpoint_entry : viewpoint_entries_) {
     const Vector3& viewpoint_position = viewpoint_entry.viewpoint.pose().getWorldPosition();
     if (viewpoint_count_grid_.isInsideGrid(viewpoint_position)) {
       viewpoint_count_grid_(viewpoint_position) += 1;
-      viewpoint_grid_indices_.push_back(viewpoint_count_grid_.getGridIndices(viewpoint_position));
     }
     else {
       std::cout << "WARNING: Loaded viewpoint outside of density grid" << std::endl;

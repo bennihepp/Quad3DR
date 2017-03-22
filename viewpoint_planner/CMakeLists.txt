@@ -83,9 +83,6 @@ include_directories(
 add_executable(occupancy_map_from_sens
   # Executable
   src/exe/occupancy_map_from_sens.cpp
-  # BH
-  ../src/bh/common.cpp
-  ../src/common.cpp
   # mLib
   src/mLib/mLib.h
   src/mLib/mLib.cpp
@@ -106,9 +103,6 @@ target_link_libraries(occupancy_map_from_sens
 add_executable(occupancy_map_from_colmap
   # Executable
   src/exe/occupancy_map_from_colmap.cpp
-  # BH
-  ../src/bh/common.cpp
-  ../src/common.cpp
   # Octree
   src/octree/occupancy_map.h
   src/octree/occupancy_map.hxx
@@ -131,9 +125,6 @@ target_link_libraries(occupancy_map_from_colmap
 add_executable(occupancy_map_from_mesh
   # Executable
   src/exe/occupancy_map_from_mesh.cpp
-  # BH
-  ../src/bh/common.cpp
-  ../src/common.cpp
   # Octree
   src/octree/occupancy_map.h
   src/octree/occupancy_map.hxx
@@ -160,10 +151,7 @@ add_executable(transform_mesh WIN32
   # Executable
   src/exe/transform_mesh.cpp
   # BH
-  ../src/bh/common.cpp
   ../src/bh/utilities.cpp
-  ../src/common.cpp
-  ../src/utilities.cpp
   # mLib
   src/mLib/mLib.h
   src/mLib/mLib.cpp
@@ -176,10 +164,7 @@ add_executable(clip_mesh WIN32
   # Executable
   src/exe/clip_mesh.cpp
   # BH
-  ../src/bh/common.cpp
   ../src/bh/utilities.cpp
-  ../src/common.cpp
-  ../src/utilities.cpp
   # mLib
   src/mLib/mLib.h
   src/mLib/mLib.cpp
@@ -192,10 +177,7 @@ add_executable(clip_point_cloud WIN32
   # Executable
   src/exe/clip_point_cloud.cpp
   # BH
-  ../src/bh/common.cpp
   ../src/bh/utilities.cpp
-  ../src/common.cpp
-  ../src/utilities.cpp
   # mLib
   src/mLib/mLib.h
   src/mLib/mLib.cpp
@@ -208,10 +190,7 @@ add_executable(fuse_point_cloud WIN32
   # Executable
   src/exe/fuse_point_cloud.cpp
   # BH
-  ../src/bh/common.cpp
   ../src/bh/utilities.cpp
-  ../src/common.cpp
-  ../src/utilities.cpp
   # mLib
   src/mLib/mLib.h
   src/mLib/mLib.cpp
@@ -224,10 +203,7 @@ add_executable(evaluate_dense_points WIN32
   # Executable
   src/exe/evaluate_dense_points.cpp
   # BH
-  ../src/bh/common.cpp
   ../src/bh/utilities.cpp
-  ../src/common.cpp
-  ../src/utilities.cpp
   # mLib
   src/mLib/mLib.h
   src/mLib/mLib.cpp
@@ -238,9 +214,7 @@ target_link_libraries(evaluate_dense_points
 
 set(VIEWPOINT_PLANNER_SOURCES_COMMON
   # BH
-  ../src/bh/common.cpp
   ../src/bh/utilities.cpp
-  ../src/common.cpp
   ../src/utilities.cpp
   # mLib
   src/mLib/mLib.h
@@ -302,11 +276,6 @@ cuda_add_executable(compute_ground_truth_mesh WIN32
   # Executable
   src/exe/compute_ground_truth_mesh.cpp
   src/octree/occupancy_map.cpp
-  # BH
-  ../src/bh/common.cpp
-  ../src/bh/utilities.cpp
-  ../src/common.cpp
-  ../src/utilities.cpp
   # mLib
   src/mLib/mLib.h
   src/mLib/mLib.cpp
@@ -430,3 +399,7 @@ target_link_libraries(viewpoint_planner_gui
 )
 target_link_libraries(viewpoint_planner_gui Qt5::Core Qt5::Xml Qt5::Gui Qt5::OpenGL Qt5::WebSockets)
 #target_link_libraries(viewpoint_planner_gui /home/bhepp/Projects/Libraries/libQGLViewer-2.6.4/lib/libQGLViewer-qt5.so)
+
+if(WITH_TESTING)
+    add_subdirectory(test)
+endif()

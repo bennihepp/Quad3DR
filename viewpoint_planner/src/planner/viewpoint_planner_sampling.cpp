@@ -92,7 +92,7 @@ ViewpointPlanner::Pose::Quaternion ViewpointPlanner::sampleOrientation() const {
 ViewpointPlanner::Pose::Quaternion ViewpointPlanner::sampleBiasedOrientation(const Vector3& pos, const BoundingBoxType& bias_bbox) const {
   const FloatType dist = (pos - bias_bbox.getCenter()).norm();
   const FloatType bbox_fov_angle = std::atan(bias_bbox.getMaxExtent() / (2 * dist));
-  FloatType angle_stddev = ait::clamp<FloatType>(bbox_fov_angle, 0, M_PI / 2);
+  FloatType angle_stddev = 3 * ait::clamp<FloatType>(bbox_fov_angle, 0, M_PI / 2);
   const FloatType angle1 = std::abs(random_.sampleNormal(0, angle_stddev));
   FloatType angle2 = random_.sampleNormal(0, angle_stddev);
   Vector3 bbox_direction = (bias_bbox.getCenter() - pos).normalized();

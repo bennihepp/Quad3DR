@@ -903,6 +903,11 @@ public:
     return viewpoint_graph_;
   }
 
+  /// Return whether viewpoint paths have been initialized
+  bool areViewpointPathsInitialized() const {
+    return viewpoint_paths_initialized_;
+  }
+
   /// Return viewpoint paths for reading. Mutex needs to be locked.
   const std::vector<ViewpointPath>& getViewpointPaths() const {
     return viewpoint_paths_;
@@ -1443,8 +1448,6 @@ private:
   ViewpointGraph viewpoint_graph_;
   // Grid of viewpoint counts in the sampling space
   ContinuousGridType viewpoint_count_grid_;
-  // Mapping from viewpoint to grid indices
-  std::vector<Eigen::Vector3s> viewpoint_grid_indices_;
   // Probability for sampling a new viewpoint in a grid cell
   std::vector<FloatType> grid_cell_probabilities_;
   // Discrete distribution to sample from viewpoints

@@ -167,14 +167,14 @@ public:
               bh::MLibUtilities::convertMlibToEigen(gt_mesh.m_Vertices[face[1]]),
               bh::MLibUtilities::convertMlibToEigen(gt_mesh.m_Vertices[face[2]]));
       const Vector3 center = tri.getCenter();
-      const FloatType l1 = (tri.v1() - center).squaredNorm();
-      const FloatType l2 = (tri.v2() - center).squaredNorm();
-      const FloatType l3 = (tri.v3() - center).squaredNorm();
-      const FloatType max_length_square = std::max(l1, std::max(l2, l3));
-      const FloatType max_length = std::sqrt(max_length_square);
+//      const FloatType l1 = (tri.v1() - center).squaredNorm();
+//      const FloatType l2 = (tri.v2() - center).squaredNorm();
+//      const FloatType l3 = (tri.v3() - center).squaredNorm();
+//      const FloatType max_length_square = std::max(l1, std::max(l2, l3));
+//      const FloatType max_length = std::sqrt(max_length_square);
 
-      const FloatType radius = std::max(max_length, options_.max_correspondence_distance);
-      const FloatType radius_square = radius * radius;
+//      const FloatType radius = std::max(max_length, options_.max_correspondence_distance);
+//      const FloatType radius_square = radius * radius;
       const FloatType max_correspondence_dist = options_.max_correspondence_distance;
       const size_t max_results = options_.max_radius_search_results;
       std::vector<size_t> indices;

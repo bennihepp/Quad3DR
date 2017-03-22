@@ -24,28 +24,33 @@ namespace bh {
       return radians * 180 / pi;
     }
 
-    template <typename FloatType1, typename FloatType2, typename FloatType3>
-    bool isApproxEqual(FloatType1 a, FloatType2 b, FloatType3 tolerance) {
+    template <typename FloatType1, typename FloatType2>
+    bool isApproxEqual(const FloatType1 a, const FloatType2 b,
+                       const FloatType1 tolerance = std::numeric_limits<FloatType1>::epsilon()) {
       return std::abs(a - b) <= tolerance;
     }
 
-    template <typename FloatType1, typename FloatType2, typename FloatType3>
-    bool isApproxGreater(FloatType1 a, FloatType2 b, FloatType3 tolerance) {
+    template <typename FloatType1, typename FloatType2>
+    bool isApproxGreater(const FloatType1 a, const FloatType2 b,
+                         const FloatType1 tolerance = std::numeric_limits<FloatType1>::epsilon()) {
       return a > b + tolerance;
     }
 
-    template <typename FloatType1, typename FloatType2, typename FloatType3>
-    bool isApproxGreaterEqual(FloatType1 a, FloatType2 b, FloatType3 tolerance) {
+    template <typename FloatType1, typename FloatType2>
+    bool isApproxGreaterEqual(const FloatType1 a, const FloatType2 b,
+                              const FloatType1 tolerance = std::numeric_limits<FloatType1>::epsilon()) {
       return a >= b + tolerance;
     }
 
-    template <typename FloatType1, typename FloatType2, typename FloatType3>
-    bool isApproxSmaller(FloatType1 a, FloatType2 b, FloatType3 tolerance) {
+    template <typename FloatType1, typename FloatType2>
+    bool isApproxSmaller(const FloatType1 a, const FloatType2 b,
+                         const FloatType1 tolerance = std::numeric_limits<FloatType1>::epsilon()) {
       return a < b - tolerance;
     }
 
-    template <typename FloatType1, typename FloatType2, typename FloatType3>
-    bool isApproxSmallerEqual(FloatType1 a, FloatType2 b, FloatType3 tolerance) {
+    template <typename FloatType1, typename FloatType2>
+    bool isApproxSmallerEqual(const FloatType1 a, const FloatType2 b,
+                              const FloatType1 tolerance = std::numeric_limits<FloatType1>::epsilon()) {
       return a <= b - tolerance;
     }
 

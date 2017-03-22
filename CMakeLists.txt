@@ -7,7 +7,15 @@ include("cmake/CheckC11.cmake")
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules/;${CMAKE_MODULE_PATH}")
 #set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
 
+option(WITH_TESTING "Enable testing" On)
 option(AIT_DEBUG "Build with debug support" OFF)
+option(BH_DEBUG "Build with debug support" OFF)
+
+if(WITH_TESTING)
+    set(gtest_SOURCE_DIR "external/googletest-1.8.0/googletest")
+    include_directories(${gtest_SOURCE_DIR}/include ${gtest_SOURCE_DIR})
+    add_subdirectory(${gtest_SOURCE_DIR})
+endif()
 
 # Set compiler warning flags
 if(CMAKE_COMPILER_IS_GNUCC)

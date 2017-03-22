@@ -2630,7 +2630,7 @@ void ViewerWidget::sendClearSelectedPositionToWebSocketClients() {
 }
 
 void ViewerWidget::sendSelectedPositionToWebSocketClients(const ViewpointPlanner::Vector3& position) {
-  if (web_socket_server_ == nullptr || !planner_->hasGpsTransformation()) {
+  if (web_socket_server_ == nullptr || !planner_->areViewpointPathsInitialized() || !planner_->hasGpsTransformation()) {
     return;
   }
   ViewpointPlanner::GpsCoordinateType gps = planner_->convertPositionToGps(position);

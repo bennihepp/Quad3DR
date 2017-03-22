@@ -112,7 +112,6 @@ void ViewpointPlanner::reset() {
   viewpoint_count_grid_.setAllValues(0);
   grid_cell_probabilities_ = std::vector<FloatType>(viewpoint_count_grid_.getNumElements());
   std::fill(grid_cell_probabilities_.begin(), grid_cell_probabilities_.end(), 1 / FloatType(grid_cell_probabilities_.size()));
-  viewpoint_grid_indices_.clear();
   cached_visible_sparse_points_.clear();
   viewpoint_paths_initialized_ = false;
   viewpoint_paths_.clear();

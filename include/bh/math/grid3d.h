@@ -56,15 +56,21 @@ public:
   }
 
   bool isValidCoordinate(const Vector3s& xyz) const {
-    return 0 <= xyz(0) < dim_x_
-        && 0 <= xyz(1) < dim_y_
-        && 0 <= xyz(2) < dim_z_;
+    return 0 <= xyz(0)
+           && xyz(0) < dim_x_
+           && 0 <= xyz(1)
+           && xyz(1) < dim_y_
+           && 0 <= xyz(2)
+           && xyz(2) < dim_z_;
   }
 
   bool isValidCoordinate(const size_t x, const size_t y, const size_t z) const {
-    return 0 <= x < dim_x_
-        && 0 <= y < dim_y_
-        && 0 <= z < dim_z_;
+    return 0 <= x
+           && x < dim_x_
+           && 0 <= y
+           && y < dim_y_
+           && 0 <= z
+           && z < dim_z_;
   }
 
   const std::vector<ValueType>& getValues() const {
@@ -76,30 +82,52 @@ public:
   }
 
   size_t getIndex(const Vector3s& xyz) const {
+#if !BH_RELEASE
+    BH_ASSERT(isValidCoordinate(xyz));
+#endif
     return xyz(0) + dim_x_ * (xyz(1) + dim_y_ * xyz(2));
   }
 
   size_t getIndex(const size_t x, const size_t y, const size_t z) const {
+#if !BH_RELEASE
+    BH_ASSERT(isValidCoordinate(x, y, z));
+#endif
     return x + dim_x_ * (y + dim_y_ * z);
   }
 
   const ValueType& operator()(const Vector3s& xyz) const {
     const size_t index = getIndex(xyz);
-    return values_[index];
+    return (*this)(index);
   }
 
   ValueType& operator()(const Vector3s& xyz) {
     const size_t index = getIndex(xyz);
-    return values_[index];
+    return (*this)(index);
   }
 
   const ValueType& operator()(const size_t x, const size_t y, const size_t z) const {
     const size_t index = getIndex(x, y, z);
-    return values_[index];
+    return (*this)(index);
   }
 
   ValueType& operator()(const size_t x, const size_t y, const size_t z) {
     const size_t index = getIndex(x, y, z);
+    return (*this)(index);
+  }
+
+  const ValueType& operator()(const size_t index) const {
+#if !BH_RELEASE
+    BH_ASSERT(0 <= index);
+    BH_ASSERT(index < getNumElements());
+#endif
+    return values_[index];
+  }
+
+  ValueType& operator()(const size_t index) {
+#if !BH_RELEASE
+    BH_ASSERT(0 <= index);
+    BH_ASSERT(index < getNumElements());
+#endif
     return values_[index];
   }
 

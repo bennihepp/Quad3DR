@@ -662,10 +662,10 @@ std::pair<bool, ViewpointPlanner::ViewpointEntryIndex> ViewpointPlanner::findMat
           const bool sparse_matchable = ignore_sparse_matching || isSparseMatchable(viewpoint_index, other_index);
           AIT_PRINT_VALUE(voxel_overlap_ratio);
           AIT_PRINT_VALUE(information_overlap_ratio);
-          if (ignore_graph_component || component[other_index] == component[viewpoint_index]
+          if (ignore_graph_component || (component[other_index] == component[viewpoint_index]
               && voxel_overlap_ratio >= options_.triangulation_min_voxel_overlap_ratio
               && information_overlap_ratio >= options_.triangulation_min_information_overlap_ratio
-              && sparse_matchable) {
+              && sparse_matchable)) {
             return std::make_pair(true, other_index);
           }
         }

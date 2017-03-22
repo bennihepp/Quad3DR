@@ -13,6 +13,7 @@ ViewpointPlanner::ViewpointEntryIndex ViewpointPlanner::addViewpointEntryWithout
   const ViewpointEntryIndex viewpoint_index = viewpoint_entries_.size();
   const Vector3 viewpoint_position = viewpoint_entry.viewpoint.pose().getWorldPosition();
 //  std::cout << "Adding position to ANN index" << std::endl;
+  BH_PRINT_VALUE(viewpoint_position.transpose());
   viewpoint_ann_.addPoint(viewpoint_position);
 //  std::cout << "Putting viewpoint entry into array" << std::endl;
   if (viewpoint_entries_.capacity() == viewpoint_entries_.size()) {
@@ -25,10 +26,13 @@ ViewpointPlanner::ViewpointEntryIndex ViewpointPlanner::addViewpointEntryWithout
   viewpoint_graph_.addNode(viewpoint_index);
   viewpoint_graph_components_valid_ = false;
 #if !AIT_RELEASE
-  AIT_ASSERT(viewpoint_count_grid_.isInsideGrid(viewpoint_position));
+  if (viewpoint_entries_.size() > num_real_viewpoints_) {
+    AIT_ASSERT(viewpoint_count_grid_.isInsideGrid(viewpoint_position));
+  }
 #endif
-  viewpoint_count_grid_(viewpoint_position) += 1;
-  viewpoint_grid_indices_.push_back(viewpoint_count_grid_.getGridIndices(viewpoint_position));
+  if (viewpoint_entries_.size() > num_real_viewpoints_) {
+    viewpoint_count_grid_(viewpoint_position) += 1;
+  }
   // Check if viewpoint sampling distribution should be updated
   const size_t increase_since_last_update = viewpoint_entries_.size() - viewpoint_sampling_distribution_update_size_;
   const FloatType relative_increase_since_last_update = increase_since_last_update / FloatType(viewpoint_entries_.size());
@@ -123,9 +127,16 @@ bool ViewpointPlanner::generateNextViewpointEntry() {
 //  if (verbose) {
 //    std::cout << "Trying to sample viewpoint" << std::endl;
 //  }
-  if (viewpoint_entries_.size() <= num_real_viewpoints_ && options_.isSet("drone_start_position")) {
-    const Pose drone_start_pose = Pose::createFromImageToWorldTransformation(options_.drone_start_position, Quaternion::Identity());
-    std::tie(found_sample, sampled_pose) = sampleSurroundingPose(drone_start_pose);
+  if (viewpoint_entries_.size() <= num_real_viewpoints_) {
+    if (options_.isSet("drone_start_position")) {
+      const Pose drone_start_pose = Pose::createFromImageToWorldTransformation(options_.drone_start_position, Quaternion::Identity());
+      std::tie(found_sample, sampled_pose) = sampleSurroundingPose(drone_start_pose);
+    }
+    else {
+      reference_viewpoint_index = random_.sampleUniformIntExclusive(viewpoint_entries_.size());
+      const Pose& reference_pose = viewpoint_entries_[reference_viewpoint_index].viewpoint.pose();
+      std::tie(found_sample, sampled_pose) = sampleSurroundingPose(reference_pose);
+    }
   }
   else {
     const bool sample_without_reference = random_.sampleBernoulli(options_.viewpoint_sample_without_reference_probability);

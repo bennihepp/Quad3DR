@@ -85,6 +85,11 @@ public:
     return sampleUniformInt(min, max - 1);
   }
 
+  /// Sample uniform integer from interval [0, max) (excluding max)
+  IntType sampleUniformIntExclusive(const IntType max) const {
+    return sampleUniformIntExclusive(0, max);
+  }
+
   Vector3 sampleSphericalShell(FloatType min_radius, FloatType max_radius) const {
     Vector3 vec;
     sampleSphericalShell(&vec);
