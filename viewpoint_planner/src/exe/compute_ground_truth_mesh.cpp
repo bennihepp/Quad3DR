@@ -11,20 +11,20 @@
 #include <csignal>
 #include <algorithm>
 
-#include <ait/boost.h>
+#include <bh/boost.h>
 #include <boost/program_options.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/functional/hash.hpp>
 
 #include <bh/common.h>
-//#include <ait/eigen.h>
-//#include <ait/eigen_serialization.h>
+//#include <bh/eigen.h>
+//#include <bh/eigen_serialization.h>
 #include <bh/utilities.h>
 #include <bh/math/utilities.h>
-#include <ait/options.h>
-#include <ait/eigen_options.h>
+#include <bh/config_options.h>
+#include <bh/eigen_options.h>
 #include <bh/math/geometry.h>
-#include <ait/nn/approximate_nearest_neighbor.h>
+#include <bh/nn/approximate_nearest_neighbor.h>
 
 #include <bh/mLib/mLib.h>
 #include <bh/mLib/mLibUtils.h>
@@ -67,11 +67,11 @@ using TriAABBTree = bh::AABBTree<Triangle, FloatType>;
 
 class ComputeGroundTruthMeshCmdline {
 public:
-  struct Options : ait::ConfigOptions {
+  struct Options : bh::ConfigOptions {
     static const string kPrefix;
 
     Options()
-    : ait::ConfigOptions(kPrefix) {
+    : bh::ConfigOptions(kPrefix) {
       addOptionRequired<Vector3>("roi_bbox_min", &roi_bbox_min);
       addOptionRequired<Vector3>("roi_bbox_max", &roi_bbox_max);
       addOption<FloatType>("max_triangle_area", &max_triangle_area);
@@ -113,25 +113,25 @@ public:
 //  using OctreeType = OccupancyMap<AugmentedOccupancyNode>;
   using BvhTreeType = bvh::Tree<NodeObject, FloatType>;
 
-  static std::map<string, std::unique_ptr<ait::ConfigOptions>> getConfigOptions() {
-    std::map<string, std::unique_ptr<ait::ConfigOptions>> config_options;
+  static std::map<string, std::unique_ptr<bh::ConfigOptions>> getConfigOptions() {
+    std::map<string, std::unique_ptr<bh::ConfigOptions>> config_options;
     config_options.emplace(std::piecewise_construct,
       std::forward_as_tuple("viewpoint_planner.data"),
-      std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlannerData::Options())));
+      std::forward_as_tuple(static_cast<bh::ConfigOptions*>(new ViewpointPlannerData::Options())));
     config_options.emplace(std::piecewise_construct,
         std::forward_as_tuple(Options::kPrefix),
-        std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new Options())));
+        std::forward_as_tuple(static_cast<bh::ConfigOptions*>(new Options())));
     config_options.emplace(std::piecewise_construct,
       std::forward_as_tuple("viewpoint_planner"),
-      std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlanner::Options())));
+      std::forward_as_tuple(static_cast<bh::ConfigOptions*>(new ViewpointPlanner::Options())));
     config_options.emplace(std::piecewise_construct,
       std::forward_as_tuple("motion_planner"),
-      std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlanner::MotionPlannerType::Options())));
+      std::forward_as_tuple(static_cast<bh::ConfigOptions*>(new ViewpointPlanner::MotionPlannerType::Options())));
     return config_options;
   }
 
   ComputeGroundTruthMeshCmdline(
-      const std::map<string, std::unique_ptr<ait::ConfigOptions>>& config_options,
+      const std::map<string, std::unique_ptr<bh::ConfigOptions>>& config_options,
       const string& in_mesh_filename,
       const string& out_mesh_filename,
       const string& out_unobs_mesh_filename)
@@ -178,7 +178,7 @@ public:
     std::vector<Triangle> triangles;
     for (std::size_t i = 0; i < mesh.m_FaceIndicesVertices.size(); ++i) {
       const MeshDataType::Indices::Face& face = mesh.m_FaceIndicesVertices[i];
-      AIT_ASSERT_STR(face.size() == 3, "Mesh faces need to have a valence of 3");
+      BH_ASSERT_STR(face.size() == 3, "Mesh faces need to have a valence of 3");
 
       Triangle tri(
           bh::MLibUtilities::convertMlibToEigen(mesh.m_Vertices[face[0]]),
@@ -237,7 +237,7 @@ public:
     std::vector<Triangle> triangles;
     for (std::size_t i = 0; i < mesh.m_FaceIndicesVertices.size(); ++i) {
       const MeshDataType::Indices::Face& face = mesh.m_FaceIndicesVertices[i];
-      AIT_ASSERT_STR(face.size() == 3, "Mesh faces need to have a valence of 3");
+      BH_ASSERT_STR(face.size() == 3, "Mesh faces need to have a valence of 3");
 
       Triangle tri(
               bh::MLibUtilities::convertMlibToEigen(mesh.m_Vertices[face[0]]),
@@ -257,12 +257,12 @@ public:
         const FloatType area_square = tri.computeTriangleAreaSquare();
         if (bh::isApproxGreater(area_square, max_triangle_area_square, FloatType(1e-3))) {
           std::array<Triangle, 2> tri_array = tri.splitTriangle();
-          AIT_ASSERT(tri_array[0].v1().array().isFinite().all());
-          AIT_ASSERT(tri_array[0].v2().array().isFinite().all());
-          AIT_ASSERT(tri_array[0].v3().array().isFinite().all());
-          AIT_ASSERT(tri_array[1].v1().array().isFinite().all());
-          AIT_ASSERT(tri_array[1].v2().array().isFinite().all());
-          AIT_ASSERT(tri_array[1].v3().array().isFinite().all());
+          BH_ASSERT(tri_array[0].v1().array().isFinite().all());
+          BH_ASSERT(tri_array[0].v2().array().isFinite().all());
+          BH_ASSERT(tri_array[0].v3().array().isFinite().all());
+          BH_ASSERT(tri_array[1].v1().array().isFinite().all());
+          BH_ASSERT(tri_array[1].v2().array().isFinite().all());
+          BH_ASSERT(tri_array[1].v3().array().isFinite().all());
           tri_stack.push(tri_array[0]);
           tri_stack.push(tri_array[1]);
         }
@@ -357,9 +357,9 @@ public:
     }
     occupancy_bvh_tree.clear();
 
-    AIT_PRINT_VALUE(invalid_free_voxels);
-    AIT_PRINT_VALUE(valid_free_voxels);
-    AIT_PRINT_VALUE(non_free_voxels);
+    BH_PRINT_VALUE(invalid_free_voxels);
+    BH_PRINT_VALUE(valid_free_voxels);
+    BH_PRINT_VALUE(non_free_voxels);
 
     cout << "Building BVH tree with " << objects.size() << " objects" << endl;
     bh::Timer timer;
@@ -448,7 +448,7 @@ public:
         const string rvp_filename = options_.getValue<string>("out_reachable_voxel_positions");
         std::ofstream rvp_ofs(rvp_filename, std::ios::binary);
         if (!rvp_ofs) {
-          throw AIT_EXCEPTION(string("Unable to open file for writing: ") + rvp_filename);
+          throw BH_EXCEPTION(string("Unable to open file for writing: ") + rvp_filename);
         }
         boost::archive::binary_oarchive rvp_oa(rvp_ofs);
         rvp_oa << reachable_voxel_positions;
@@ -459,7 +459,7 @@ public:
       const string rvp_filename = options_.getValue<string>("in_reachable_voxel_positions");
       std::ifstream rvp_ifs(rvp_filename, std::ios::binary);
       if (!rvp_ifs) {
-        throw AIT_EXCEPTION(string("Unable to open file for reading: ") + rvp_filename);
+        throw BH_EXCEPTION(string("Unable to open file for reading: ") + rvp_filename);
       }
       boost::archive::binary_iarchive rvp_ia(rvp_ifs);
       rvp_ia >> reachable_voxel_positions;
@@ -477,7 +477,7 @@ public:
         const string bvh_tree_filename = options_.getValue<string>("out_valid_position_bvh_tree");
         std::ofstream bvh_ofs(bvh_tree_filename, std::ios::binary);
         if (!bvh_ofs) {
-          throw AIT_EXCEPTION(string("Unable to open file for writing: ") + bvh_tree_filename);
+          throw BH_EXCEPTION(string("Unable to open file for writing: ") + bvh_tree_filename);
         }
         boost::archive::binary_oarchive bvh_oa(bvh_ofs);
         bvh_oa << *valid_position_bvh_tree;
@@ -488,7 +488,7 @@ public:
       const string bvh_tree_filename = options_.getValue<string>("in_valid_position_bvh_tree");
       std::ifstream bvh_ifs(bvh_tree_filename, std::ios::binary);
       if (!bvh_ifs) {
-        throw AIT_EXCEPTION(string("Unable to open file for reading: ") + bvh_tree_filename);
+        throw BH_EXCEPTION(string("Unable to open file for reading: ") + bvh_tree_filename);
       }
       boost::archive::binary_iarchive bvh_ia(bvh_ifs);
       bvh_ia >> *valid_position_bvh_tree;
@@ -559,7 +559,7 @@ public:
       }
 
       const MeshDataType::Indices::Face& face = mesh.m_FaceIndicesVertices[i];
-      AIT_ASSERT_STR(face.size() == 3, "Mesh faces need to have a valence of 3");
+      BH_ASSERT_STR(face.size() == 3, "Mesh faces need to have a valence of 3");
 
       Triangle tri(
               bh::MLibUtilities::convertMlibToEigen(mesh.m_Vertices[face[0]]),
@@ -589,7 +589,7 @@ public:
 //          BH_PRINT_VALUE(i);
 //        }
         std::vector<BvhTreeType::IntersectionResult> results = valid_position_bvh_tree->intersectsCuda(rays, 0, max_range);
-        AIT_ASSERT(results.size() == rays.size());
+        BH_ASSERT(results.size() == rays.size());
         for (size_t k = 0; k < results.size(); ++k) {
           const BvhTreeType::IntersectionResult& result = results[k];
           const BvhTreeType::RayType& ray = rays[k];
@@ -683,11 +683,11 @@ public:
 
     const int cuda_gpu_id = options_.getValue<int>("cuda_gpu_id");
     cout << "Selecting CUDA device " << cuda_gpu_id << endl;
-    ait::CudaManager::setActiveGpuId(cuda_gpu_id);
-    cout << "Previous CUDA stack size was " << ait::CudaManager::getStackSize() << endl;
+    bh::CudaManager::setActiveGpuId(cuda_gpu_id);
+    cout << "Previous CUDA stack size was " << bh::CudaManager::getStackSize() << endl;
     size_t cuda_stack_size = options_.getValue<size_t>("cuda_stack_size");
     cout << "Setting CUDA stack size to " << cuda_stack_size << endl;
-    ait::CudaManager::setStackSize(cuda_stack_size);
+    bh::CudaManager::setStackSize(cuda_stack_size);
 
     cout << "Filtering observable triangles" << endl;
     MeshDataType unobservable_mesh;
@@ -725,7 +725,7 @@ private:
 const string ComputeGroundTruthMeshCmdline::Options::kPrefix = "compute_ground_truth_mesh";
 
 std::pair<bool, boost::program_options::variables_map> processOptions(
-    int argc, char** argv, std::map<string, std::unique_ptr<ait::ConfigOptions>>& config_options)
+    int argc, char** argv, std::map<string, std::unique_ptr<bh::ConfigOptions>>& config_options)
 {
   namespace po = boost::program_options;
 
@@ -755,7 +755,7 @@ std::pair<bool, boost::program_options::variables_map> processOptions(
     }
     std::ifstream config_in(vm["config-file"].as<string>());
     if (!config_in) {
-      throw AIT_EXCEPTION("Unable to open config file");
+      throw BH_EXCEPTION("Unable to open config file");
     }
     else {
       const bool allow_unregistered = false;
@@ -794,7 +794,7 @@ void disableCtrlCHandler() {
 
 int main(int argc, char** argv)
 {
-  std::map<string, std::unique_ptr<ait::ConfigOptions>> config_options =
+  std::map<string, std::unique_ptr<bh::ConfigOptions>> config_options =
       ComputeGroundTruthMeshCmdline::getConfigOptions();
 
   // Handle command line and config file

@@ -14,27 +14,27 @@
 #include <QOpenGLShaderProgram>
 #include "point_drawer.h"
 
-struct OGLLineData
-{
+namespace rendering {
+
+struct OGLLineData {
   OGLLineData() {}
 
-  OGLLineData(const OGLVertexDataRGBA& vertex1, const OGLVertexDataRGBA& vertex2)
-  : vertex1(vertex1), vertex2(vertex2) {}
+  OGLLineData(const OGLVertexDataRGBA &vertex1, const OGLVertexDataRGBA &vertex2)
+      : vertex1(vertex1), vertex2(vertex2) {}
 
-    OGLVertexDataRGBA vertex1;
-    OGLVertexDataRGBA vertex2;
+  OGLVertexDataRGBA vertex1;
+  OGLVertexDataRGBA vertex2;
 };
 
-inline std::ostream& operator<<(std::ostream& out, const OGLLineData& line) {
-    out << "[ " << line.vertex1 << " " << line.vertex2 << " ]";
-    return out;
+inline std::ostream &operator<<(std::ostream &out, const OGLLineData &line) {
+  out << "[ " << line.vertex1 << " " << line.vertex2 << " ]";
+  return out;
 }
 
-class LineDrawer
-{
+class LineDrawer {
 public:
   LineDrawer()
-  : draw_lines_(true), num_lines_(0) {
+      : draw_lines_(true), num_lines_(0) {
   }
 
   ~LineDrawer() {
@@ -77,7 +77,7 @@ public:
     vbo_.create();
   }
 
-  void upload(const std::vector<OGLLineData>& line_data) {
+  void upload(const std::vector<OGLLineData> &line_data) {
     num_lines_ = line_data.size();
 
     program_.bind();
@@ -100,7 +100,7 @@ public:
     program_.release();
   }
 
-  void draw(const QMatrix4x4& pvm_matrix, const int width, const int height, const float line_width) {
+  void draw(const QMatrix4x4 &pvm_matrix, const int width, const int height, const float line_width) {
     if (draw_lines_ && num_lines_ > 0) {
       program_.bind();
       vao_.bind();
@@ -123,3 +123,5 @@ private:
   QOpenGLBuffer vbo_;
   QOpenGLShaderProgram program_;
 };
+
+}

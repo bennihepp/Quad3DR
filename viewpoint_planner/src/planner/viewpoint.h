@@ -32,9 +32,9 @@ public:
   static constexpr FloatType MAX_DISTANCE_DEVIATION_BY_STDDEV = 3;
   static constexpr FloatType MAX_NORMAL_DEVIATION_BY_STDDEV = 3;
 
-  Viewpoint(FloatType projection_margin = DEFAULT_PROJECTION_MARGIN);
+  explicit Viewpoint(FloatType projection_margin = DEFAULT_PROJECTION_MARGIN);
 
-  Viewpoint(const PinholeCamera* camera, const Pose& pose, FloatType projection_margin = DEFAULT_PROJECTION_MARGIN);
+  explicit Viewpoint(const PinholeCamera* camera, const Pose& pose, FloatType projection_margin = DEFAULT_PROJECTION_MARGIN);
 
   Viewpoint(const Viewpoint& other);
 
@@ -43,6 +43,10 @@ public:
   Viewpoint& operator=(const Viewpoint& other);
 
   Viewpoint& operator=(Viewpoint&& other);
+
+  bool operator==(const Viewpoint& other) const;
+
+  bool operator!=(const Viewpoint& other) const;
 
   const Pose& pose() const {
     return pose_;
@@ -86,6 +90,7 @@ private:
 
   const PinholeCamera* camera_;
   Pose pose_;
+  // TODO: Remove?
   FloatType projection_margin_;
   Matrix3x4 transformation_world_to_image_;
 };

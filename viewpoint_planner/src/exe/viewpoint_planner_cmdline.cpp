@@ -10,13 +10,14 @@
 #include <memory>
 #include <csignal>
 
-#include <ait/boost.h>
+#include <bh/boost.h>
 #include <boost/program_options.hpp>
 #include <boost/filesystem.hpp>
 
-#include <ait/common.h>
-#include <ait/utilities.h>
-#include <ait/options.h>
+#include <bh/common.h>
+#include <bh/utilities.h>
+#include <bh/config_options.h>
+#include <bh/string_utils.h>
 
 #include "../reconstruction/dense_reconstruction.h"
 #include "../octree/occupancy_map.h"
@@ -41,21 +42,21 @@ void disableCtrlCHandler() {
 
 class ViewpointPlannerCmdline {
 public:
-  static std::map<std::string, std::unique_ptr<ait::ConfigOptions>> getConfigOptions() {
-    std::map<std::string, std::unique_ptr<ait::ConfigOptions>> config_options;
+  static std::map<std::string, std::unique_ptr<bh::ConfigOptions>> getConfigOptions() {
+    std::map<std::string, std::unique_ptr<bh::ConfigOptions>> config_options;
     config_options.emplace(std::piecewise_construct,
       std::forward_as_tuple("viewpoint_planner.data"),
-      std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlannerData::Options())));
+      std::forward_as_tuple(static_cast<bh::ConfigOptions*>(new ViewpointPlannerData::Options())));
     config_options.emplace(std::piecewise_construct,
       std::forward_as_tuple("viewpoint_planner"),
-      std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlanner::Options())));
+      std::forward_as_tuple(static_cast<bh::ConfigOptions*>(new ViewpointPlanner::Options())));
     config_options.emplace(std::piecewise_construct,
       std::forward_as_tuple("motion_planner"),
-      std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlanner::MotionPlannerType::Options())));
+      std::forward_as_tuple(static_cast<bh::ConfigOptions*>(new ViewpointPlanner::MotionPlannerType::Options())));
     return config_options;
   }
 
-  ViewpointPlannerCmdline(const std::map<std::string, std::unique_ptr<ait::ConfigOptions>>& config_options) {
+  ViewpointPlannerCmdline(const std::map<std::string, std::unique_ptr<bh::ConfigOptions>>& config_options) {
     const ViewpointPlannerData::Options* viewpoint_planner_data_options =
       dynamic_cast<ViewpointPlannerData::Options*>(config_options.at("viewpoint_planner.data").get());
     std::unique_ptr<ViewpointPlannerData> planner_data(
@@ -86,7 +87,7 @@ public:
     if (vm.count("out-viewpoint-graph-file") > 0) {
       enableCtrlCHandler(signalIntHandler);
       const std::size_t num_candidates = vm["num-candidates"].as<std::size_t>();
-      AIT_ASSERT(num_candidates > 0);
+      BH_ASSERT(num_candidates > 0);
       std::cout << "Sampling viewpoint candidates" << std::endl;
       bool graph_modified = false;
       while (!ctrl_c_pressed && getPlanner().getViewpointGraph().numVertices() < num_candidates) {
@@ -112,9 +113,29 @@ public:
     }
 
     if (vm.count("out-viewpoint-path-file") > 0) {
+      const bool use_manual_drone_start_position = vm.count("drone-start-viewpoint-ids") == 0;
+
+      if (!use_manual_drone_start_position) {
+        const std::string drone_start_viewpoint_ids_str = vm["drone-start-viewpoint-ids"].as<std::string>();
+        const std::vector<std::size_t> drone_start_viewpoint_ids
+                = bh::splitString<std::size_t>(drone_start_viewpoint_ids_str, ",");
+        for (std::size_t path_index = 0; path_index < getPlanner().getViewpointPaths().size(); ++path_index) {
+          for (std::size_t drone_start_viewpoint_id : drone_start_viewpoint_ids) {
+            std::cout << "Adding initial viewpoint " << drone_start_viewpoint_id
+                      << " to viewpoint path " << path_index << std::endl;
+            ViewpointPlanner::ViewpointPathEntry path_entry;
+            path_entry.viewpoint_index = drone_start_viewpoint_id;
+            path_entry.viewpoint = getPlanner().getViewpointEntries()[drone_start_viewpoint_id].viewpoint;
+            path_entry.mvs_viewpoint = false;
+            const bool ignore_observed_voxels = true;
+            getPlanner().addViewpointPathEntry(path_index, path_entry, ignore_observed_voxels);
+          }
+        }
+      }
+
       enableCtrlCHandler(signalIntHandler);
       const std::size_t num_viewpoints = vm["num-viewpoints"].as<std::size_t>();
-      AIT_ASSERT(num_viewpoints > 0);
+      BH_ASSERT(num_viewpoints > 0);
       std::cout << "Computing viewpoint paths" << std::endl;
       while (!ctrl_c_pressed && getPlanner().getBestViewpointPath().entries.size() < num_viewpoints) {
         bool result = getPlanner().findNextViewpointPathEntries();
@@ -125,18 +146,40 @@ public:
 
       if (!vm["no-tour-computation"].as<bool>()) {
         std::cout << "Computing viewpoint tour" << std::endl;
-        getPlanner().computeViewpointTour();
+        getPlanner().computeViewpointTour(use_manual_drone_start_position);
+      }
+
+      if (!vm["no-viewpoint-path-augmentation"].as<bool>()) {
+        std::cout << "Augmenting viewpoint path with sparse matching viewpoints" << std::endl;
+        for (ViewpointPlanner::ViewpointPath& viewpoint_path : getPlanner().getViewpointPaths()) {
+          getPlanner().augmentedViewpointPathWithSparseMatchingViewpoints(&viewpoint_path);
+        }
       }
 
       disableCtrlCHandler();
       std::cout << "Done" << std::endl;
 
-      getPlanner().saveViewpointPath(vm["out-viewpoint-path-file"].as<std::string>());
-      getPlanner().exportViewpointPathAsText(vm["out-viewpoint-path-file"].as<std::string>() + ".txt",
+      const std::string out_viewpoint_path_file = vm["out-viewpoint-path-file"].as<std::string>();
+      getPlanner().saveViewpointPath(out_viewpoint_path_file + ".bs");
+      getPlanner().exportViewpointPathAsText(out_viewpoint_path_file + ".txt",
         getPlanner().getBestViewpointPath());
       if (getPlanner().hasGpsTransformation()) {
-        getPlanner().exportViewpointPathAsJson(vm["out-viewpoint-path-file"].as<std::string>() + ".json",
+        getPlanner().exportViewpointPathAsJson(out_viewpoint_path_file + ".json",
           getPlanner().getBestViewpointPath());
+      }
+      if (vm["save-conservative-path"].as<bool>()) {
+        std::cout << "Making viewpoint paths conservatively sparse matchable" << std::endl;
+        for (ViewpointPlanner::ViewpointPath& viewpoint_path : getPlanner().getViewpointPaths()) {
+          getPlanner().makeViewpointMotionsSparseMatchable(&viewpoint_path);
+        }
+        const std::string conservative_out_viewpoint_path_file = out_viewpoint_path_file + "_conservative";
+        getPlanner().saveViewpointPath(conservative_out_viewpoint_path_file + ".bs");
+        getPlanner().exportViewpointPathAsText(conservative_out_viewpoint_path_file + ".txt",
+                                               getPlanner().getBestViewpointPath());
+        if (getPlanner().hasGpsTransformation()) {
+          getPlanner().exportViewpointPathAsJson(conservative_out_viewpoint_path_file + ".json",
+                                                 getPlanner().getBestViewpointPath());
+        }
       }
     }
   }
@@ -146,7 +189,7 @@ private:
 };
 
 std::pair<bool, boost::program_options::variables_map> processOptions(
-    int argc, char** argv, std::map<std::string, std::unique_ptr<ait::ConfigOptions>>& config_options) {
+    int argc, char** argv, std::map<std::string, std::unique_ptr<bh::ConfigOptions>>& config_options) {
   namespace po = boost::program_options;
 
   po::variables_map vm;
@@ -162,6 +205,9 @@ std::pair<bool, boost::program_options::variables_map> processOptions(
         ("out-viewpoint-path-file", po::value<std::string>(), "File to save the viewpoint path to after processing.")
         ("no-motion-computation", po::bool_switch()->default_value(false), "Whether to prevent motion computation")
         ("no-tour-computation", po::bool_switch()->default_value(false), "Whether to prevent tour computation")
+        ("no-viewpoint-path-augmentation", po::bool_switch()->default_value(false), "Whether to prevent augmenting viewpoint path with sparse matching viewpoints")
+        ("save-conservative-path", po::bool_switch()->default_value(true), "Whether to also save a conservative path")
+        ("drone-start-viewpoint-ids", po::value<std::string>(), "Starting viewpoints for viewpoint path")
         ;
 
     po::options_description options;
@@ -179,7 +225,7 @@ std::pair<bool, boost::program_options::variables_map> processOptions(
     }
     std::ifstream config_in(vm["config-file"].as<string>());
     if (!config_in) {
-      throw AIT_EXCEPTION("Unable to open config file");
+      throw BH_EXCEPTION("Unable to open config file");
     }
     else {
       const bool allow_unregistered = true;
@@ -209,7 +255,7 @@ int main(int argc, char** argv) {
   qapp.setApplicationName("Quad3DR viewpoint planner command line");
 #endif
 
-  std::map<std::string, std::unique_ptr<ait::ConfigOptions>> config_options =
+  std::map<std::string, std::unique_ptr<bh::ConfigOptions>> config_options =
     ViewpointPlannerCmdline::getConfigOptions();
 
   // Handle command line and config file
@@ -220,7 +266,7 @@ int main(int argc, char** argv) {
   }
   boost::program_options::variables_map vm = std::move(cmdline_result.second);
 
-  AIT_ASSERT(vm.count("out-viewpoint-graph-file") > 0 || vm.count("out-viewpoint-path-file") > 0);
+  BH_ASSERT(vm.count("out-viewpoint-graph-file") > 0 || vm.count("out-viewpoint-path-file") > 0);
 
   ViewpointPlannerCmdline planner_cmdline(config_options);
 

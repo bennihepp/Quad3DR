@@ -12,16 +12,16 @@
 std::pair<bool, ViewpointPlanner::Pose> ViewpointPlanner::samplePose(
     const std::size_t max_trials /*= (std::size_t)-1*/,
     const bool biased_orientation /*=true*/) const {
-  return samplePose(pose_sample_bbox_, drone_extent_, max_trials, biased_orientation);
+  return samplePose(pose_sample_bbox_, drone_bbox_, max_trials, biased_orientation);
 }
 
 std::pair<bool, ViewpointPlanner::Pose> ViewpointPlanner::samplePose(const BoundingBoxType& bbox,
-    const Vector3& object_extent, std::size_t max_trials /*= (std::size_t)-1*/,
+    const BoundingBoxType& object_bbox, std::size_t max_trials /*= (std::size_t)-1*/,
     const bool biased_orientation /*=true*/) const {
   if (max_trials == (std::size_t)-1) {
     max_trials = options_.pose_sample_num_trials;
   }
-  std::pair<bool, ViewpointPlanner::Vector3> pos_result = samplePosition(bbox, object_extent, max_trials);
+  std::pair<bool, ViewpointPlanner::Vector3> pos_result = samplePosition(bbox, object_bbox, max_trials);
   if (!pos_result.first) {
     return std::make_pair(false, Pose());
   }
@@ -38,12 +38,12 @@ std::pair<bool, ViewpointPlanner::Pose> ViewpointPlanner::samplePose(const Bound
 }
 
 std::pair<bool, ViewpointPlanner::Pose> ViewpointPlanner::samplePose(const RegionType& region,
-    const Vector3& object_extent, std::size_t max_trials /*= (std::size_t)-1*/,
+    const BoundingBoxType& object_bbox, std::size_t max_trials /*= (std::size_t)-1*/,
     const bool biased_orientation /*=true*/) const {
   if (max_trials == (std::size_t)-1) {
     max_trials = options_.pose_sample_num_trials;
   }
-  std::pair<bool, ViewpointPlanner::Vector3> pos_result = samplePosition(region, object_extent, max_trials);
+  std::pair<bool, ViewpointPlanner::Vector3> pos_result = samplePosition(region, object_bbox, max_trials);
   if (!pos_result.first) {
     return std::make_pair(false, Pose());
   }
@@ -92,7 +92,7 @@ ViewpointPlanner::Pose::Quaternion ViewpointPlanner::sampleOrientation() const {
 ViewpointPlanner::Pose::Quaternion ViewpointPlanner::sampleBiasedOrientation(const Vector3& pos, const BoundingBoxType& bias_bbox) const {
   const FloatType dist = (pos - bias_bbox.getCenter()).norm();
   const FloatType bbox_fov_angle = std::atan(bias_bbox.getMaxExtent() / (2 * dist));
-  FloatType angle_stddev = 3 * ait::clamp<FloatType>(bbox_fov_angle, 0, M_PI / 2);
+  FloatType angle_stddev = 2 * bh::clamp<FloatType>(bbox_fov_angle, 0, M_PI / 2);
   const FloatType angle1 = std::abs(random_.sampleNormal(0, angle_stddev));
   FloatType angle2 = random_.sampleNormal(0, angle_stddev);
   Vector3 bbox_direction = (bias_bbox.getCenter() - pos).normalized();
@@ -101,7 +101,7 @@ ViewpointPlanner::Pose::Quaternion ViewpointPlanner::sampleBiasedOrientation(con
   if (bbox_direction(2) > 0) {
     bbox_direction(2) = 0;
   }
-  angle2 = ait::clamp<FloatType>(angle2, 0, M_PI / 2);
+  angle2 = bh::clamp<FloatType>(angle2, 0, M_PI / 2);
   // Compute viewing direction (i.e. pose z axis)
   Pose::Vector3 viewing_direction = AngleAxis(angle1, Vector3::UnitZ()) * bbox_direction;
   viewing_direction = AngleAxis(-angle2, viewing_direction.cross(Vector3::UnitZ())) * viewing_direction;
@@ -121,7 +121,7 @@ ViewpointPlanner::Pose::Quaternion ViewpointPlanner::sampleBiasedOrientation(con
   Pose::Vector3 pose_z_axis = viewing_direction;
   Pose::Vector3 pose_x_axis;
   // If z axis and viewing direction are parallel, set x (right) direction manually
-  if (ait::isApproxEqual(std::abs(z_axis.dot(pose_z_axis)), (FloatType)1, kDotProdEqualTolerance )) {
+  if (bh::isApproxEqual(std::abs(z_axis.dot(pose_z_axis)), (FloatType)1, kDotProdEqualTolerance )) {
     pose_x_axis = Pose::Vector3(1, 0, 0);
   }
   else {
@@ -138,11 +138,11 @@ ViewpointPlanner::Pose::Quaternion ViewpointPlanner::sampleBiasedOrientation(con
 
 std::pair<bool, ViewpointPlanner::Vector3> ViewpointPlanner::samplePosition(
     const std::size_t max_trials /*= (std::size_t)-1*/) const {
-  return samplePosition(pose_sample_bbox_, drone_extent_, max_trials);
+  return samplePosition(pose_sample_bbox_, drone_bbox_, max_trials);
 }
 
 std::pair<bool, ViewpointPlanner::Vector3> ViewpointPlanner::samplePosition(const BoundingBoxType& bbox,
-    const Vector3& object_extent, std::size_t max_trials /*= (std::size_t)-1*/) const {
+    const BoundingBoxType& object_bbox, std::size_t max_trials /*= (std::size_t)-1*/) const {
   if (max_trials == (std::size_t)-1) {
     max_trials = options_.pose_sample_num_trials;
   }
@@ -151,7 +151,7 @@ std::pair<bool, ViewpointPlanner::Vector3> ViewpointPlanner::samplePosition(cons
         random_.sampleUniform(bbox.getMinimum(0), bbox.getMaximum(0)),
         random_.sampleUniform(bbox.getMinimum(1), bbox.getMaximum(1)),
         random_.sampleUniform(bbox.getMinimum(2), bbox.getMaximum(2)));
-    const bool valid = isValidObjectPosition(pos, object_extent);
+    const bool valid = isValidObjectPosition(pos, object_bbox);
     if (valid) {
       return std::make_pair(true, pos);
     }
@@ -160,7 +160,7 @@ std::pair<bool, ViewpointPlanner::Vector3> ViewpointPlanner::samplePosition(cons
 }
 
 std::pair<bool, ViewpointPlanner::Vector3> ViewpointPlanner::samplePosition(const RegionType& region,
-    const Vector3& object_extent, std::size_t max_trials /*= (std::size_t)-1*/) const {
+    const BoundingBoxType& object_bbox, std::size_t max_trials /*= (std::size_t)-1*/) const {
   if (max_trials == (std::size_t)-1) {
     max_trials = options_.pose_sample_num_trials;
   }
@@ -171,7 +171,7 @@ std::pair<bool, ViewpointPlanner::Vector3> ViewpointPlanner::samplePosition(cons
         random_.sampleUniform(bbox.getMinimum(1), bbox.getMaximum(1)),
         random_.sampleUniform(bbox.getMinimum(2), bbox.getMaximum(2)));
     const bool within_region = region.isPointInside(pos);
-    const bool valid = isValidObjectPosition(pos, object_extent);
+    const bool valid = isValidObjectPosition(pos, object_bbox);
     if (within_region && valid) {
       return std::make_pair(true, pos);
     }
@@ -188,7 +188,7 @@ ViewpointPlanner::sampleSurroundingPose(const Pose& pose) const {
     random_.sampleSphericalShell(options_.pose_sample_min_radius, options_.pose_sample_max_radius, &sampled_pos);
     sampled_pos += pose.getWorldPosition();
     if (pose_sample_bbox_.isInside(sampled_pos)
-        && isValidObjectPosition(sampled_pos, drone_extent_)) {
+        && isValidObjectPosition(sampled_pos, drone_bbox_)) {
       found_position = true;
       break;
     }

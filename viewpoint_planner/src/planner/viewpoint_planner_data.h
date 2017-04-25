@@ -8,39 +8,21 @@
 #pragma once
 
 #include <bh/eigen.h>
-#include <ait/mLib.h>
+#include <bh/mLib//mLib.h>
 #include <memory>
-#include <ait/boost.h>
+#include <bh/boost.h>
 #include <boost/serialization/access.hpp>
 #include <boost/serialization/split_member.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/filesystem.hpp>
 #include <bh/common.h>
-#include <ait/options.h>
+#include <bh/config_options.h>
+#include <bh/eigen_options.h>
 #include <bh/math/geometry.h>
+#include "occupied_tree.h"
 #include "../octree/occupancy_map.h"
 #include "../reconstruction/dense_reconstruction.h"
 #include "../bvh/bvh.h"
-
-template <typename FloatType>
-struct NodeObject {
-  FloatType occupancy;
-  uint16_t observation_count;
-  FloatType weight;
-  Eigen::Matrix<FloatType, 3, 1> normal;
-
-private:
-  // Boost serialization
-  friend class boost::serialization::access;
-
-  template <typename Archive>
-  void serialize(Archive& ar, const unsigned int version) {
-    ar & occupancy;
-    ar & observation_count;
-    ar & weight;
-    ar & normal;
-  }
-};
 
 class ViewpointPlanner;
 
@@ -50,12 +32,14 @@ class MotionPlanner;
 class ViewpointPlannerData {
 public:
   using FloatType = float;
+  using size_t = std::size_t;
+  USE_FIXED_EIGEN_TYPES(FloatType);
 
-  class Options : public ait::ConfigOptions {
+  class Options : public bh::ConfigOptions {
   public:
 
     Options()
-    : ait::ConfigOptions("viewpoint_planner.data", "ViewpointPlannerData options") {
+    : bh::ConfigOptions("viewpoint_planner.data", "ViewpointPlannerData options") {
       addOption<std::string>("dense_reconstruction_path", "");
       addOption<bool>("dense_reconstruction_has_gps", false);
       addOption<std::string>("dense_points_filename", "");
@@ -70,6 +54,7 @@ public:
       addOption<bool>("regenerate_bvh_tree", &regenerate_bvh_tree);
       addOption<bool>("regenerate_distance_field", &regenerate_distance_field);
       addOption<std::string>("regions_json_filename", &regions_json_filename);
+      addOption<FloatType>("obstacle_free_height", &obstacle_free_height);
       addOption<FloatType>("bvh_bbox_min_x", -1000);
       addOption<FloatType>("bvh_bbox_min_y", -1000);
       addOption<FloatType>("bvh_bbox_min_z", -1000);
@@ -82,16 +67,30 @@ public:
       addOption<FloatType>("roi_bbox_max_x", +50);
       addOption<FloatType>("roi_bbox_max_y", +50);
       addOption<FloatType>("roi_bbox_max_z", +50);
-      addOption<std::size_t>("bvh_normal_mesh_knn", &bvh_normal_mesh_knn);
+      addOptionalOption<FloatType>("roi_z_low");
+      addOptionalOption<FloatType>("roi_z_high");
+      addOptionalOption<Vector2>("roi_vertex1");
+      addOptionalOption<Vector2>("roi_vertex2");
+      addOptionalOption<Vector2>("roi_vertex3");
+      addOptionalOption<Vector2>("roi_vertex4");
+      addOption<size_t>("bvh_normal_mesh_knn", &bvh_normal_mesh_knn);
       addOption<FloatType>("bvh_normal_mesh_max_dist", &bvh_normal_mesh_max_dist);
-      addOption<std::size_t>("grid_dimension", &grid_dimension);
+      addOption<size_t>("grid_dimension", &grid_dimension);
       addOption<FloatType>("distance_field_cutoff", &distance_field_cutoff);
       addOption<FloatType>("roi_falloff_distance", &roi_falloff_distance);
       addOption<bool>("weight_falloff_quadratic", &weight_falloff_quadratic);
       addOption<FloatType>("weight_falloff_distance_start", &weight_falloff_distance_start);
       addOption<FloatType>("voxel_information_lambda", &voxel_information_lambda);
-      addOption<std::size_t>("cuda_stack_size", 32 * 1024);
-      addOption<int>("cuda_gpu_id", 0);
+      addOption<bool>("ignore_real_observed_voxels", &ignore_real_observed_voxels);
+      addOption<FloatType>("invalid_pixel_observation_factor", &invalid_pixel_observation_factor);
+      addOption<FloatType>("real_observed_voxels_raycast_min_range", &real_observed_voxels_raycast_min_range);
+      addOption<FloatType>("real_observed_voxels_raycast_max_range", &real_observed_voxels_raycast_max_range);
+      addOption<bool>("enable_opengl", &enable_opengl);
+#if WITH_CUDA
+      addOption<bool>("enable_cuda", &enable_cuda);
+      addOption<size_t>("cuda_stack_size", &cuda_stack_size);
+      addOption<int>("cuda_gpu_id", &cuda_gpu_id);
+#endif
     }
 
     ~Options() override {}
@@ -102,15 +101,26 @@ public:
     bool regenerate_bvh_tree = false;
     bool regenerate_distance_field = false;
     std::string regions_json_filename = "";
-    std::size_t bvh_normal_mesh_knn = 10;
+    FloatType obstacle_free_height = std::numeric_limits<FloatType>::max();
+    size_t bvh_normal_mesh_knn = 10;
     FloatType bvh_normal_mesh_max_dist = 2;
-    std::size_t grid_dimension = 128;
+    size_t grid_dimension = 128;
     FloatType roi_falloff_distance = 10;
     FloatType distance_field_cutoff = 5;
     bool weight_falloff_quadratic = true;
     FloatType weight_falloff_distance_start = 0;
     // Factor in the exponential of the voxel information
     FloatType voxel_information_lambda = FloatType(0.1);
+    bool ignore_real_observed_voxels = false;
+    FloatType invalid_pixel_observation_factor = FloatType(0.5);
+    FloatType real_observed_voxels_raycast_min_range = FloatType(5);
+    FloatType real_observed_voxels_raycast_max_range = std::numeric_limits<FloatType>::max();
+    bool enable_opengl = true;
+#if WITH_CUDA
+    bool enable_cuda = true;
+    size_t cuda_stack_size = 32 * 1024;
+    int cuda_gpu_id = 0;
+#endif
   };
 
   static constexpr double OCCUPANCY_WEIGHT_DEPTH = 12;
@@ -122,15 +132,15 @@ public:
   using MeshIOType = ml::MeshIO<FloatType>;
   using MeshType = ml::MeshData<FloatType>;
   using BoundingBoxType = bh::BoundingBox3D<FloatType>;
-  using Vector3 = Eigen::Vector3f;
   using Vector3i = Eigen::Vector3i;
   using DistanceFieldType = ml::DistanceField3f;
   using RegionType = bh::PolygonWithLowerAndUpperPlane<FloatType>;
 
   using RawOccupancyMapType = OccupancyMap<OccupancyNode>;
   using OccupancyMapType = OccupancyMap<AugmentedOccupancyNode>;
-  using NodeObjectType = NodeObject<FloatType>;
-  using OccupiedTreeType = bvh::Tree<NodeObjectType, FloatType>;
+
+  using NodeObjectType = viewpoint_planner::NodeObjectType;
+  using OccupiedTreeType = viewpoint_planner::OccupiedTreeType;
 
   using TreeNavigatorType = TreeNavigator<OccupancyMapType, OccupancyMapType::NodeType>;
   using ConstTreeNavigatorType = TreeNavigator<const OccupancyMapType, const OccupancyMapType::NodeType>;
@@ -138,6 +148,10 @@ public:
   using WeightType = OccupancyMapType::NodeType::WeightType;
 
   ViewpointPlannerData(const Options* options);
+
+  const Options& getOptions() const {
+    return options_;
+  }
 
   const OccupancyMapType& getOctree() const {
     return *octree_;
@@ -157,7 +171,7 @@ public:
   }
 
   /// Check if an object can be placed at a position (i.e. is it free space)
-  bool isValidObjectPosition(const Vector3& position, const Vector3& object_extent) const;
+  bool isValidObjectPosition(const Vector3& position, const BoundingBoxType& object_bbox) const;
 
   const reconstruction::DenseReconstruction& getReconstruction() const;
 
@@ -193,6 +207,7 @@ private:
   void _writeMeshDistanceField(const std::string& df_filename, const DistanceFieldType& distance_field);
 
   void updateWeights();
+  void updateWeightsWithRealViewpoints();
 
   WeightType computeObservationCountFactor(CounterType observation_count) const;
 

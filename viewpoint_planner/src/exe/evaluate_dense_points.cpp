@@ -10,7 +10,7 @@
 #include <memory>
 #include <csignal>
 
-#include <ait/boost.h>
+#include <bh/boost.h>
 #include <boost/program_options.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/functional/hash.hpp>
@@ -19,8 +19,8 @@
 #include <bh/eigen.h>
 #include <bh/utilities.h>
 #include <bh/math/utilities.h>
-#include <ait/options.h>
-#include <ait/eigen_options.h>
+#include <bh/config_options.h>
+#include <bh/eigen_options.h>
 #include <bh/math/geometry.h>
 #include <bh/mLib/mLibUtils.h>
 #include <bh/nn/approximate_nearest_neighbor.h>
@@ -49,11 +49,11 @@ using Triangle = bh::Triangle<FloatType>;
 
 class EvaluateDensePointsCmdline {
 public:
-  struct Options : ait::ConfigOptions {
+  struct Options : bh::ConfigOptions {
     static const string kPrefix;
 
     Options()
-    : ait::ConfigOptions(kPrefix) {
+    : bh::ConfigOptions(kPrefix) {
       addOptionRequired<Vector3>("roi_bbox_min", &roi_bbox_min);
       addOptionRequired<Vector3>("roi_bbox_max", &roi_bbox_max);
       addOption<FloatType>("max_correspondence_distance", &max_correspondence_distance);
@@ -70,16 +70,16 @@ public:
     FloatType dist_truncation = FloatType(0.2);
   };
 
-  static std::map<string, std::unique_ptr<ait::ConfigOptions>> getConfigOptions() {
-    std::map<string, std::unique_ptr<ait::ConfigOptions>> config_options;
+  static std::map<string, std::unique_ptr<bh::ConfigOptions>> getConfigOptions() {
+    std::map<string, std::unique_ptr<bh::ConfigOptions>> config_options;
     config_options.emplace(std::piecewise_construct,
         std::forward_as_tuple(Options::kPrefix),
-        std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new Options())));
+        std::forward_as_tuple(static_cast<bh::ConfigOptions*>(new Options())));
     return config_options;
   }
 
   EvaluateDensePointsCmdline(
-      const std::map<string, std::unique_ptr<ait::ConfigOptions>>& config_options,
+      const std::map<string, std::unique_ptr<bh::ConfigOptions>>& config_options,
       const string& ground_truth_mesh_filename,
       const string& in_point_cloud_filename,
       const string& negative_output_mesh_filename,
@@ -288,7 +288,7 @@ private:
 const string EvaluateDensePointsCmdline::Options::kPrefix = "evaluate_dense_points";
 
 std::pair<bool, boost::program_options::variables_map> processOptions(
-    int argc, char** argv, std::map<string, std::unique_ptr<ait::ConfigOptions>>& config_options)
+    int argc, char** argv, std::map<string, std::unique_ptr<bh::ConfigOptions>>& config_options)
 {
   namespace po = boost::program_options;
 
@@ -357,7 +357,7 @@ void disableCtrlCHandler() {
 
 int main(int argc, char** argv)
 {
-  std::map<std::string, std::unique_ptr<ait::ConfigOptions>> config_options =
+  std::map<std::string, std::unique_ptr<bh::ConfigOptions>> config_options =
       EvaluateDensePointsCmdline::getConfigOptions();
 
   // Handle command line and config file

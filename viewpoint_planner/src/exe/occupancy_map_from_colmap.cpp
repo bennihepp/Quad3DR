@@ -11,8 +11,8 @@
 
 #include <octomap/octomap.h>
 
-#include <ait/eigen.h>
-#include <ait/vision_utilities.h>
+#include <bh/eigen.h>
+#include <bh/vision/cameras.h>
 #include "../reconstruction/dense_reconstruction.h"
 
 #include <opencv2/core.hpp>
@@ -141,14 +141,14 @@ int main(int argc, char** argv) {
     const reconstruction::CameraMatrix& intrinsics = camera.intrinsics();
 //    std::cout << "intrinsics=" << intrinsics << std::endl;
     FloatType depth_camera_scale = depth_map.width() / (FloatType)camera.width();
-    const reconstruction::CameraMatrix depth_intrinsics = ait::getScaledIntrinsics(intrinsics, depth_camera_scale);
+    const reconstruction::CameraMatrix depth_intrinsics = bh::vision::getScaledIntrinsics(intrinsics, depth_camera_scale);
     const reconstruction::CameraMatrix inv_depth_intrinsics = depth_intrinsics.inverse();
     cout << "depth_intrinsics=" << depth_intrinsics << endl;
 //    cout << "inv_depth_intrinsics=" << inv_depth_intrinsics << endl;
     const Matrix3x4 transform_image_to_world = image.pose().getTransformationImageToWorld();
 //    std::cout << "transform_image_to_world: " << transform_image_to_world << std::endl;
 
-//    const ait::Pose::Vector3 sensor_pos = image.pose().getWorldPosition();
+//    const bh::Pose::Vector3 sensor_pos = image.pose().getWorldPosition();
     const Vector3 sensor_pos = transform_image_to_world.col(3).topRows(3);
     oct::point3d sensor_origin(sensor_pos(0), sensor_pos(1), sensor_pos(2));
     std::cout << "sensor_position=" << sensor_pos.transpose() << std::endl;

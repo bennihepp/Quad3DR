@@ -63,25 +63,25 @@ public:
   };
 
   void knnSearch(const Point& point, std::size_t knn,
-                 std::vector<IndexType>* indices, std::vector<DistanceType>* distances);
+                 std::vector<IndexType>* indices, std::vector<DistanceType>* distances) const;
 
-  SingleResult knnSearch(const Point& point, std::size_t knn);
+  SingleResult knnSearch(const Point& point, std::size_t knn) const;
 
-  Result knnSearch(const EigenMatrix& points, std::size_t knn);
+  Result knnSearch(const EigenMatrix& points, std::size_t knn) const;
 
   template <typename Iterator>
-  Result knnSearch(Iterator begin, Iterator end, std::size_t knn);
+  Result knnSearch(Iterator begin, Iterator end, std::size_t knn) const;
 
   void radiusSearch(const Point& point, FloatType radius, std::size_t max_results,
-      std::vector<IndexType>* indices, std::vector<DistanceType>* distances);
+      std::vector<IndexType>* indices, std::vector<DistanceType>* distances) const;
 
   /// Only for testing against knnSearch
   void knnSearchExact(const Point& point, std::size_t knn,
-                      std::vector<IndexType>* indices, std::vector<DistanceType>* distances);
+                      std::vector<IndexType>* indices, std::vector<DistanceType>* distances) const;
 
   /// Only for testing against radiusSearch
   void radiusSearchExact(const Point& point, FloatType radius, std::size_t max_results,
-                         std::vector<IndexType>* indices, std::vector<DistanceType>* distances);
+                         std::vector<IndexType>* indices, std::vector<DistanceType>* distances) const;
 
   bool empty() const;
 

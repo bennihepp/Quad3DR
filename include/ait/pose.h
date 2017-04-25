@@ -24,13 +24,13 @@ struct Pose {
   Pose()
   : translation_(0, 0, 0), quaternion_(1, 0, 0, 0) {}
 
-  Pose(const Vector3& translation, const Quaternion& quaternion)
+  explicit Pose(const Vector3& translation, const Quaternion& quaternion)
   : translation_(translation), quaternion_(quaternion) {}
 
-  Pose(const Vector3& translation, const Matrix3x3& rotation)
+  explicit Pose(const Vector3& translation, const Matrix3x3& rotation)
   : translation_(translation), quaternion_(rotation) {}
 
-  Pose(const Matrix4x4& matrix)
+  explicit Pose(const Matrix4x4& matrix)
   : translation_(matrix.col(3).template topRows<3>()),
     quaternion_(matrix.template topLeftCorner<3, 3>()) {}
 

@@ -13,8 +13,10 @@
 #include <QOpenGLVertexArrayObject>
 #include <QOpenGLBuffer>
 #include <QOpenGLShaderProgram>
-#include <ait/common.h>
-#include <ait/utilities.h>
+#include <bh/common.h>
+#include <bh/utilities.h>
+
+namespace rendering {
 
 SparseReconstructionDrawer::SparseReconstructionDrawer()
 : sparse_recon_(nullptr), camera_size_(0.5f), point_size_(1.0f), draw_cameras_(true), draw_sparse_points_(true) {}
@@ -33,7 +35,7 @@ void SparseReconstructionDrawer::changeCameraSize(const float delta) {
     return;
   }
   camera_size_ *= (1.0f + delta / 100.0f * CAMERA_SIZE_SPEED);
-  camera_size_ = ait::clamp(camera_size_, MIN_CAMERA_SIZE, MAX_CAMERA_SIZE);
+  camera_size_ = bh::clamp(camera_size_, MIN_CAMERA_SIZE, MAX_CAMERA_SIZE);
   uploadCameraData();
 }
 
@@ -42,7 +44,7 @@ void SparseReconstructionDrawer::changePointSize(const float delta) {
     return;
   }
   point_size_ *= (1.0f + delta / 100.0f * POINT_SIZE_SPEED);
-  point_size_ = ait::clamp(point_size_, MIN_POINT_SIZE, MAX_POINT_SIZE);
+  point_size_ = bh::clamp(point_size_, MIN_POINT_SIZE, MAX_POINT_SIZE);
   uploadPointData();
 }
 
@@ -218,4 +220,6 @@ void SparseReconstructionDrawer::generateImageModel(const PinholeCameraColmap& c
   triangles[1].vertex1 = OGLVertexDataRGBA(bl(0), bl(1), bl(2), r, g, b, a);
   triangles[1].vertex2 = OGLVertexDataRGBA(tr(0), tr(1), tr(2), r, g, b, a);
   triangles[1].vertex3 = OGLVertexDataRGBA(br(0), br(1), br(2), r, g, b, a);
+}
+
 }

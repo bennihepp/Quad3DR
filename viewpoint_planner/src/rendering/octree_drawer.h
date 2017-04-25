@@ -1,115 +1,99 @@
 //==================================================
 // octree_drawer.h
 //
-//  Copyright (c) 2016 Benjamin Hepp.
+//  Copyright (c) 2017 Benjamin Hepp.
 //  Author: Benjamin Hepp
-//  Created on: Dec 7, 2016
+//  Created on: 19.04.17
 //==================================================
 #pragma once
 
 #include <unordered_map>
 #include <vector>
-#include "../planner/viewpoint_planner_data.h"
-#include "../planner/viewpoint_planner.h"
+#include "../planner/viewpoint_planner_types.h"
+#include "../planner/occupied_tree.h"
 #include "triangle_drawer.h"
 #include "voxel_drawer.h"
+
+namespace rendering {
 
 class OcTreeDrawer {
 public:
   using FloatType = float;;
 
-  const FloatType kRaycastVoxelSizeFactor = (FloatType)1.05;
-
   OcTreeDrawer();
+
   virtual ~OcTreeDrawer();
 
-  void draw(const QMatrix4x4& pvm_matrix, const QMatrix4x4& view_matrix, const QMatrix4x4& model_matrix);
+  const VoxelDrawer& getVoxelDrawer() const;
 
-  // initialization of drawer  -------------------------
+  VoxelDrawer& getVoxelDrawer();
 
-  /// sets a new OcTree that should be drawn by this drawer
-  void setOctree(const ViewpointPlanner::OccupancyMapType* octree) {
-    octomap::pose6d o; // initialized to (0,0,0) , (0,0,0,1) by default
-    setOctree(octree, o);
-  }
+  void draw(const QMatrix4x4 &pvm_matrix, const QMatrix4x4 &vm_matrix);
 
-  const std::vector<FloatType>& getOccupancyBins() const;
+  void clear();
 
-  /// sets a new OcTree that should be drawn by this drawer
-  /// origin specifies a global transformation that should be applied
-  virtual void setOctree(const ViewpointPlanner::OccupancyMapType* octree, const octomap::pose6d& origin);
-
-  FloatType findOccupancyBin(FloatType occupancy) const;
+  void setOctree(const viewpoint_planner::OccupancyMapType* octree,
+                 const FloatType min_occupancy = FloatType(0.5),
+                 const size_t min_observation_count = 1,
+                 const size_t render_tree_depth = 0);
 
   void updateVoxelsFromOctree();
-  void updateVoxelData();
-  void updateVoxelColorHeightmap();
-  void updateSingleRaycastVoxel(
-      const OGLVoxelData& voxel, const OGLColorData& color, const OGLVoxelInfoData& info);
-  void updateRaycastVoxels(const std::vector<std::pair<ViewpointPlanner::ConstTreeNavigatorType, FloatType>>& raycast_voxels);
-  void updateRaycastVoxels(const std::vector<std::pair<ViewpointPlannerData::OccupiedTreeType::IntersectionResult, FloatType>>& raycast_voxels);
-  void updateRaycastVoxels(const std::vector<std::pair<const ViewpointPlanner::VoxelType*, FloatType>>& raycast_voxels);
-  void updateRaycastVoxels(const ViewpointPlanner::VoxelWithInformationSet& raycast_voxels);
-  void updateRaycastVoxels(const ViewpointPlanner::VoxelMap& voxel_map);
-  void configVoxelDrawer(VoxelDrawer& voxel_drawer) const;
 
-  FloatType getOccupancyBinThreshold() const;
-  void setOccupancyBinThreshold(FloatType occupancy_bin_threshold);
+  void updateVoxelData();
+
+  void updateVoxelColorHeightmap();
+
+  void configVoxelDrawer();
+
   void setDrawOctree(bool draw_octree);
-  void setDrawRaycast(bool draw_raycast);
+
   void setColorFlags(uint32_t color_flags_uint);
-  void setDrawFreeVoxels(bool draw_free_voxels);
-  void setDisplayAxes(bool display_axes);
+
   void setAlphaOccupied(FloatType alpha);
-  void setDrawSingleBin(bool draw_single_bin);
+
   void setMinOccupancy(FloatType min_occupancy);
+
   void setMaxOccupancy(FloatType max_occupancy);
+
   void setMinObservations(uint32_t min_observations);
+
   void setMaxObservations(uint32_t max_observations);
+
   void setMinVoxelSize(FloatType min_voxel_size);
+
   void setMaxVoxelSize(FloatType max_voxel_size);
+
   void setMinWeight(FloatType min_weight);
+
   void setMaxWeight(FloatType max_weight);
+
+  void setWeightRange(const FloatType low_weight, const FloatType high_weight);
+
   void setMinInformation(FloatType min_information);
+
   void setMaxInformation(FloatType max_information);
+
   void setInformationRange(const FloatType low_information, const FloatType high_information);
 
-  size_t getRenderTreeDepth() const;
-  void setRenderTreeDepth(size_t render_tree_depth);
-  size_t getRenderObservationThreshold() const;
-  void setRenderObservationThreshold(size_t min_observations);
-
-  // set new origin (move object)
-  void setOrigin(octomap::pose6d t);
-
 private:
-  void drawVoxelsAboveThreshold(const QMatrix4x4& pvm_matrix, const QMatrix4x4& view_matrix, const QMatrix4x4& model_matrix,
-      FloatType occupancy_threshold, bool draw_below_threshold=false);
+  void drawVoxels(const QMatrix4x4 &pvm_matrix, const QMatrix4x4 &vm_matrix);
 
-  void setVertexDataFromOctomathVector(OGLVertexDataRGBA& vertex, const octomath::Vector3& vec);
+  void setVertexDataFromOctomathVector(OGLVertexDataRGBA &vertex, const octomath::Vector3 &vec);
 
-  OGLColorData getVoxelColorData(const OGLVoxelData& voxel_data, FloatType min_z, FloatType max_z) const;
+  OGLColorData getVoxelColorData(const OGLVoxelData &voxel_data, FloatType min_z, FloatType max_z) const;
 
-  void forEachVoxelDrawer(const std::function<void(VoxelDrawer&)> func);
+  const viewpoint_planner::OccupancyMapType *octree_;
 
-  const ViewpointPlanner::OccupancyMapType* octree_;
-  octomap::pose6d origin_;
-  octomap::pose6d initial_origin_;
-
-  std::vector<FloatType> occupancy_bins_;
-  std::unordered_map<FloatType, VoxelDrawer> voxel_drawer_map_;
+  VoxelDrawer voxel_drawer_;
   bool draw_octree_;
 
-  std::unique_ptr<VoxelDrawer> raycast_drawer_;
-  bool draw_raycast_;
-
-  FloatType occupancy_threshold_;
   VoxelDrawer::ColorFlags color_flags_;
   bool draw_free_voxels_;
   FloatType alpha_override_;
-  bool draw_single_bin_;
+
+  FloatType occupancy_threshold_;
+  size_t observation_count_threshold_;
   size_t render_tree_depth_;
-  size_t render_observation_threshold_;
 
   FloatType min_occupancy_;
   FloatType max_occupancy_;
@@ -126,3 +110,5 @@ private:
   FloatType min_information_;
   FloatType max_information_;
 };
+
+}

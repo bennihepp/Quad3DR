@@ -8,7 +8,7 @@
 #pragma once
 
 #include <fstream>
-#include <ait/common.h>
+#include <bh/common.h>
 #include "sparse_reconstruction.h"
 
 namespace reconstruction {
@@ -60,7 +60,7 @@ public:
 
   void readColmapFormat(const std::string& filename) {
     std::ifstream text_in(filename, std::ios_base::in);
-    AIT_ASSERT_STR(text_in, std::string("Unable to open colmap array for reading: ") + filename);
+    BH_ASSERT_STR(text_in, std::string("Unable to open colmap array for reading: ") + filename);
 
     char unused_char;
     text_in >> width_ >> unused_char
@@ -69,13 +69,13 @@ public:
     std::streampos pos = text_in.tellg();
     text_in.close();
 
-    AIT_ASSERT(width_ > 0);
-    AIT_ASSERT(height_ > 0);
-    AIT_ASSERT(channels_ > 0);
+    BH_ASSERT(width_ > 0);
+    BH_ASSERT(height_ > 0);
+    BH_ASSERT(channels_ > 0);
     data_.resize(width_ * height_ * channels_);
 
     std::ifstream binary_in(filename, std::ios_base::in | std::ios_base::binary);
-    AIT_ASSERT_STR(binary_in, std::string("Unable to open colmap array for reading: ") + filename);
+    BH_ASSERT_STR(binary_in, std::string("Unable to open colmap array for reading: ") + filename);
     binary_in.seekg(pos);
     binary_in.read(reinterpret_cast<char*>(data_.data()), data_.size() * sizeof(T));
     binary_in.close();
@@ -83,12 +83,12 @@ public:
 
   void writeColmapFormat(const std::string& filename) {
     std::ofstream text_out(filename, std::ios_base::out);
-    AIT_ASSERT_STR(text_out, std::string("Unable to open colmap array for writing: ") + filename);
+    BH_ASSERT_STR(text_out, std::string("Unable to open colmap array for writing: ") + filename);
     text_out << width_ << "&" << height_ << "&" << channels_ << "&";
     text_out.close();
 
     std::ofstream binary_out(filename, std::ios_base::out | std::ios_base::binary | std::ios_base::app);
-    AIT_ASSERT_STR(binary_out, std::string("Unable to open colmap array for writing: ") + filename);
+    BH_ASSERT_STR(binary_out, std::string("Unable to open colmap array for writing: ") + filename);
     binary_out.write(reinterpret_cast<const char*>(data_.data()), sizeof(T) * data_.size());
     binary_out.close();
   }
@@ -125,6 +125,12 @@ public:
 
   /// Returns the normal map corresponding to the image (lazy loading of normal maps)
   const NormalMap& getNormalMap(ImageId image_id, DenseMapType dense_map_type = GEOMETRIC) const;
+
+  /// Clear cached depth maps
+  void clearCachedDepthMaps() const;
+
+  /// Clear cached normal maps
+  void clearCachedNormalMaps() const;
 
   /// Reads the depth map corresponding to the image (does not store it internally)
   DepthMap readDepthMap(ImageId image_id, DenseMapType dense_map_type = GEOMETRIC) const;

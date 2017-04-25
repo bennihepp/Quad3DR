@@ -10,20 +10,20 @@
 #include <boost/heap/binomial_heap.hpp>
 #include <boost/heap/fibonacci_heap.hpp>
 
-#pragma GCC optimize("O0")
-
 bool ViewpointPlanner::hasViewpointMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index) const {
   return viewpoint_graph_motions_.count(ViewpointIndexPair(from_index, to_index)) > 0;
 }
 
 ViewpointPlanner::ViewpointMotion ViewpointPlanner::getViewpointMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index) const {
   const ViewpointIndexPair vip(from_index, to_index);
-#if !AIT_RELEASE
+#if !BH_RELEASE
   if (viewpoint_graph_motions_.count(vip) == 0) {
     std::cout << "ERROR: No viewpoint motion from " << from_index << " to " << to_index << std::endl;
   }
 #endif
   const ViewpointMotion& motion = viewpoint_graph_motions_.at(vip);
+  BH_ASSERT(motion.se3Motions().front().poses.front() == viewpoint_entries_[motion.fromIndex()].viewpoint.pose());
+  BH_ASSERT(motion.se3Motions().back().poses.back() == viewpoint_entries_[motion.toIndex()].viewpoint.pose());
   if (to_index < from_index) {
     ViewpointMotion motion_copy(motion);
     motion_copy.reverse();
@@ -45,8 +45,10 @@ void ViewpointPlanner::addViewpointMotion(ViewpointMotion&& motion) {
   }
   const ViewpointEntryIndex from_index = motion.fromIndex();
   const ViewpointEntryIndex to_index = motion.toIndex();
-#if !AIT_RELEASE
-  AIT_ASSERT(from_index < to_index);
+#if !BH_RELEASE
+  BH_ASSERT(from_index < to_index);
+  BH_ASSERT(motion.se3Motions().front().poses.front() == viewpoint_entries_[from_index].viewpoint.pose());
+  BH_ASSERT(motion.se3Motions().back().poses.back() == viewpoint_entries_[to_index].viewpoint.pose());
 #endif
   // Currently graph is unidirectional so edges are automatically symmetric.
   const FloatType distance = motion.distance();
@@ -60,11 +62,11 @@ void ViewpointPlanner::addViewpointMotion(ViewpointMotion&& motion) {
   else {
     it->second = std::move(motion);
   }
-#if !AIT_RELEASE
+#if !BH_RELEASE
   // Assertions to check consistency between graph edges and motions
   const FloatType motion_distance = getViewpointMotion(from_index, to_index).distance();
   const FloatType motion_weight = viewpoint_graph_.getWeight(from_index, to_index);
-  AIT_ASSERT(ait::isApproxEqual(motion_distance, motion_weight, FloatType(1e-2)));
+  BH_ASSERT(bh::isApproxEqual(motion_distance, motion_weight, FloatType(1e-2)));
 #endif
 }
 
@@ -72,9 +74,9 @@ void ViewpointPlanner::computeViewpointMotions() {
   std::cout << "Computing motions on viewpoint graph" << std::endl;
   for (auto it = viewpoint_graph_.begin(); it != viewpoint_graph_.end(); ++it) {
     const ViewpointEntryIndex from_index = it.node();
-    if (from_index < num_real_viewpoints_) {
-      continue;
-    }
+//    if (from_index < num_real_viewpoints_) {
+//      continue;
+//    }
     std::vector<ViewpointPlanner::ViewpointMotion> motions = findViewpointMotions(from_index);
     std::cout << "Found " << motions.size() << " connections from viewpoint " << from_index << std::endl;
 
@@ -139,7 +141,7 @@ void ViewpointPlanner::computeViewpointMotions() {
 
 std::vector<ViewpointPlanner::ViewpointMotion>
 ViewpointPlanner::findViewpointMotions(const ViewpointEntryIndex from_index) {
-//  ait::Timer timer;
+//  bh::Timer timer;
   const ViewpointEntry& from_viewpoint = viewpoint_entries_[from_index];
   // Find motion to other viewpoints in the graph
   const std::size_t dist_knn = options_.viewpoint_motion_max_neighbors;
@@ -151,13 +153,15 @@ ViewpointPlanner::findViewpointMotions(const ViewpointEntryIndex from_index) {
   viewpoint_ann_.knnSearch(from_viewpoint.viewpoint.pose().getWorldPosition(), dist_knn, &knn_indices, &knn_distances);
   std::size_t num_connections = 0;
   std::vector<ViewpointMotion> motions;
-#if !AIT_DEBUG
+#if !BH_DEBUG
   // We run in multiple threads so make sure that the visible sparse points are cached.
   // Otherwise the OpenGL context and poisson mesh has to be initialized again and again in each thread.
-  getCachedVisibleSparsePoints(from_index);
+//  getCachedVisibleSparsePoints(from_index);
+  getCachedVisibleVoxels(from_index);
   for (std::size_t i = 0; i < knn_indices.size(); ++i) {
     const ViewpointANN::IndexType to_index = knn_indices[i];
-    getCachedVisibleSparsePoints(to_index);
+//    getCachedVisibleSparsePoints(to_index);
+    getCachedVisibleVoxels(to_index);
   }
 #pragma omp parallel for
 #endif
@@ -175,7 +179,8 @@ ViewpointPlanner::findViewpointMotions(const ViewpointEntryIndex from_index) {
     if (from_index == to_index) {
       continue;
     }
-    const bool matchable = isSparseMatchable(from_index, to_index);
+//    const bool matchable = isSparseMatchable(from_index, to_index);
+    const bool matchable = isSparseMatchable2(from_index, to_index);
     if (!matchable) {
       continue;
     }
@@ -185,14 +190,14 @@ ViewpointPlanner::findViewpointMotions(const ViewpointEntryIndex from_index) {
     std::tie(se3_motion, found_motion) = motion_planner_.findMotion(from_viewpoint.viewpoint.pose(), to_viewpoint.viewpoint.pose());
     // TODO
     if (found_motion) {
-#if !AIT_DEBUG
+#if !BH_DEBUG
 #pragma omp critical
 #endif
       {
         ++num_connections;
         // Additional sanity check
 //        FloatType motion_cost = motion.cost;
-//        if (!ait::isApproxGreaterEqual(motion_cost * motion_cost, dist_square, 1e-2f)) {
+//        if (!bh::isApproxGreaterEqual(motion_cost * motion_cost, dist_square, 1e-2f)) {
 //          FloatType dist_square2 = (from_viewpoint.viewpoint.pose().getWorldPosition() - to_viewpoint.viewpoint.pose().getWorldPosition()).squaredNorm();
 //          std::cout << "motion_cost=" << motion_cost << std::endl;
 //          std::cout << "motion_cost*motion_cost=" << motion_cost * motion_cost << std::endl;
@@ -200,13 +205,13 @@ ViewpointPlanner::findViewpointMotions(const ViewpointEntryIndex from_index) {
 //          std::cout << "dist_square2=" << dist_square2 << std::endl;
 //          std::cout << "motion_cost * motion_cost - dist_square=" << motion_cost * motion_cost - dist_square << std::endl;
 //        }
-#if !AIT_RELEASE
-        if (ait::isApproxSmaller(se3_motion.cost * se3_motion.cost, dist_square, 1e-2f)) {
+#if !BH_RELEASE
+        if (bh::isApproxSmaller<FloatType>(se3_motion.cost * se3_motion.cost, dist_square, FloatType(1e-2))) {
           std::cout << "WARNING: se3_motion.cost * se3_motion.cost < dist_square" << std::endl;
-          AIT_PRINT_VALUE(se3_motion.cost * se3_motion.cost);
-          AIT_PRINT_VALUE(se3_motion.cost);
-          AIT_PRINT_VALUE(dist_square);
-          AIT_DEBUG_BREAK;
+          BH_PRINT_VALUE(se3_motion.cost * se3_motion.cost);
+          BH_PRINT_VALUE(se3_motion.cost);
+          BH_PRINT_VALUE(dist_square);
+          BH_DEBUG_BREAK;
         }
         FloatType motion_distance = 0;
         if (se3_motion.poses.size() >= 2) {
@@ -214,11 +219,11 @@ ViewpointPlanner::findViewpointMotions(const ViewpointEntryIndex from_index) {
             motion_distance += (it->getWorldPosition() - (it - 1)->getWorldPosition()).norm();
           }
         }
-        if (!ait::isApproxEqual(se3_motion.distance, motion_distance, FloatType(1e-2))) {
+        if (!bh::isApproxEqual(se3_motion.distance, motion_distance, FloatType(1e-2))) {
           std::cout << "WARNING: se3_motion.distance != * motion_distance" << std::endl;
-          AIT_PRINT_VALUE(se3_motion.distance);
-          AIT_PRINT_VALUE(motion_distance);
-          AIT_DEBUG_BREAK;
+          BH_PRINT_VALUE(se3_motion.distance);
+          BH_PRINT_VALUE(motion_distance);
+          BH_DEBUG_BREAK;
         }
 #endif
         ViewpointMotion motion({ from_index, to_index }, { se3_motion });
@@ -239,15 +244,16 @@ struct ViewpointGraphVertexFloatCompare {
 };
 }
 
-ViewpointPlanner::ViewpointMotion ViewpointPlanner::findShortestMotionAStar(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index) {
+ViewpointPlanner::ViewpointMotion ViewpointPlanner::findShortestMotionAStar(
+        const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index) const {
   const bool verbose = false;
 
   ViewpointGraph::Vertex start = viewpoint_graph_.getVertexByNode(from_index);
   ViewpointGraph::Vertex goal = viewpoint_graph_.getVertexByNode(to_index);
   // Currently the code assumes the same indices for the viewpoint graph and the viewpoint entries
-#if !AIT_RELEASE
-  AIT_ASSERT(start == from_index);
-  AIT_ASSERT(goal == to_index);
+#if !BH_RELEASE
+  BH_ASSERT(start == from_index);
+  BH_ASSERT(goal == to_index);
 #endif
 
   const typename ViewpointPlanner::ViewpointEntry& goal_viewpoint_entry = viewpoint_entries_[goal];
@@ -273,7 +279,7 @@ ViewpointPlanner::ViewpointMotion ViewpointPlanner::findShortestMotionAStar(cons
   pq_handles[start] = std::make_pair(true, start_handle);
 
   bool found_goal = false;
-//  ait::Timer timer;
+//  bh::Timer timer;
 
   while (!priority_queue.empty()) {
     ViewpointGraph::Vertex current_vertex;
@@ -285,8 +291,8 @@ ViewpointPlanner::ViewpointMotion ViewpointPlanner::findShortestMotionAStar(cons
       break;
     }
     // TODO: getEdges() is non-const. This should be changed so that this method can be const.
-    const ViewpointGraph::OutEdgesWrapper out_edges = viewpoint_graph_.getEdges(current_vertex);
-    for (ViewpointGraph::OutEdgeIteratorWrapper it = out_edges.begin(); it != out_edges.end(); ++it) {
+    const ViewpointGraph::ConstOutEdgesWrapper out_edges = viewpoint_graph_.getEdges(current_vertex);
+    for (auto it = out_edges.begin(); it != out_edges.end(); ++it) {
       const ViewpointGraph::Vertex new_vertex = it.target();
       const FloatType weight = it.weight();
       const FloatType new_distance = current_distance + weight + options_.viewpoint_motion_penalty_per_graph_vertex;
@@ -318,7 +324,9 @@ ViewpointPlanner::ViewpointMotion ViewpointPlanner::findShortestMotionAStar(cons
           << ", line of sight distance is "
           << (viewpoint_entries_[from_index].viewpoint.pose().getWorldPosition() - viewpoint_entries_[to_index].viewpoint.pose().getWorldPosition()).norm() << std::endl;
     }
-    std::cout << "Predecessors:" << std::endl;
+    if (verbose) {
+      std::cout << "Predecessors:" << std::endl;
+    }
     std::vector<ViewpointEntryIndex> reverse_viewpoint_indices;
     for (ViewpointGraph::Vertex v = goal;; v = predecessors[v]) {
       if (verbose) {
@@ -329,9 +337,9 @@ ViewpointPlanner::ViewpointMotion ViewpointPlanner::findShortestMotionAStar(cons
         break;
       }
     }
-#if !AIT_RELEASE
-    AIT_ASSERT(reverse_viewpoint_indices.back() == from_index);
-    AIT_ASSERT(reverse_viewpoint_indices.front() == to_index);
+#if !BH_RELEASE
+    BH_ASSERT(reverse_viewpoint_indices.back() == from_index);
+    BH_ASSERT(reverse_viewpoint_indices.front() == to_index);
 #endif
     std::vector<ViewpointEntryIndex> viewpoint_indices;
     viewpoint_indices.reserve(reverse_viewpoint_indices.size());
@@ -367,8 +375,8 @@ ViewpointPlanner::ViewpointMotion ViewpointPlanner::findShortestMotionAStar(cons
 //      }
 //    }
 
-#if !AIT_RELEASE
-    AIT_ASSERT(viewpoint_graph_.numEdges() == viewpoint_graph_motions_.size());
+#if !BH_RELEASE
+    BH_ASSERT(viewpoint_graph_.numEdges() == viewpoint_graph_motions_.size());
 #endif
 
     return motion;
@@ -384,13 +392,15 @@ ViewpointPlanner::ViewpointMotion ViewpointPlanner::findShortestMotionAStar(cons
 ViewpointPlanner::ViewpointMotion ViewpointPlanner::optimizeViewpointMotion(const ViewpointMotion& motion) const {
   // Note: Assuming random access iterators for ViewpointMotion members
   std::vector<ViewpointEntryIndex> viewpoint_indices;
-  std::vector<SE3Motion> se3_motions;
+  ViewpointMotion::SE3MotionVector se3_motions;
   viewpoint_indices.push_back(motion.viewpointIndices().front());
   auto it = motion.viewpointIndices().begin();
   while (it != motion.viewpointIndices().end() - 1) {
     for (auto other_it = motion.viewpointIndices().end() - 1; other_it > it; --other_it) {
+//      if (it + 1 == other_it
+//          || isSparseMatchable(*it, *other_it)) {
       if (it + 1 == other_it
-          || isSparseMatchable(*it, *other_it)) {
+          || isSparseMatchable2(*it, *other_it)) {
         viewpoint_indices.push_back(*other_it);
         bool found_se3_motion = false;
         SE3Motion se3_motion;
@@ -398,11 +408,22 @@ ViewpointPlanner::ViewpointMotion ViewpointPlanner::optimizeViewpointMotion(cons
           se3_motion.append(motion.se3Motions()[loop_it - motion.viewpointIndices().begin()]);
         }
         if (it + 1 < other_it) {
-          SE3Motion new_se3_motion;
-          std::tie(new_se3_motion, found_se3_motion) = motion_planner_.findMotion(
-              viewpoint_entries_[*it].viewpoint.pose(), viewpoint_entries_[*other_it].viewpoint.pose());
-          if (found_se3_motion && new_se3_motion.distance < se3_motion.distance) {
-            se3_motion = new_se3_motion;
+          bool skip = false;
+          if (!isValidObjectPosition(viewpoint_entries_[*it].viewpoint.pose().getWorldPosition(), drone_bbox_)) {
+            std::cout << "WARNING: Viewpoint " << *it << " is not a valid position" << std::endl;
+            skip = true;
+          }
+          if (!isValidObjectPosition(viewpoint_entries_[*other_it].viewpoint.pose().getWorldPosition(), drone_bbox_)) {
+            std::cout << "WARNING: Viewpoint " << *other_it << " is not a valid position" << std::endl;
+            skip = true;
+          }
+          if (!skip) {
+            SE3Motion new_se3_motion;
+            std::tie(new_se3_motion, found_se3_motion) = motion_planner_.findMotion(
+                    viewpoint_entries_[*it].viewpoint.pose(), viewpoint_entries_[*other_it].viewpoint.pose());
+            if (found_se3_motion && new_se3_motion.distance < se3_motion.distance) {
+              se3_motion = new_se3_motion;
+            }
           }
         }
         se3_motions.push_back(se3_motion);
@@ -417,7 +438,7 @@ ViewpointPlanner::ViewpointMotion ViewpointPlanner::optimizeViewpointMotion(cons
   //  const auto get_motion_pose_lambda = [](const ViewpointMotion& motion, const FloatType fraction_done) -> Pose {
   ////    const Pose& first_pose = motion.poses.front();
   ////    const Pose& last_pose = motion.poses.back();
-  //    AIT_ASSERT(fraction_done <= 1);
+  //    BH_ASSERT(fraction_done <= 1);
   //    FloatType accumulated_fraction = 0;
   //    for (auto next_it = motion.poses.begin() + 1; next_it != motion.poses.end(); ++next_it) {
   //      auto prev_it = next_it - 1;
@@ -425,7 +446,7 @@ ViewpointPlanner::ViewpointMotion ViewpointPlanner::optimizeViewpointMotion(cons
   //      FloatType segment_fraction = segment_distance / motion.distance;
   //      if (accumulated_fraction + segment_fraction >= fraction_done) {
   //        const FloatType segment_factor = (fraction_done - accumulated_fraction) / segment_fraction;
-  //        AIT_ASSERT(segment_factor <= 1);
+  //        BH_ASSERT(segment_factor <= 1);
   //        const Vector3 translation = prev_it->translation() + segment_factor * (next_it->translation() - prev_it->translation());
   //        const Quaternion quaternion = prev_it->quaternion().slerp(segment_factor, next_it->quaternion());
   ////        const Quaternion quaternion = first_pose.quaternion().slerp(fraction_done, last_pose.quaternion());
@@ -484,7 +505,7 @@ ViewpointPlanner::ViewpointMotion ViewpointPlanner::optimizeViewpointMotion(cons
   //      FloatType motion_done = 0;
   //      while (!isSparseMatchable(viewpoint_entry_tmp.viewpoint, viewpoint_entry_end.viewpoint)) {
   //        const FloatType matching_score = computeSparseMatchingScore(viewpoint_entry_tmp.viewpoint, viewpoint_entry_end.viewpoint);
-  //        AIT_PRINT_VALUE(matching_score);
+  //        BH_PRINT_VALUE(matching_score);
   //        bool tentative_viewpoint_matchable = false;
   //        FloatType tentative_motion_done = 1;
   //        ViewpointEntry tentative_viewpoint_entry;
@@ -499,7 +520,7 @@ ViewpointPlanner::ViewpointMotion ViewpointPlanner::optimizeViewpointMotion(cons
   //              << ", increment_distance=" << increment_distance << ", increment_angular_distance=" << increment_angular_distance * 180 / M_PI << std::endl;
   //          tentative_viewpoint_matchable = isSparseMatchable(viewpoint_entry_tmp.viewpoint, tentative_viewpoint_entry.viewpoint);
   //          const FloatType matching_score = computeSparseMatchingScore(viewpoint_entry_tmp.viewpoint, tentative_viewpoint_entry.viewpoint);
-  //          AIT_PRINT_VALUE(matching_score);
+  //          BH_PRINT_VALUE(matching_score);
   //        }
   //        ViewpointEntryIndex prev_idx = new_viewpoint_path.entries[new_viewpoint_path.order.back()].viewpoint_index;
   //        ViewpointEntryIndex new_idx = viewpoint_entries_.size();
@@ -576,7 +597,7 @@ ViewpointPlanner::ViewpointMotion ViewpointPlanner::optimizeViewpointMotion(cons
   //        << " sparse matching score " << sparse_matching_score << std::endl;
   //  }
   //  std::cout << "New viewpoint path has " << viewpoint_path->entries.size() << " viewpoints" << std::endl;
-  //  AIT_ASSERT(viewpoint_path->order.size() == viewpoint_path->entries.size());
+  //  BH_ASSERT(viewpoint_path->order.size() == viewpoint_path->entries.size());
 
   return optimized_motion;
 }
@@ -593,8 +614,8 @@ bool ViewpointPlanner::findAndAddShortestMotion(const ViewpointEntryIndex from_i
           << optimized_motion.viewpointIndices().size() << " viewpoints" << std::endl;
     }
     addViewpointMotion(std::move(optimized_motion));
-#if !AIT_RELEASE
-    AIT_ASSERT(viewpoint_graph_.numEdges() == viewpoint_graph_motions_.size());
+#if !BH_RELEASE
+    BH_ASSERT(viewpoint_graph_.numEdges() == viewpoint_graph_motions_.size());
 #endif
     return true;
   }

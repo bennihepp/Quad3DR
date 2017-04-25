@@ -17,7 +17,7 @@
 #include <bh/math/geometry.h>
 #include <bh/utilities.h>
 #if WITH_CUDA
-  #include <ait/cuda_utils.h>
+  #include <bh/cuda_utils.h>
   #include "bvh.cuh"
 #endif
 
@@ -132,6 +132,26 @@ public:
   using CudaNodeType = CudaNode<FloatType>;
   using CudaTreeType = CudaTree<FloatType>;
   using CudaRayType = CudaRay<FloatType>;
+#endif
+
+  class Error : public bh::Error {
+  public:
+    explicit Error(const std::string& what)
+            : bh::Error(what) {}
+
+    explicit Error(const char* what)
+            : bh::Error(what) {}
+  };
+
+#if WITH_CUDA
+  class CudaError : public Error {
+  public:
+    explicit CudaError(const std::string& what)
+        : Error(what) {}
+
+    explicit CudaError(const char* what)
+        : Error(what) {}
+  };
 #endif
 
   struct ObjectWithBoundingBox {
@@ -348,7 +368,7 @@ public:
     computeInfo();
     printInfo();
 //    for (auto it = begin(); it != end(); ++it) {
-//      AIT_ASSERT(!it->isLeaf || it->getObject() == nullptr);
+//      BH_ASSERT(!it->isLeaf || it->getObject() == nullptr);
 //    }
   }
 
@@ -371,6 +391,7 @@ public:
   }
 
 #if WITH_CUDA
+
   // Cannot be const because BBoxIntersectionResult contains a non-const pointer to a node
   std::vector<IntersectionResult> raycastCuda(
       const Matrix4x4& intrinsics,
@@ -398,13 +419,13 @@ public:
               y_start, y_end,
               min_range, max_range,
               fail_on_error);
-  //    const std::vector<CudaResultType> cuda_results =
-  //        cuda_tree_->raycastIterative(
-  //            cuda_intrinsics,
-  //            cuda_extrinsics,
-  //            x_start, x_end,
-  //            y_start, y_end,
-  //            min_range, max_range);
+//      const std::vector<CudaResultType> cuda_results =
+//          cuda_tree_->raycastIterative(
+//              cuda_intrinsics,
+//              cuda_extrinsics,
+//              x_start, x_end,
+//              y_start, y_end,
+//              min_range, max_range);
       std::vector<IntersectionResult> results(cuda_results.size());
   #pragma omp parallel for
       for (std::size_t i = 0; i < cuda_results.size(); ++i) {
@@ -419,12 +440,12 @@ public:
       }
       return results;
     }
-    catch (const ait::CudaError& err) {
+    catch (const bh::CudaError& err) {
       std::cerr << "CUDA raycast failed: " << err.what() << std::endl;
       std::cerr << "Regenerating CUDA tree" << std::endl;
       cuda_tree_->clear();
       ensureCudaTreeIsInitialized();
-      throw ait::Error("Raycast failed");
+      throw CudaError("Raycast failed");
     }
   }
 
@@ -455,13 +476,13 @@ public:
               y_start, y_end,
               min_range, max_range,
               fail_on_error);
-  //    const std::vector<CudaResultType> cuda_results =
-  //        cuda_tree_->raycastIterative(
-  //            cuda_intrinsics,
-  //            cuda_extrinsics,
-  //            x_start, x_end,
-  //            y_start, y_end,
-  //            min_range, max_range);
+//      cuda_tree_->raycastWithScreenCoordinatesIterative(
+//              cuda_intrinsics,
+//              cuda_extrinsics,
+//              x_start, x_end,
+//              y_start, y_end,
+//              min_range, max_range,
+//              fail_on_error);
       std::vector<IntersectionResultWithScreenCoordinates> results(cuda_results.size());
   #pragma omp parallel for
       for (std::size_t i = 0; i < cuda_results.size(); ++i) {
@@ -478,12 +499,12 @@ public:
       }
       return results;
     }
-    catch (const ait::CudaError& err) {
+    catch (const bh::CudaError& err) {
       std::cerr << "CUDA raycast failed: " << err.what() << std::endl;
       std::cerr << "Regenerating CUDA tree" << std::endl;
       cuda_tree_->clear();
       ensureCudaTreeIsInitialized();
-      throw ait::Error("Raycast failed");
+      throw CudaError("Raycast failed");
     }
   }
 
@@ -500,10 +521,10 @@ public:
       cuda_ray.direction.copyFrom(ray.direction.data());
     }
     using CudaResultType = typename CudaTreeType::CudaIntersectionResult;
-    const std::vector<CudaResultType> cuda_results =
-        cuda_tree_->intersectsRecursive(cuda_rays, min_range, max_range);
 //    const std::vector<CudaResultType> cuda_results =
-//        cuda_tree_->intersectsIterative(cuda_rays, min_range, max_range);
+//        cuda_tree_->intersectsRecursive(cuda_rays, min_range, max_range);
+    const std::vector<CudaResultType> cuda_results =
+        cuda_tree_->intersectsIterative(cuda_rays, min_range, max_range);
     std::vector<IntersectionResult> results(cuda_results.size());
 #pragma omp parallel for
     for (std::size_t i = 0; i < cuda_results.size(); ++i) {
@@ -534,7 +555,7 @@ public:
 
 #if WITH_CUDA
   void setCudaStackSize(const size_t cuda_stack_size, const int cuda_gpu_id = 0, const bool verbose = true) const {
-    ait::CudaDevice cuda_dev(cuda_gpu_id);
+    bh::CudaDevice cuda_dev(cuda_gpu_id);
     if (verbose) {
       std::cout << "Previous CUDA stack size was " << cuda_dev.getStackSize() << std::endl;
       std::cout << "Setting CUDA stack size to " << cuda_stack_size << std::endl;
@@ -616,8 +637,8 @@ private:
       std::size_t right_child_index;
       ar & left_child_index;
       ar & right_child_index;
-      AIT_ASSERT(left_child_index < num_of_nodes);
-      AIT_ASSERT(right_child_index < num_of_nodes);
+      BH_ASSERT(left_child_index < num_of_nodes);
+      BH_ASSERT(right_child_index < num_of_nodes);
       NodeType& node = *it;
       if (left_child_index == 0) {
         node.left_child_ = nullptr;
@@ -657,7 +678,7 @@ private:
     owns_objects_ = true;
     computeInfo();
     printInfo();
-    AIT_ASSERT_STR(getDepth() == depth
+    BH_ASSERT_STR(getDepth() == depth
         && getNumOfNodes() == num_of_nodes
         && getNumOfLeafNodes() == num_of_leaf_nodes,
         "The tree properties are not as expected");
@@ -762,7 +783,7 @@ private:
       assert(end - begin == 1);
       node->bounding_box_ = begin->bounding_box;
       node->object_ = begin->object;
-      AIT_ASSERT(begin->object != nullptr);
+      BH_ASSERT(begin->object != nullptr);
     }
   }
 
@@ -859,7 +880,7 @@ private:
 
 //    std::cout << "cur_node->isLeaf(): " << cur_node->isLeaf() << std::endl;
     if (cur_node->isLeaf()) {
-//      AIT_ASSERT(cur_node->object_ != nullptr);
+//      BH_ASSERT(cur_node->object_ != nullptr);
 //      if (below_min_range) {
 //        return false;
 //      }

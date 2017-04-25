@@ -9,13 +9,13 @@
 #include <iostream>
 #include <memory>
 
-#include <ait/boost.h>
+#include <bh/boost.h>
 #include <boost/program_options.hpp>
 #include <boost/filesystem.hpp>
 
-#include <ait/common.h>
-#include <ait/utilities.h>
-#include <ait/options.h>
+#include <bh/common.h>
+#include <bh/utilities.h>
+#include <bh/config_options.h>
 
 #include <QApplication>
 
@@ -31,24 +31,24 @@ using std::string;
 
 class ViewpointPlannerGui {
 public:
-  static std::map<std::string, std::unique_ptr<ait::ConfigOptions>> getConfigOptions() {
-    std::map<std::string, std::unique_ptr<ait::ConfigOptions>> config_options;
+  static std::map<std::string, std::unique_ptr<bh::ConfigOptions>> getConfigOptions() {
+    std::map<std::string, std::unique_ptr<bh::ConfigOptions>> config_options;
     config_options.emplace(std::piecewise_construct,
       std::forward_as_tuple("viewpoint_planner.data"),
-      std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlannerData::Options())));
+      std::forward_as_tuple(static_cast<bh::ConfigOptions*>(new ViewpointPlannerData::Options())));
     config_options.emplace(std::piecewise_construct,
       std::forward_as_tuple("viewpoint_planner"),
-      std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlanner::Options())));
+      std::forward_as_tuple(static_cast<bh::ConfigOptions*>(new ViewpointPlanner::Options())));
     config_options.emplace(std::piecewise_construct,
       std::forward_as_tuple("motion_planner"),
-      std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlanner::MotionPlannerType::Options())));
+      std::forward_as_tuple(static_cast<bh::ConfigOptions*>(new ViewpointPlanner::MotionPlannerType::Options())));
     config_options.emplace(std::piecewise_construct,
       std::forward_as_tuple("viewpoint_planner.gui"),
-      std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewerWindow::Options())));
+      std::forward_as_tuple(static_cast<bh::ConfigOptions*>(new ViewerWindow::Options())));
     return config_options;
   }
 
-  ViewpointPlannerGui(const std::map<std::string, std::unique_ptr<ait::ConfigOptions>>& config_options) {
+  ViewpointPlannerGui(const std::map<std::string, std::unique_ptr<bh::ConfigOptions>>& config_options) {
     const ViewpointPlannerData::Options* viewpoint_planner_data_options =
       dynamic_cast<ViewpointPlannerData::Options*>(config_options.at("viewpoint_planner.data").get());
     std::unique_ptr<ViewpointPlannerData> planner_data(
@@ -89,7 +89,7 @@ private:
 };
 
 std::pair<bool, boost::program_options::variables_map> processOptions(
-  int argc, char** argv, std::map<std::string, std::unique_ptr<ait::ConfigOptions>>& config_options)
+  int argc, char** argv, std::map<std::string, std::unique_ptr<bh::ConfigOptions>>& config_options)
 {
   namespace po = boost::program_options;
 
@@ -127,7 +127,7 @@ std::pair<bool, boost::program_options::variables_map> processOptions(
     }
     std::ifstream config_in(vm["config-file"].as<string>());
     if (!config_in) {
-      throw AIT_EXCEPTION("Unable to open config file");
+      throw BH_EXCEPTION("Unable to open config file");
     }
     else {
       const bool allow_unregistered = false;
@@ -155,7 +155,7 @@ int main(int argc, char** argv) {
   QApplication qapp(argc, argv);
   qapp.setApplicationName("Quad3DR viewpoint planner");
 
-  std::map<std::string, std::unique_ptr<ait::ConfigOptions>> config_options =
+  std::map<std::string, std::unique_ptr<bh::ConfigOptions>> config_options =
     ViewpointPlannerGui::getConfigOptions();
 
   // Handle command line and config file

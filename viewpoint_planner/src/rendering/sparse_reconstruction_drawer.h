@@ -11,6 +11,8 @@
 #include "triangle_drawer.h"
 #include "line_drawer.h"
 
+namespace rendering {
+
 class SparseReconstructionDrawer {
   const float CAMERA_SIZE_SPEED = 0.1f;
   const float MIN_CAMERA_SIZE = 0.01f;
@@ -31,7 +33,7 @@ public:
 
   ~SparseReconstructionDrawer();
 
-  void setSparseReconstruction(const SparseReconstruction* sparse_recon);
+  void setSparseReconstruction(const SparseReconstruction *sparse_recon);
 
   void changeCameraSize(const float delta);
 
@@ -49,7 +51,7 @@ public:
 
   void upload();
 
-  void draw(const QMatrix4x4& pvm_matrix, const int width, const int height);
+  void draw(const QMatrix4x4 &pvm_matrix, const int width, const int height);
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
@@ -63,11 +65,11 @@ private:
 
   void uploadPointData();
 
-  void generateImageModel(const PinholeCameraColmap& camera, const ImageColmap& image,
-      const float camera_size, const float r, const float g, const float b, const float a,
-      std::array<OGLLineData, 8>& lines, std::array<OGLTriangleData, 2>& triangles);
+  void generateImageModel(const PinholeCameraColmap &camera, const ImageColmap &image,
+                          const float camera_size, const float r, const float g, const float b, const float a,
+                          std::array<OGLLineData, 8> &lines, std::array<OGLTriangleData, 2> &triangles);
 
-  const SparseReconstruction* sparse_recon_;
+  const SparseReconstruction *sparse_recon_;
   float camera_size_;
   float point_size_;
   bool draw_cameras_;
@@ -76,3 +78,5 @@ private:
   LineDrawer camera_line_drawer_;
   PointDrawer sparse_point_drawer_;
 };
+
+}

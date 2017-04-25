@@ -176,6 +176,10 @@ public:
     return (min_.array() >= max_.array()).all();
   }
 
+  BoundingBox3D operator+(const Vector3& offset) const {
+    return BoundingBox3D(getMinimum() + offset, getMaximum() + offset);
+  }
+
   const Vector3& getMinimum() const {
     return min_;
   }
@@ -687,7 +691,7 @@ public:
 
   Polygon2D() {}
 
-  Polygon2D(const std::vector<Vector2>& vertices)
+  explicit Polygon2D(const std::vector<Vector2>& vertices)
   : vertices_(vertices) {}
 
   bool isValid() const {

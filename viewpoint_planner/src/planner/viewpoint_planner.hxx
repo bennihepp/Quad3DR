@@ -9,7 +9,7 @@
 template <typename IteratorT>
 std::tuple<bool, ViewpointPlanner::Pose, std::size_t>
 ViewpointPlanner::sampleSurroundingPose(IteratorT first, IteratorT last) const {
-  AIT_ASSERT_STR(last - first > 0, "Unable to sample surrounding pose from empty pose set");
+  BH_ASSERT_STR(last - first > 0, "Unable to sample surrounding pose from empty pose set");
   std::size_t index = random_.sampleUniformIntExclusive(0, last - first);
   IteratorT it = first + index;
 //  std::cout << "index=" << index << ", last-first=" << (last-first) << std::endl;
@@ -22,7 +22,7 @@ ViewpointPlanner::sampleSurroundingPose(IteratorT first, IteratorT last) const {
 
 template <typename IteratorT>
 IteratorT ViewpointPlanner::sampleViewpointByGridCounts(IteratorT first, IteratorT last) const {
-  AIT_ASSERT_STR(last - first > 0, "Unable to sample surrounding pose from empty pose set");
+  BH_ASSERT_STR(last - first > 0, "Unable to sample surrounding pose from empty pose set");
   size_t index = viewpoint_sampling_distribution_(random_.rng());
   return first + index;
 }

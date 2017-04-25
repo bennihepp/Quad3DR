@@ -220,10 +220,10 @@ public:
     ar & path_entries_.size();
     for (const ViewpointPathEntry& path_entry : path_entries_) {
       ar & path_entry;
-      AIT_PRINT_VALUE(path_entry.viewpoint_index);
+      BH_PRINT_VALUE(path_entry.viewpoint_index);
       if (version > 1) {
         ar & path_entry.viewpoint.pose();
-        AIT_PRINT_VALUE(path_entry.viewpoint.pose());
+        BH_PRINT_VALUE(path_entry.viewpoint.pose());
       }
     }
   }
@@ -293,15 +293,15 @@ public:
     for (std::size_t i = 0; i < num_of_entries; ++i) {
       ViewpointPathEntry path_entry;
       ar & path_entry;
-      AIT_PRINT_VALUE(path_entry.viewpoint_index);
+      BH_PRINT_VALUE(path_entry.viewpoint_index);
       if (version > 1) {
         Pose pose;
         ar & pose;
-        AIT_PRINT_VALUE(pose);
+        BH_PRINT_VALUE(pose);
         path_entry.viewpoint = Viewpoint(camera_, pose);
       }
       else {
-        AIT_ASSERT(path_entry.viewpoint_index < viewpoint_entries_.size());
+        BH_ASSERT(path_entry.viewpoint_index < viewpoint_entries_.size());
         path_entry.viewpoint = viewpoint_entries_[path_entry.viewpoint_index].viewpoint;
       }
       path_entries_->push_back(path_entry);

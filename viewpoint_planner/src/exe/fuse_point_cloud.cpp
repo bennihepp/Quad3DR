@@ -10,17 +10,17 @@
 #include <memory>
 #include <csignal>
 
-#include <ait/boost.h>
+#include <bh/boost.h>
 #include <boost/program_options.hpp>
 #include <boost/filesystem.hpp>
 
-#include <ait/common.h>
-#include <ait/eigen.h>
-#include <ait/utilities.h>
-#include <ait/options.h>
-#include <ait/math/geometry.h>
+#include <bh/common.h>
+#include <bh/eigen.h>
+#include <bh/utilities.h>
+#include <bh/config_options.h>
+#include <bh/math/geometry.h>
 
-#include <ait/mLib.h>
+#include <bh/mLib/mLib.h>
 
 using std::cout;
 using std::cerr;
@@ -30,7 +30,7 @@ using std::string;
 using FloatType = float;
 USE_FIXED_EIGEN_TYPES(FloatType)
 
-using BoundingBoxType = ait::BoundingBox3D<FloatType>;
+using BoundingBoxType = bh::BoundingBox3D<FloatType>;
 using PointCloudType = ml::PointCloud<FloatType>;
 using PointCloudIOType = ml::PointCloudIO<FloatType>;
 

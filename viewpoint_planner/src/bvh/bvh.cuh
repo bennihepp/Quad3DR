@@ -8,8 +8,8 @@
 #pragma once
 
 #include <utility>
-#include <ait/cuda_utils.h>
-#include <ait/cuda_math.h>
+#include <bh/cuda_utils.h>
+#include <bh/cuda_math.h>
 
 #if __GNUC__ && !__CUDACC__
   #pragma GCC push_options
@@ -21,22 +21,22 @@
 namespace bvh {
 
 template <typename FloatT>
-using CudaVector2 = CudaVector<FloatT, 3>;
+using CudaVector2 = bh::CudaVector<FloatT, 3>;
 
 template <typename FloatT>
-using CudaVector3 = CudaVector<FloatT, 3>;
+using CudaVector3 = bh::CudaVector<FloatT, 3>;
 
 template <typename FloatT>
-using CudaVector4 = CudaVector<FloatT, 4>;
+using CudaVector4 = bh::CudaVector<FloatT, 4>;
 
 template <typename FloatT>
-using CudaMatrix3x3 = CudaMatrix<FloatT, 3, 3>;
+using CudaMatrix3x3 = bh::CudaMatrix<FloatT, 3, 3>;
 
 template <typename FloatT>
-using CudaMatrix4x4 = CudaMatrix<FloatT, 4, 4>;
+using CudaMatrix4x4 = bh::CudaMatrix<FloatT, 4, 4>;
 
 template <typename FloatT>
-using CudaMatrix3x4 = CudaMatrix<FloatT, 3, 4>;
+using CudaMatrix3x4 = bh::CudaMatrix<FloatT, 3, 4>;
 
 template <typename FloatT>
 struct CudaRay {
@@ -224,6 +224,37 @@ public:
     CudaRayData<FloatT> ray_data(ray);
     ray_data.inv_direction = ray.direction.cwiseInverse();
     return intersects(ray_data, intersection);
+  }
+
+  /// Intersect ray with bounding box.
+  ///
+  /// @param t_ray: Return the ray coefficient of the intersection point.
+  /// @param t_min: Minimum ray equation coefficient, >= 0.
+  /// @param t_max: Maximum ray equation coefficient, > t_min.
+  /// @return: Returns a flag indicating whether the ray intersects the bounding box.
+  __device__
+  bool intersectsCuda(const CudaRayData<FloatT>& ray,
+                      FloatT* t_ray,
+                      const FloatT t_min = 0,
+                      const FloatT t_max = std::numeric_limits<FloatT>::max()) const {
+    // Faster version without explicit check for directions parallel to an axis
+    FloatT t_lower = t_min;
+    FloatT t_upper = t_max;
+    const size_t kDimensions = 3;
+    for (size_t i = 0; i < kDimensions; ++i) {
+      const FloatT t0 = (min_(i) - ray.origin(i)) * ray.inv_direction(i);
+      const FloatT t1 = (max_(i) - ray.origin(i)) * ray.inv_direction(i);
+      t_lower = fmaxf(t_lower, fminf(t0, t1));
+      t_upper = fminf(t_upper, fmaxf(t0, t1));
+    }
+    if (t_upper >= t_lower) {
+      *t_ray = t_lower;
+      return true;
+    }
+    else {
+      *t_ray = 0;
+      return false;
+    }
   }
 
   __device__
@@ -421,7 +452,7 @@ public:
   using NodeType = CudaNode<FloatT>;
   using CudaRayType = CudaRay<FloatT>;
 
-  const std::size_t kThreadsPerBlock = 128;
+  const std::size_t kThreadsPerBlock = 1024;
 
   struct CudaIntersectionResult {
     CudaIntersectionResult()
@@ -447,15 +478,15 @@ public:
   };
 
   struct CudaIntersectionIterativeStackEntry {
-    enum State {
-      NotVisited,
-      PushedLeftChild,
-      PushedRightChild,
-    };
+//    enum State {
+//      NotVisited,
+//      PushedLeftChild,
+//      PushedRightChild,
+//    };
     NodeType* node;
     std::size_t depth;
-    State state;
-    bool intersects;
+//    State state;
+//    bool intersects;
   };
 
   static CudaTree* createCopyFromHostTree(NodeType* root, const std::size_t num_of_nodes, const std::size_t tree_depth);
@@ -466,16 +497,16 @@ public:
 
   void clear() {
     if (d_nodes_ != nullptr) {
-      ait::CudaUtils::deallocate(&d_nodes_);
+      bh::CudaUtils::deallocate(&d_nodes_);
       d_nodes_ = nullptr;
     }
     if (d_rays_ != nullptr) {
-      ait::CudaUtils::deallocate(&d_rays_);
+      bh::CudaUtils::deallocate(&d_rays_);
       d_rays_ = nullptr;
     }
     if (d_results_ != nullptr) {
-      ait::CudaUtils::deallocate(&d_results_);
-      ait::CudaUtils::deallocate(&d_results_with_screen_coordinates_);
+      bh::CudaUtils::deallocate(&d_results_);
+      bh::CudaUtils::deallocate(&d_results_with_screen_coordinates_);
       d_results_ = nullptr;
     }
   }
@@ -515,7 +546,16 @@ public:
       const CudaMatrix3x4<FloatT>& extrinsics,
       const std::size_t x_start, const std::size_t x_end,
       const std::size_t y_start, const std::size_t y_end,
-      const FloatT min_range = 0, const FloatT max_range = -1);
+      const FloatT min_range = 0, const FloatT max_range = -1,
+      const bool fail_on_error = false);
+
+  std::vector<CudaIntersectionResultWithScreenCoordinates> raycastWithScreenCoordinatesIterative(
+          const CudaMatrix4x4<FloatT>& intrinsics,
+          const CudaMatrix3x4<FloatT>& extrinsics,
+          const std::size_t x_start, const std::size_t x_end,
+          const std::size_t y_start, const std::size_t y_end,
+          const FloatT min_range = 0, const FloatT max_range = -1,
+          const bool fail_on_error = false);
 
 private:
   CudaTree(const std::size_t tree_depth)

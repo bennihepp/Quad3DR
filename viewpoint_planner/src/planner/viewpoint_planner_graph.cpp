@@ -9,11 +9,11 @@
 #include "viewpoint_planner.h"
 #include <boost/graph/connected_components.hpp>
 
-ViewpointPlanner::ViewpointEntryIndex ViewpointPlanner::addViewpointEntryWithoutLock(ViewpointEntry&& viewpoint_entry) {
+ViewpointPlanner::ViewpointEntryIndex ViewpointPlanner::addViewpointEntryWithoutLock(
+        ViewpointEntry&& viewpoint_entry, const bool ignore_viewpoint_count_grid) {
   const ViewpointEntryIndex viewpoint_index = viewpoint_entries_.size();
   const Vector3 viewpoint_position = viewpoint_entry.viewpoint.pose().getWorldPosition();
 //  std::cout << "Adding position to ANN index" << std::endl;
-  BH_PRINT_VALUE(viewpoint_position.transpose());
   viewpoint_ann_.addPoint(viewpoint_position);
 //  std::cout << "Putting viewpoint entry into array" << std::endl;
   if (viewpoint_entries_.capacity() == viewpoint_entries_.size()) {
@@ -25,29 +25,43 @@ ViewpointPlanner::ViewpointEntryIndex ViewpointPlanner::addViewpointEntryWithout
 //  std::cout << "Adding node to viewpoint graph" << std::endl;
   viewpoint_graph_.addNode(viewpoint_index);
   viewpoint_graph_components_valid_ = false;
-#if !AIT_RELEASE
-  if (viewpoint_entries_.size() > num_real_viewpoints_) {
-    AIT_ASSERT(viewpoint_count_grid_.isInsideGrid(viewpoint_position));
-  }
-#endif
-  if (viewpoint_entries_.size() > num_real_viewpoints_) {
-    viewpoint_count_grid_(viewpoint_position) += 1;
-  }
-  // Check if viewpoint sampling distribution should be updated
-  const size_t increase_since_last_update = viewpoint_entries_.size() - viewpoint_sampling_distribution_update_size_;
-  const FloatType relative_increase_since_last_update = increase_since_last_update / FloatType(viewpoint_entries_.size());
-  if (viewpoint_entries_.size() >= num_real_viewpoints_
-      && relative_increase_since_last_update >= FloatType(0.05)) {
-    std::cout << "Updating viewpoint sampling distribution" << std::endl;
-    updateViewpointSamplingDistribution();
-    viewpoint_sampling_distribution_update_size_ = viewpoint_entries_.size();
+  // TODO
+//#if !BH_RELEASE
+//  if (!ignore_viewpoint_count_grid && viewpoint_entries_.size() > num_real_viewpoints_) {
+//    BH_ASSERT(viewpoint_count_grid_.isInsideGrid(viewpoint_position));
+//  }
+//#endif
+  if (!ignore_viewpoint_count_grid) {
+    if (viewpoint_count_grid_.isInsideGrid(viewpoint_position)) {
+      if (viewpoint_entries_.size() > num_real_viewpoints_) {
+        viewpoint_count_grid_(viewpoint_position) += 1;
+      }
+      // Check if viewpoint sampling distribution should be updated
+      const size_t increase_since_last_update =
+              viewpoint_entries_.size() - viewpoint_sampling_distribution_update_size_;
+      const FloatType relative_increase_since_last_update =
+              increase_since_last_update / FloatType(viewpoint_entries_.size());
+      if (viewpoint_entries_.size() >= num_real_viewpoints_
+          && (viewpoint_entries_.size() == num_real_viewpoints_ + 1
+              || relative_increase_since_last_update >= FloatType(0.05))) {
+        std::cout << "Updating viewpoint sampling distribution" << std::endl;
+        updateViewpointSamplingDistribution();
+        viewpoint_sampling_distribution_update_size_ = viewpoint_entries_.size();
+      }
+    }
   }
   return viewpoint_index;
 }
 
+ViewpointPlanner::ViewpointEntryIndex ViewpointPlanner::addViewpointEntryWithoutLock(
+        const ViewpointEntry& viewpoint_entry, const bool ignore_viewpoint_count_grid) {
+  ViewpointEntry viewpoint_entry_copy = viewpoint_entry;
+  return addViewpointEntryWithoutLock(std::move(viewpoint_entry_copy), ignore_viewpoint_count_grid);
+}
+
 void ViewpointPlanner::updateViewpointSamplingDistribution() {
   std::vector<FloatType> weights;
-  weights.reserve(viewpoint_entries_.size());
+  weights.reserve(viewpoint_entries_.size() - num_real_viewpoints_);
   const auto grid_count_lambda = [&](const ViewpointEntry& entry) {
     const Vector3 viewpoint_position = entry.viewpoint.pose().getWorldPosition();
     return viewpoint_count_grid_(viewpoint_position);
@@ -57,17 +71,19 @@ void ViewpointPlanner::updateViewpointSamplingDistribution() {
     return grid_count_lambda(entry1) < grid_count_lambda(entry2);
   });
   const FloatType max_grid_count = grid_count_lambda(*max_it);
-  FloatType exp_factor = 20;
+//  FloatType exp_factor = 20;
+  FloatType exp_factor = 1;
   if (viewpoint_entries_.size() >= num_real_viewpoints_ + 100) {
     exp_factor = 1;
   }
   for (auto it = viewpoint_entries_.begin() + num_real_viewpoints_; it != viewpoint_entries_.end(); ++it) {
     const FloatType grid_count = grid_count_lambda(*it);
-    AIT_ASSERT(grid_count > 0);
+    BH_ASSERT(grid_count > 0);
     const FloatType weight = std::exp(-grid_count * exp_factor / max_grid_count);
     weights.push_back(weight);
   }
   viewpoint_sampling_distribution_ = std::discrete_distribution<size_t>(weights.begin(), weights.end());
+  const FloatType grid_exp_factor = 2;
 //  // Display non-empty grid cells
   if (viewpoint_entries_.size() >= num_real_viewpoints_ + 100) {
   //  std::cout << "Viewpoint grid:" << std::endl;
@@ -76,7 +92,7 @@ void ViewpointPlanner::updateViewpointSamplingDistribution() {
         for (size_t iz = 0; iz < viewpoint_count_grid_.getDimZ(); ++iz) {
           const size_t index = viewpoint_count_grid_.getIndex(ix, iy, iz);
           const FloatType grid_count = viewpoint_count_grid_(ix, iy, iz);
-          const FloatType probability = std::exp(-grid_count * 20 / max_grid_count);
+          const FloatType probability = std::exp(-grid_count * grid_exp_factor / max_grid_count);
           grid_cell_probabilities_[index] = probability;
   //        if (grid_count > 0) {
   //          std::cout << "  grid element (" << ix << ", " << iy << ", " << iz << ") has " << grid_count << " viewpoints" << std::endl;
@@ -90,11 +106,19 @@ void ViewpointPlanner::updateViewpointSamplingDistribution() {
   }
 }
 
-ViewpointPlanner::ViewpointEntryIndex ViewpointPlanner::addViewpointEntry(ViewpointEntry&& viewpoint_entry) {
+ViewpointPlanner::ViewpointEntryIndex ViewpointPlanner::addViewpointEntry(
+        ViewpointEntry&& viewpoint_entry, const bool ignore_viewpoint_count_grid) {
   std::unique_lock<std::mutex> lock(mutex_);
-  const ViewpointEntryIndex viewpoint_index = addViewpointEntryWithoutLock(std::move(viewpoint_entry));
+  const ViewpointEntryIndex viewpoint_index = addViewpointEntryWithoutLock(
+          std::move(viewpoint_entry), ignore_viewpoint_count_grid);
   lock.unlock();
   return viewpoint_index;
+}
+
+ViewpointPlanner::ViewpointEntryIndex ViewpointPlanner::addViewpointEntry(
+        const ViewpointEntry& viewpoint_entry, const bool ignore_viewpoint_count_grid) {
+  ViewpointEntry viewpoint_entry_copy = viewpoint_entry;
+  return addViewpointEntry(std::move(viewpoint_entry_copy), ignore_viewpoint_count_grid);
 }
 
 const std::pair<std::vector<std::size_t>, std::size_t>& ViewpointPlanner::getConnectedComponents() const {
@@ -107,6 +131,7 @@ const std::pair<std::vector<std::size_t>, std::size_t>& ViewpointPlanner::getCon
   return viewpoint_graph_components_;
 }
 
+#pragma GCC optimize("O0")
 bool ViewpointPlanner::generateNextViewpointEntry() {
   const bool verbose = true;
 
@@ -130,33 +155,47 @@ bool ViewpointPlanner::generateNextViewpointEntry() {
   if (viewpoint_entries_.size() <= num_real_viewpoints_) {
     if (options_.isSet("drone_start_position")) {
       const Pose drone_start_pose = Pose::createFromImageToWorldTransformation(options_.drone_start_position, Quaternion::Identity());
+      std::cout << "Sampling around start position" << std::endl;
       std::tie(found_sample, sampled_pose) = sampleSurroundingPose(drone_start_pose);
     }
     else {
       reference_viewpoint_index = random_.sampleUniformIntExclusive(viewpoint_entries_.size());
       const Pose& reference_pose = viewpoint_entries_[reference_viewpoint_index].viewpoint.pose();
+      std::cout << "Sampling around previous viewpoint position" << std::endl;
       std::tie(found_sample, sampled_pose) = sampleSurroundingPose(reference_pose);
     }
   }
   else {
     const bool sample_without_reference = random_.sampleBernoulli(options_.viewpoint_sample_without_reference_probability);
     if (sample_without_reference) {
-      std::tie(found_sample, sampled_pose) = samplePose(pose_sample_bbox_, drone_extent_);
+      std::cout << "Sampling uniformly in pose sample bounding box" << std::endl;
+      std::tie(found_sample, sampled_pose) = samplePose(pose_sample_bbox_, drone_bbox_);
     }
     else {
+      std::cout << "Sampling around existing viewpoint" << std::endl;
       const auto viewpoint_it = sampleViewpointByGridCounts(
           viewpoint_entries_.cbegin() + num_real_viewpoints_, viewpoint_entries_.cend());
       if (viewpoint_it == viewpoint_entries_.cend()) {
+        std::cout << "Could not sample viewpoint from grid" << std::endl;
         found_sample = false;
       }
       else {
         const Pose& reference_pose = viewpoint_it->viewpoint.pose();
         std::tie(found_sample, sampled_pose) = sampleSurroundingPose(reference_pose);
-        const size_t grid_index = viewpoint_count_grid_.getIndex(viewpoint_count_grid_.getGridIndices(reference_pose.getWorldPosition()));
-        const FloatType prob = grid_cell_probabilities_[grid_index];
-        const FloatType u = random_.sampleUniform();
-        if (u > prob) {
-          found_sample = false;
+        if (found_sample) {
+          if (options_.viewpoint_count_grid_enable) {
+            const size_t grid_index = viewpoint_count_grid_.getIndex(
+                    viewpoint_count_grid_.getGridIndices(sampled_pose.getWorldPosition()));
+            const FloatType prob = grid_cell_probabilities_[grid_index];
+            const FloatType u = random_.sampleUniform();
+            if (u > prob) {
+              std::cout << "Sample was rejected because of viewpoint count grid" << std::endl;
+              found_sample = false;
+            }
+          }
+        }
+        else {
+          std::cout << "Could not sample surrounding pose" << std::endl;
         }
       }
     }
@@ -189,9 +228,9 @@ bool ViewpointPlanner::generateNextViewpointEntry() {
     const ViewpointANN::DistanceType dist_square = knn_distances[i];
     const ViewpointEntryIndex viewpoint_index = knn_indices[i];
     if (viewpoint_index < num_real_viewpoints_ && dist_square < dist_real_thres_square) {
-//      if (verbose) {
-//        std::cout << "Rejected: Too close to real viewpoint" << std::endl;
-//      }
+      if (verbose) {
+        std::cout << "Rejected: Too close to real viewpoint" << std::endl;
+      }
       ++num_of_failed_viewpoint_entry_samples_;
       return false;
     }
@@ -245,7 +284,7 @@ bool ViewpointPlanner::generateNextViewpointEntry() {
 //      std::cout << "viewpoint_entry[" << knn_indices2[i] << "]=" << viewpoint_entries_[knn_indices2[i]].viewpoint.pose().getWorldPosition().transpose() << std::endl;
 //    }
 //  }
-//  AIT_ASSERT(too_close_count <= too_close_count2);
+//  BH_ASSERT(too_close_count <= too_close_count2);
 //  // End of testing code
 //  if (verbose) {
 //    std::cout << "too_close_count=" << too_close_count << std::endl;
@@ -259,71 +298,106 @@ bool ViewpointPlanner::generateNextViewpointEntry() {
     return false;
   }
 
-  bool found_motion = false;
-  SE3Motion se3_motion;
-  if (reference_viewpoint_index == (ViewpointEntryIndex)-1 && viewpoint_entries_.size() > num_real_viewpoints_) {
-    // Make sure we can find at least one neighbour that is reachable and matchable. Otherwise, discard.
-    const std::size_t knn = options_.viewpoint_sample_motion_and_matching_knn;
-    static std::vector<ViewpointANN::IndexType> knn_indices;
-    static std::vector<ViewpointANN::DistanceType> knn_distances;
-    knn_indices.resize(knn);
-    knn_distances.resize(knn);
-    viewpoint_ann_.knnSearch(sampled_pose.getWorldPosition(), knn, &knn_indices, &knn_distances);
-    for (std::size_t i = 0; i < knn_distances.size(); ++i) {
-      const ViewpointANN::DistanceType dist_square = knn_distances[i];
-      const ViewpointEntryIndex other_viewpoint_index = knn_indices[i];
-      if (other_viewpoint_index < num_real_viewpoints_) {
-        continue;
-      }
-      const Viewpoint& other_viewpoint = viewpoint_entries_[other_viewpoint_index].viewpoint;
-      const std::unordered_set<Point3DId>& visible_points = computeVisibleSparsePoints(viewpoint);
-      const std::unordered_set<Point3DId>& other_visible_points = getCachedVisibleSparsePoints(other_viewpoint_index);
-      const bool matchable = isSparseMatchable(viewpoint, other_viewpoint, visible_points, other_visible_points);
-      if (!matchable) {
-        continue;
-      }
-      const Pose& other_pose = other_viewpoint.pose();
-      std::tie(se3_motion, found_motion) = motion_planner_.findMotion(other_pose, sampled_pose);
-      if (found_motion) {
-        reference_viewpoint_index = other_viewpoint_index;
-        break;
-      }
-    }
-    if (!found_motion) {
-      std::cout << "Unable to find motion to new sampled pose" << std::endl;
-      ++num_of_failed_viewpoint_entry_samples_;
-      return false;
-    }
-    FloatType motion_distance = 0;
-    if (se3_motion.poses.size() >= 2) {
-      for (auto pose_it = se3_motion.poses.begin() + 1; pose_it != se3_motion.poses.end(); ++pose_it) {
-        motion_distance += (pose_it->getWorldPosition() - (pose_it - 1)->getWorldPosition()).norm();
-      }
-    }
-#if !AIT_RELEASE
-    AIT_ASSERT(ait::isApproxEqual(se3_motion.distance, motion_distance, FloatType(1e-2)));
-#endif
-  }
-  else if (reference_viewpoint_index != (ViewpointEntryIndex)-1
-      && reference_viewpoint_index >= num_real_viewpoints_) {
-    // Make sure that reference viewpoint is reachable and matchable. Otherwise, discard.
-    const Viewpoint& other_viewpoint = viewpoint_entries_[reference_viewpoint_index].viewpoint;
-    const bool matchable = isSparseMatchable(viewpoint, other_viewpoint);
-    if (!matchable) {
-      std::cout << "Unable to match sample reference from new sampled viewpoint" << std::endl;
-      ++num_of_failed_viewpoint_entry_samples_;
-      return false;
-    }
-    const Pose& other_pose = other_viewpoint.pose();
-    std::tie(se3_motion, found_motion) = motion_planner_.findMotion(other_pose, sampled_pose);
-    if (!found_motion) {
-      std::cout << "Unable to find motion from sample reference to new sampled pose" << std::endl;
-      ++num_of_failed_viewpoint_entry_samples_;
-      return false;
-    }
-  }
+  // TODO
+//  bool found_neighbour = false;
+//  bool found_motion = false;
+//  SE3Motion se3_motion;
+//  if (reference_viewpoint_index == (ViewpointEntryIndex)-1 && viewpoint_entries_.size() > num_real_viewpoints_) {
+//    // Make sure we can find at least one neighbour that is reachable and matchable. Otherwise, discard.
+//    const std::size_t knn = options_.viewpoint_sample_motion_and_matching_knn;
+//    static std::vector<ViewpointANN::IndexType> knn_indices;
+//    static std::vector<ViewpointANN::DistanceType> knn_distances;
+//    knn_indices.resize(knn);
+//    knn_distances.resize(knn);
+//    viewpoint_ann_.knnSearch(sampled_pose.getWorldPosition(), knn, &knn_indices, &knn_distances);
+//    for (std::size_t i = 0; i < knn_distances.size(); ++i) {
+//      const ViewpointANN::DistanceType dist_square = knn_distances[i];
+//      const ViewpointEntryIndex other_viewpoint_index = knn_indices[i];
+//      if (other_viewpoint_index < num_real_viewpoints_) {
+//        continue;
+//      }
+//      const Viewpoint& other_viewpoint = viewpoint_entries_[other_viewpoint_index].viewpoint;
+////      const std::unordered_map<Point3DId, ViewpointPlanner::Vector3>& visible_points = computeVisibleSparsePoints(viewpoint);
+////      const std::unordered_map<Point3DId, ViewpointPlanner::Vector3>& other_visible_points = getCachedVisibleSparsePoints(other_viewpoint_index);
+////      const bool matchable = isSparseMatchable(
+////              viewpoint, other_viewpoint,
+////              visible_points, other_visible_points);
+////      if (!matchable) {
+////        continue;
+////      }
+////      const std::unordered_set<size_t>& visible_voxels = getRaycastHitVoxelsSet(viewpoint);
+//      const std::unordered_set<size_t>& visible_voxels = getVisibleVoxels(viewpoint);
+//      const std::unordered_set<size_t>& other_visible_voxels = getCachedVisibleVoxels(other_viewpoint_index);
+//      const bool matchable = isSparseMatchable2(
+//              viewpoint, other_viewpoint,
+//              visible_voxels, other_visible_voxels);
+//      if (!matchable) {
+//        continue;
+//      }
+//      const Pose& other_pose = other_viewpoint.pose();
+//      SE3Motion local_se3_motion;
+//      bool local_found_motion = false;
+//      std::tie(local_se3_motion, local_found_motion) = motion_planner_.findMotion(other_pose, sampled_pose);
+//      if (!local_found_motion) {
+//        continue;
+//      }
+//      reference_viewpoint_index = other_viewpoint_index;
+//      se3_motion = local_se3_motion;
+//      found_motion = true;
+//      found_neighbour = true;
+//      break;
+//    }
+//    if (!found_neighbour) {
+//      std::cout << "Unable to find motion to new sampled pose" << std::endl;
+//      ++num_of_failed_viewpoint_entry_samples_;
+//      return false;
+//    }
+//    FloatType motion_distance = 0;
+//    if (se3_motion.poses.size() >= 2) {
+//      for (auto pose_it = se3_motion.poses.begin() + 1; pose_it != se3_motion.poses.end(); ++pose_it) {
+//        motion_distance += (pose_it->getWorldPosition() - (pose_it - 1)->getWorldPosition()).norm();
+//      }
+//    }
+//#if !BH_RELEASE
+//    BH_ASSERT(bh::isApproxEqual(se3_motion.distance, motion_distance, FloatType(1e-2)));
+//#endif
+//  }
+//  else if (reference_viewpoint_index != (ViewpointEntryIndex)-1
+//      && reference_viewpoint_index >= num_real_viewpoints_) {
+//    // Make sure that reference viewpoint is reachable and matchable. Otherwise, discard.
+//    const Viewpoint& other_viewpoint = viewpoint_entries_[reference_viewpoint_index].viewpoint;
+////    const std::unordered_map<Point3DId, ViewpointPlanner::Vector3>& visible_points = computeVisibleSparsePoints(viewpoint);
+////    const std::unordered_map<Point3DId, ViewpointPlanner::Vector3>& other_visible_points = getCachedVisibleSparsePoints(reference_viewpoint_index);
+////    const bool matchable = isSparseMatchable(
+////            viewpoint, other_viewpoint,
+////            visible_points, other_visible_points);
+////    if (!matchable) {
+////      std::cout << "Unable to match sample reference from new sampled viewpoint" << std::endl;
+////      ++num_of_failed_viewpoint_entry_samples_;
+////      return false;
+////    }
+//    const Pose& other_pose = other_viewpoint.pose();
+//    std::tie(se3_motion, found_motion) = motion_planner_.findMotion(other_pose, sampled_pose);
+//    if (!found_motion) {
+//      std::cout << "Unable to find motion from sample reference to new sampled pose" << std::endl;
+//      ++num_of_failed_viewpoint_entry_samples_;
+//      return false;
+//    }
+////    const std::unordered_set<size_t>& visible_voxels = getRaycastHitVoxelsSet(viewpoint);
+//    const std::unordered_set<size_t>& visible_voxels = getVisibleVoxels(viewpoint);
+//    const std::unordered_set<size_t>& other_visible_voxels = getCachedVisibleVoxels(reference_viewpoint_index);
+//    const bool matchable = isSparseMatchable2(
+//            viewpoint, other_viewpoint,
+//            visible_voxels, other_visible_voxels);
+//    if (!matchable) {
+//      std::cout << "Unable to match sample reference from new sampled viewpoint" << std::endl;
+//      ++num_of_failed_viewpoint_entry_samples_;
+//      return false;
+//    }
+//  }
 
-  // Compute observed voxels and information and discard if too few voxels or too little information
+  // Compute observed voxels and information and discard if too few voxels or too little information.
+  // Also discard if too close to too many voxels.
   try {
     const bool ignore_voxels_with_zero_information = true;
     std::pair<VoxelWithInformationSet, FloatType> raycast_result =
@@ -351,6 +425,21 @@ bool ViewpointPlanner::generateNextViewpointEntry() {
       return false;
     }
 
+    size_t too_close_voxel_count = 0;
+    for (const VoxelWithInformation& vi : voxel_set) {
+      const FloatType squared_distance = (viewpoint.pose().getWorldPosition() - vi.voxel->getBoundingBox().getCenter()).squaredNorm();
+      if (squared_distance < options_.viewpoint_voxel_distance_threshold) {
+        ++too_close_voxel_count;
+      }
+    }
+    const FloatType too_close_voxel_ratio = too_close_voxel_count / voxel_set.size();
+    if (too_close_voxel_ratio >= options_.viewpoint_max_too_close_voxel_ratio) {
+      if (verbose) {
+        std::cout << "too_close_voxel_ratio < options_.viewpoint_max_too_close_voxel_ratio" << std::endl;
+      }
+      ++num_of_failed_viewpoint_entry_samples_;
+    }
+
   //  if (verbose) {
   //    std::cout << "pose=" << pose << ", voxel_set=" << voxel_set.size() << ", total_information=" << total_information << std::endl;
   //  }
@@ -358,17 +447,19 @@ bool ViewpointPlanner::generateNextViewpointEntry() {
     const ViewpointEntryIndex new_viewpoint_index = addViewpointEntry(
         ViewpointEntry(Viewpoint(&virtual_camera_, sampled_pose), total_information, std::move(voxel_set)));
 
-    if (found_motion) {
-      ViewpointMotion motion({ new_viewpoint_index, reference_viewpoint_index }, { se3_motion });
-      addViewpointMotion(std::move(motion));
-    }
+//    if (found_motion) {
+//      ViewpointMotion motion({ reference_viewpoint_index, new_viewpoint_index }, { se3_motion });
+//      BH_ASSERT(motion.se3Motions().front().poses.front() == viewpoint_entries_[reference_viewpoint_index].viewpoint.pose());
+//      BH_ASSERT(motion.se3Motions().back().poses.back() == viewpoint_entries_[new_viewpoint_index].viewpoint.pose());
+//      addViewpointMotion(std::move(motion));
+//    }
 
     num_of_failed_viewpoint_entry_samples_ = 0;
     return true;
   }
 
   // TODO: Should be a exception for raycast
-  catch (const ait::Error& err) {
+  catch (const OccupiedTreeType::Error& err) {
     std::cout << "Raycast failed: " << err.what() << std::endl;
     return false;
   }

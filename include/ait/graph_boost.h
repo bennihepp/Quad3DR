@@ -39,6 +39,8 @@ public:
 //  using ConstEdgeIterator = typename boost::graph_traits<const BoostGraph>::edge_iterator;
   using OutEdgeIterator = typename boost::graph_traits<BoostGraph>::out_edge_iterator;
 //  using ConstOutEdgeIterator = typename boost::graph_traits<const BoostGraph>::out_edge_iterator;
+  template <typename BoostGraphT>
+  using _OutEdgeIterator = typename boost::graph_traits<BoostGraphT>::out_edge_iterator;
 
   using NodePropertyMap = typename boost::property_map<BoostGraph, NodePropertyT>::type;
 
@@ -148,17 +150,18 @@ public:
     return boost::out_edges(node_idx, graph_);
   }
 
-  struct OutEdgeIteratorWrapper : boost::iterator_adaptor<
-    OutEdgeIteratorWrapper,
-    OutEdgeIterator,
+  template <typename BoostGraphT>
+  struct _OutEdgeIteratorWrapper : boost::iterator_adaptor<
+    _OutEdgeIteratorWrapper<BoostGraphT>,
+    _OutEdgeIterator<BoostGraphT>,
     boost::use_default,
     boost::random_access_traversal_tag> {
   public:
-    OutEdgeIteratorWrapper()
+    _OutEdgeIteratorWrapper()
     : graph_(nullptr) {}
 
-    OutEdgeIteratorWrapper(BoostGraph* graph, OutEdgeIterator base_it)
-    : OutEdgeIteratorWrapper::iterator_adaptor_(base_it), graph_(graph) {}
+    _OutEdgeIteratorWrapper(BoostGraphT* graph, _OutEdgeIterator<BoostGraphT> base_it)
+    : _OutEdgeIteratorWrapper::iterator_adaptor_(base_it), graph_(graph) {}
 
     Vertex source() {
       return boost::source(*(*this), *graph_);
@@ -187,12 +190,19 @@ public:
       ++this->base_reference();
     }
 
-    BoostGraph* graph_;
+    BoostGraphT* graph_;
   };
 
-  struct OutEdgesWrapper {
+  using OutEdgeIteratorWrapper = _OutEdgeIteratorWrapper<BoostGraph>;
+  using ConstOutEdgeIteratorWrapper = _OutEdgeIteratorWrapper<const BoostGraph>;
+
+  template <typename BoostGraphT>
+  struct _OutEdgesWrapper {
   public:
-    OutEdgesWrapper(BoostGraph* graph, Vertex v)
+    using OutEdgeIteratorType = _OutEdgeIterator<BoostGraphT>;
+    using OutEdgeIteratorWrapper = _OutEdgeIteratorWrapper<BoostGraphT>;
+
+    _OutEdgesWrapper(BoostGraphT* graph, Vertex v)
     : graph_(graph), v_(v) {
       std::tie(begin_, end_) = boost::out_edges(v_, *graph_);
     }
@@ -229,18 +239,29 @@ public:
     }
 
   private:
-    BoostGraph* graph_;
+    BoostGraphT* graph_;
     Vertex v_;
-    OutEdgeIterator begin_;
-    OutEdgeIterator end_;
+    OutEdgeIteratorType begin_;
+    OutEdgeIteratorType end_;
   };
+
+  using OutEdgesWrapper = _OutEdgesWrapper<BoostGraph>;
+  using ConstOutEdgesWrapper = _OutEdgesWrapper<const BoostGraph>;
 
   OutEdgesWrapper getEdges(Vertex v) {
     return OutEdgesWrapper(&graph_, v);
   }
 
+  ConstOutEdgesWrapper getEdges(Vertex v) const {
+    return ConstOutEdgesWrapper(&graph_, v);
+  }
+
   OutEdgesWrapper getEdgesByNode(Node node) {
     return OutEdgesWrapper(&graph_, node_to_vertex_map_[node]);
+  }
+
+  ConstOutEdgesWrapper getEdgesByNode(Node node) const {
+    return ConstOutEdgesWrapper(&graph_, node_to_vertex_map_[node]);
   }
 
   struct VertexIteratorWrapper : boost::iterator_adaptor<

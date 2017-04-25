@@ -121,7 +121,7 @@ auto ApproximateNearestNeighbor<FloatT, dimension, NormT>::getPoint(std::size_t 
 template<typename FloatT, std::size_t dimension, typename NormT>
 void ApproximateNearestNeighbor<FloatT, dimension, NormT>::knnSearch(
         const Point &point, std::size_t knn,
-        std::vector <IndexType> *indices, std::vector <DistanceType> *distances) {
+        std::vector <IndexType> *indices, std::vector <DistanceType> *distances) const {
   if (empty()) {
     indices->resize(0);
     distances->resize(0);
@@ -142,7 +142,7 @@ void ApproximateNearestNeighbor<FloatT, dimension, NormT>::knnSearch(
 
 template<typename FloatT, std::size_t dimension, typename NormT>
 auto ApproximateNearestNeighbor<FloatT, dimension, NormT>::knnSearch(
-        const Point &point, std::size_t knn) -> SingleResult {
+        const Point &point, std::size_t knn) const -> SingleResult {
   if (empty()) {
     return SingleResult();
   }
@@ -160,7 +160,7 @@ auto ApproximateNearestNeighbor<FloatT, dimension, NormT>::knnSearch(
 
 template<typename FloatT, std::size_t dimension, typename NormT>
 auto ApproximateNearestNeighbor<FloatT, dimension, NormT>::knnSearch(
-        const EigenMatrix &points, std::size_t knn) -> Result {
+        const EigenMatrix &points, std::size_t knn) const -> Result {
   if (empty()) {
     return Result();
   }
@@ -176,7 +176,7 @@ auto ApproximateNearestNeighbor<FloatT, dimension, NormT>::knnSearch(
 template<typename FloatT, std::size_t dimension, typename NormT>
 template<typename Iterator>
 auto ApproximateNearestNeighbor<FloatT, dimension, NormT>::knnSearch(
-        Iterator begin, Iterator end, std::size_t knn) -> Result {
+        Iterator begin, Iterator end, std::size_t knn) const -> Result {
   std::size_t num_points = end - begin;
   EigenMatrix points(num_points, dimension);
   for (Iterator it = begin; it != end; ++it) {
@@ -188,7 +188,7 @@ auto ApproximateNearestNeighbor<FloatT, dimension, NormT>::knnSearch(
 template<typename FloatT, std::size_t dimension, typename NormT>
 void ApproximateNearestNeighbor<FloatT, dimension, NormT>::radiusSearch(
         const Point &point, FloatType radius, std::size_t max_results,
-        std::vector <IndexType> *indices, std::vector <DistanceType> *distances) {
+        std::vector <IndexType> *indices, std::vector <DistanceType> *distances) const {
   if (empty()) {
     indices->resize(0);
     distances->resize(0);
@@ -211,7 +211,7 @@ void ApproximateNearestNeighbor<FloatT, dimension, NormT>::radiusSearch(
 template<typename FloatT, std::size_t dimension, typename NormT>
 void ApproximateNearestNeighbor<FloatT, dimension, NormT>::knnSearchExact(
         const Point &point, std::size_t knn,
-        std::vector <IndexType> *indices, std::vector <DistanceType> *distances) {
+        std::vector <IndexType> *indices, std::vector <DistanceType> *distances) const {
   using std::swap;
   knn = std::min(knn, numPointsInternal());
   indices->resize(knn);
@@ -265,7 +265,7 @@ void ApproximateNearestNeighbor<FloatT, dimension, NormT>::knnSearchExact(
 template<typename FloatT, std::size_t dimension, typename NormT>
 void ApproximateNearestNeighbor<FloatT, dimension, NormT>::radiusSearchExact(
         const Point &point, FloatType radius, std::size_t max_results,
-        std::vector <IndexType> *indices, std::vector <DistanceType> *distances) {
+        std::vector <IndexType> *indices, std::vector <DistanceType> *distances) const {
   indices->resize(0);
   distances->resize(0);
   for (std::size_t i = 0; i < init_points_.size(); ++i) {

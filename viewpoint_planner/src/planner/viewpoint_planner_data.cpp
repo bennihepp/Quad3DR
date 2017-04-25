@@ -5,16 +5,22 @@
  *      Author: bhepp
  */
 
-#include "viewpoint_planner_data.h"
 #include <boost/filesystem.hpp>
 #include <boost/archive/binary_iarchive.hpp>
 #include <boost/archive/binary_oarchive.hpp>
 #include <boost/property_tree/json_parser.hpp>
-#include <ait/common.h>
-#include <ait/gps.h>
-#include <ait/math/geometry.h>
-#include <ait/nn/approximate_nearest_neighbor.h>
-#include <Eigen/Core>
+#include <boost/assign/list_of.hpp>
+#include <bh/common.h>
+#include <bh/eigen.h>
+#include <bh/gps.h>
+#include <bh/math/geometry.h>
+#include <bh/nn/approximate_nearest_neighbor.h>
+#include <bh/vision/cameras.h>
+#include "viewpoint_planner_data.h"
+#include "viewpoint.h"
+#include "viewpoint_raycast.h"
+#include "viewpoint_score.h"
+#include "viewpoint_offscreen_renderer.h"
 
 ViewpointPlannerData::ViewpointPlannerData(const Options* options)
 : options_(*options) {
@@ -32,7 +38,33 @@ ViewpointPlannerData::ViewpointPlannerData(const Options* options)
   }
 
   // Get ROI (for sampling and weight computation)
-  if (options_.regions_json_filename.empty()) {
+  if (!options_.regions_json_filename.empty()) {
+    boost::property_tree::ptree pt;
+    boost::property_tree::read_json(options_.regions_json_filename, pt);
+    std::cout << "Region of interest" << std::endl;
+    roi_ = convertGpsRegionToEnuRegion(pt.get_child("regionOfInterest"));
+    std::cout << "ROI bounding box: " << roi_.getBoundingBox() << std::endl;
+    for (const boost::property_tree::ptree::value_type& v : pt.get_child("noFlyZones")) {
+      std::cout << "No-Fly-Zones" << std::endl;
+      no_fly_zones_.push_back(convertGpsRegionToEnuRegion(v.second));
+    }
+  }
+  else if (options_.isSet("roi_z_low")) {
+    const FloatType z_low = options_.getValue<FloatType>("roi_z_low");
+    const FloatType z_high = options_.getValue<FloatType>("roi_z_high");
+    const Vector2 vertex1 = options_.getValue<Vector2>("roi_vertex1");
+    const Vector2 vertex2 = options_.getValue<Vector2>("roi_vertex2");
+    const Vector2 vertex3 = options_.getValue<Vector2>("roi_vertex3");
+    const Vector2 vertex4 = options_.getValue<Vector2>("roi_vertex4");
+    const std::vector<Vector2> vertices = boost::assign::list_of(vertex1)(vertex2)(vertex3)(vertex4);
+    std::cout << "Constructing ROI from 4 vertices:" << std::endl;
+    for (const Vector2& vertex : vertices) {
+      std::cout << "  " << vertex.transpose() << std::endl;
+    }
+    roi_ = RegionType(vertices, z_low, z_high);
+    std::cout << "ROI bounding box: " << roi_.getBoundingBox() << std::endl;
+  }
+  else {
 //    roi_bbox_ = BoundingBoxType(
 //        Vector3(options->getValue<FloatType>("roi_bbox_min_x"),
 //            options->getValue<FloatType>("roi_bbox_min_y"),
@@ -40,12 +72,12 @@ ViewpointPlannerData::ViewpointPlannerData(const Options* options)
 //        Vector3(options->getValue<FloatType>("roi_bbox_max_x"),
 //            options->getValue<FloatType>("roi_bbox_max_y"),
 //            options->getValue<FloatType>("roi_bbox_max_z")));
-    const FloatType roi_min_x = options->getValue<FloatType>("roi_bbox_min_x");
-    const FloatType roi_min_y = options->getValue<FloatType>("roi_bbox_min_y");
-    const FloatType roi_min_z = options->getValue<FloatType>("roi_bbox_min_z");
-    const FloatType roi_max_x = options->getValue<FloatType>("roi_bbox_max_x");
-    const FloatType roi_max_y = options->getValue<FloatType>("roi_bbox_max_y");
-    const FloatType roi_max_z = options->getValue<FloatType>("roi_bbox_max_z");
+    const FloatType roi_min_x = options_.getValue<FloatType>("roi_bbox_min_x");
+    const FloatType roi_min_y = options_.getValue<FloatType>("roi_bbox_min_y");
+    const FloatType roi_min_z = options_.getValue<FloatType>("roi_bbox_min_z");
+    const FloatType roi_max_x = options_.getValue<FloatType>("roi_bbox_max_x");
+    const FloatType roi_max_y = options_.getValue<FloatType>("roi_bbox_max_y");
+    const FloatType roi_max_z = options_.getValue<FloatType>("roi_bbox_max_z");
     std::vector<RegionType::Vector2> vertices;
     vertices.push_back(RegionType::Vector2(roi_min_x, roi_min_y));
     vertices.push_back(RegionType::Vector2(roi_min_x, roi_max_y));
@@ -71,17 +103,6 @@ ViewpointPlannerData::ViewpointPlannerData(const Options* options)
 //    std::cout << roi_.distanceToPoint(Vector3(200, 0, 0)) << std::endl;
 //    std::cout << roi_.distanceToPoint(Vector3(0, 0, -150)) << std::endl;
 //    std::cout << roi_.distanceToPoint(Vector3(150, 0, 150)) << std::endl;
-  }
-  else {
-    boost::property_tree::ptree pt;
-    boost::property_tree::read_json(options_.regions_json_filename, pt);
-    std::cout << "Region of interest" << std::endl;
-    roi_ = convertGpsRegionToEnuRegion(pt.get_child("regionOfInterest"));
-    std::cout << "ROI bounding box: " << roi_.getBoundingBox() << std::endl;
-    for (const boost::property_tree::ptree::value_type& v : pt.get_child("noFlyZones")) {
-      std::cout << "No-Fly-Zones" << std::endl;
-      no_fly_zones_.push_back(convertGpsRegionToEnuRegion(v.second));
-    }
   }
   roi_bbox_ = roi_.getBoundingBox();
 
@@ -125,6 +146,9 @@ ViewpointPlannerData::ViewpointPlannerData(const Options* options)
   if (update_weights) {
     std::cout << "Updating weights" << std::endl;
     updateWeights();
+    if (reconstruction_) {
+      updateWeightsWithRealViewpoints();
+    }
     std::cout << "Writing updated augmented octree" << std::endl;
     octree_->write(octree_filename);
     std::cout << "Writing updated BVH tree" << std::endl;
@@ -137,7 +161,7 @@ ViewpointPlannerData::RegionType ViewpointPlannerData::convertGpsRegionToEnuRegi
 
   using GpsCoordinateType = reconstruction::SfmToGpsTransformation::GpsCoordinate;
   using GpsFloatType = typename GpsCoordinateType::FloatType;
-  using GpsConverter = ait::GpsConverter<GpsFloatType>;
+  using GpsConverter = bh::GpsConverter<GpsFloatType>;
   const GpsCoordinateType gps_reference = reconstruction_->sfmGpsTransformation().gps_reference;
   std::cout << "GPS reference: " << gps_reference << std::endl;
   const GpsConverter gps_converter = GpsConverter::createWGS84(gps_reference);
@@ -158,22 +182,22 @@ ViewpointPlannerData::RegionType ViewpointPlannerData::convertGpsRegionToEnuRegi
 
     // Test code for GPS conversion
 //    GpsCoordinateType gps2 = gps;
-//    AIT_PRINT_VALUE(gps2);
-//    AIT_PRINT_VALUE(gps_converter.convertGpsToEcef(gps2));
-//    AIT_PRINT_VALUE(gps_converter.convertGpsToEnu(gps2));
+//    BH_PRINT_VALUE(gps2);
+//    BH_PRINT_VALUE(gps_converter.convertGpsToEcef(gps2));
+//    BH_PRINT_VALUE(gps_converter.convertGpsToEnu(gps2));
 //    gps2 = GpsCoordinateType(gps2.latitude(), gps2.longitude(), gps2.altitude() + 360);
-//    AIT_PRINT_VALUE(gps2);
-//    AIT_PRINT_VALUE(gps_converter.convertGpsToEcef(gps2));
-//    AIT_PRINT_VALUE(gps_converter.convertGpsToEnu(gps2));
+//    BH_PRINT_VALUE(gps2);
+//    BH_PRINT_VALUE(gps_converter.convertGpsToEcef(gps2));
+//    BH_PRINT_VALUE(gps_converter.convertGpsToEnu(gps2));
 //    Vector3 enu2 = enu;
-//    AIT_PRINT_VALUE(enu2);
-//    AIT_PRINT_VALUE(gps_converter.convertEnuToGps(enu2.cast<GpsFloatType>()));
+//    BH_PRINT_VALUE(enu2);
+//    BH_PRINT_VALUE(gps_converter.convertEnuToGps(enu2.cast<GpsFloatType>()));
 //    enu2(2) = 360;
-//    AIT_PRINT_VALUE(enu2);
-//    AIT_PRINT_VALUE(gps_converter.convertEnuToGps(enu2.cast<GpsFloatType>()));
+//    BH_PRINT_VALUE(enu2);
+//    BH_PRINT_VALUE(gps_converter.convertEnuToGps(enu2.cast<GpsFloatType>()));
 //    enu2(2) = 0;
-//    AIT_PRINT_VALUE(enu2);
-//    AIT_PRINT_VALUE(gps_converter.convertEnuToGps(enu2.cast<GpsFloatType>()));
+//    BH_PRINT_VALUE(enu2);
+//    BH_PRINT_VALUE(gps_converter.convertEnuToGps(enu2.cast<GpsFloatType>()));
   }
   if (verbose) {
     std::cout << "Lower altitude: " << lower_altitude << ", upper_altitude: " << upper_altitude << std::endl;
@@ -182,16 +206,21 @@ ViewpointPlannerData::RegionType ViewpointPlannerData::convertGpsRegionToEnuRegi
   return region;
 }
 
-bool ViewpointPlannerData::isValidObjectPosition(const Vector3& position, const Vector3& object_extent) const {
+bool ViewpointPlannerData::isValidObjectPosition(const Vector3& position, const BoundingBoxType& object_bbox) const {
   for (const RegionType& no_fly_zone : no_fly_zones_) {
     if (no_fly_zone.isPointInside(position)) {
       return false;
     }
   }
-  BoundingBoxType object_bbox = BoundingBoxType::createFromCenterAndExtent(position, object_extent);
-  std::vector<ViewpointPlannerData::OccupiedTreeType::ConstBBoxIntersectionResult> results =
-      occupied_bvh_.intersects(object_bbox);
-  return results.empty();
+  if (position(2) >= options_.obstacle_free_height) {
+    return bvh_bbox_.isInside(position);
+  }
+  else {
+    BoundingBoxType centered_object_bbox = object_bbox + position;
+    std::vector<ViewpointPlannerData::OccupiedTreeType::ConstBBoxIntersectionResult> results =
+            occupied_bvh_.intersects(centered_object_bbox);
+    return results.empty();
+  }
 }
 
 const reconstruction::DenseReconstruction& ViewpointPlannerData::getReconstruction() const {
@@ -217,7 +246,7 @@ ViewpointPlannerData::readRawOctree(const std::string& octree_filename, bool bin
   std::unique_ptr<RawOccupancyMapType> raw_octree;
   if (binary) {
 //      octree.reset(new ViewpointPlanner::OccupancyMapType(filename));
-    throw AIT_EXCEPTION("Binary occupancy maps not supported");
+    throw BH_EXCEPTION("Binary occupancy maps not supported");
   }
   else {
     raw_octree = RawOccupancyMapType::read(octree_filename);
@@ -273,10 +302,10 @@ void ViewpointPlannerData::readPoissonMesh(const std::string& mesh_filename) {
   // Check if mesh was read correctly
   for (size_t i = 0; i < poisson_mesh_->m_FaceIndicesVertices.size(); ++i) {
     const MeshType::Indices::Face& face = poisson_mesh_->m_FaceIndicesVertices[i];
-    AIT_ASSERT_STR(face.size() == 3, "Mesh faces need to have a valence of 3");
-    AIT_ASSERT_STR(face[0] < poisson_mesh_->m_Vertices.size(), "Poisson mesh was not read correctly");
-    AIT_ASSERT_STR(face[1] < poisson_mesh_->m_Vertices.size(), "Poisson mesh was not read correctly");
-    AIT_ASSERT_STR(face[2] < poisson_mesh_->m_Vertices.size(), "Poisson mesh was not read correctly");
+    BH_ASSERT_STR(face.size() == 3, "Mesh faces need to have a valence of 3");
+    BH_ASSERT_STR(face[0] < poisson_mesh_->m_Vertices.size(), "Poisson mesh was not read correctly");
+    BH_ASSERT_STR(face[1] < poisson_mesh_->m_Vertices.size(), "Poisson mesh was not read correctly");
+    BH_ASSERT_STR(face[2] < poisson_mesh_->m_Vertices.size(), "Poisson mesh was not read correctly");
   }
   std::cout << "Number of triangles in mesh: " << poisson_mesh_->m_FaceIndicesVertices.size() << std::endl;
   std::cout << "Number of vertices in mesh: " << poisson_mesh_->m_Vertices.size() << std::endl;
@@ -285,14 +314,14 @@ void ViewpointPlannerData::readPoissonMesh(const std::string& mesh_filename) {
 
 bool ViewpointPlannerData::readBVHTree(std::string bvh_filename, const std::string& octree_filename) {
 #if WITH_CUDA
-  const int cuda_gpu_id = options_.getValue<int>("cuda_gpu_id");
-  std::cout << "Selecting CUDA device " << cuda_gpu_id << std::endl;
-  ait::CudaDevice cuda_dev(cuda_gpu_id);
-  cuda_dev.activate();
-  std::cout << "Previous CUDA stack size was " << cuda_dev.getStackSize() << std::endl;
-  size_t cuda_stack_size = options_.getValue<size_t>("cuda_stack_size");
-  std::cout << "Setting CUDA stack size to " << cuda_stack_size << std::endl;
-  cuda_dev.setStackSize(cuda_stack_size);
+  if (options_.enable_cuda) {
+    std::cout << "Selecting CUDA device " << options_.cuda_gpu_id << std::endl;
+    bh::CudaDevice cuda_dev(options_.cuda_gpu_id);
+    cuda_dev.activate();
+    std::cout << "Previous CUDA stack size was " << cuda_dev.getStackSize() << std::endl;
+    std::cout << "Setting CUDA stack size to " << options_.cuda_stack_size << std::endl;
+    cuda_dev.setStackSize(options_.cuda_stack_size);
+  }
 #endif
 
   // Read cached BVH tree (if up-to-date) or generate it
@@ -349,7 +378,7 @@ bool ViewpointPlannerData::readMeshDistanceField(std::string df_filename, const 
 void ViewpointPlannerData::_readMeshDistanceField(const std::string& filename, DistanceFieldType* distance_field) {
   std::ifstream ifs(filename, std::ios::binary);
   if (!ifs) {
-    throw AIT_EXCEPTION(std::string("Unable to open file for reading: ") + filename);
+    throw BH_EXCEPTION(std::string("Unable to open file for reading: ") + filename);
   }
   boost::archive::binary_iarchive ia(ifs);
   std::size_t dim_x;
@@ -365,7 +394,7 @@ void ViewpointPlannerData::_readMeshDistanceField(const std::string& filename, D
 void ViewpointPlannerData::_writeMeshDistanceField(const std::string& filename, const DistanceFieldType& distance_field) {
   std::ofstream ofs(filename, std::ios::binary);
   if (!ofs) {
-    throw AIT_EXCEPTION(std::string("Unable to open file for writing: ") + filename);
+    throw BH_EXCEPTION(std::string("Unable to open file for writing: ") + filename);
   }
   boost::archive::binary_oarchive oa(ofs);
   oa << distance_field.getDimX();
@@ -402,9 +431,9 @@ void ViewpointPlannerData::updateWeights() {
 //        std::cout << "roi_distance=" << roi_distance << ", roi_weight=" << roi_weight << std::endl;
         FloatType roi_weight = 1;
 //        if (roi_.isPointOutside(xyz) != roi_bbox.isOutside(xyz)) {
-//          AIT_PRINT_VAR(roi_.isPointOutside(xyz));
-//          AIT_PRINT_VAR(roi_bbox.isOutside(xyz));
-//          AIT_PRINT_VAR(xyz);
+//          BH_PRINT_VAR(roi_.isPointOutside(xyz));
+//          BH_PRINT_VAR(roi_bbox.isOutside(xyz));
+//          BH_PRINT_VAR(xyz);
 //        }
         if (roi_.isPointOutside(xyz)) {
 //        if (roi_bbox.isOutside(xyz)) {
@@ -437,14 +466,14 @@ void ViewpointPlannerData::updateWeights() {
             occupied_bvh_.intersects(bbox);
         for (const OccupiedTreeType::BBoxIntersectionResult& result : results) {
           WeightType observation_count_factor = computeObservationCountFactor(result.node->getObject()->observation_count);
-          AIT_ASSERT(observation_count_factor <= 1);
+          BH_ASSERT(observation_count_factor <= 1);
           result.node->getObject()->weight = weight * observation_count_factor;
         }
         const octomap::point3d oct_min(bbox.getMinimum(0), bbox.getMinimum(1), bbox.getMinimum(2));
         const octomap::point3d oct_max(bbox.getMaximum(0), bbox.getMaximum(1), bbox.getMaximum(2));
         for (auto it = octree_->begin_leafs_bbx(oct_min, oct_max); it != octree_->end_leafs_bbx(); ++it) {
           WeightType observation_count_factor = computeObservationCountFactor(it->getObservationCount());
-          AIT_ASSERT(observation_count_factor <= 1);
+          BH_ASSERT(observation_count_factor <= 1);
           it->setWeight(weight * observation_count_factor);
         }
       }
@@ -453,6 +482,81 @@ void ViewpointPlannerData::updateWeights() {
 //  std::cout << "min_weight: " << min_weight<< std::endl;
 //  std::cout << "max_weight: " << max_weight<< std::endl;
   octree_->updateInnerOccupancy();
+}
+
+void ViewpointPlannerData::updateWeightsWithRealViewpoints() {
+  if (!options_.ignore_real_observed_voxels && options_.invalid_pixel_observation_factor > 0) {
+    std::cout << "Computing observed voxels for " << reconstruction_->getImages().size()
+              << " previous camera viewpoints" << std::endl;
+    std::unique_ptr<viewpoint_planner::ViewpointOffscreenRenderer> offscreen_renderer;
+    for (const auto& entry : reconstruction_->getImages()) {
+      const reconstruction::PinholeCamera &real_camera = reconstruction_->getCameras().at(entry.second.camera_id());
+      const reconstruction::DenseReconstruction::DepthMap& depth_map = reconstruction_->readDepthMap(
+              entry.second.id(), reconstruction::DenseReconstruction::DenseMapType::GEOMETRIC_FUSED);
+      const FloatType depth_camera_scale_factor = depth_map.width() / FloatType(real_camera.width());
+      const reconstruction::PinholeCamera depth_camera = real_camera.getScaledCamera(depth_camera_scale_factor);
+      if (!offscreen_renderer) {
+        viewpoint_planner::ViewpointOffscreenRenderer::Options offscreen_renderer_options;
+//        offscreen_renderer_options.dump_poisson_mesh_depth_image = true;
+//        offscreen_renderer_options.dump_poisson_mesh_normals_image = true;
+        offscreen_renderer.reset(new viewpoint_planner::ViewpointOffscreenRenderer(
+                offscreen_renderer_options, depth_camera, poisson_mesh_.get()));
+      }
+      else {
+        offscreen_renderer->setCamera(depth_camera);
+      }
+      const reconstruction::Pose& pose = entry.second.pose();
+      const Viewpoint viewpoint(&depth_camera, pose);
+      // Compute observed voxels and information
+      const bool remove_duplicates = false;
+      const FloatType min_range = options_.real_observed_voxels_raycast_min_range;
+      const FloatType max_range = options_.real_observed_voxels_raycast_max_range > 0 ?
+                                  options_.real_observed_voxels_raycast_max_range :
+                                  std::numeric_limits<FloatType>::max();
+      viewpoint_planner::ViewpointRaycast raycaster(&occupied_bvh_, min_range, max_range);
+      viewpoint_planner::ViewpointScore scorer(
+              options_.getOptionsAs<viewpoint_planner::ViewpointScore::Options>(),
+              [&](const Viewpoint& viewpoint,
+                  const viewpoint_planner::VoxelType* node,
+                  const viewpoint_planner::Vector2& image_coordinates) -> Vector3 {
+                Vector3 normal_vector;
+                if (options_.enable_opengl) {
+                  const std::size_t x = static_cast<std::size_t>(image_coordinates(0));
+                  const std::size_t y = static_cast<std::size_t>(image_coordinates(1));
+                  normal_vector = offscreen_renderer->computePoissonMeshNormalVector(viewpoint, x, y);
+                }
+                else {
+                  normal_vector = node->getObject()->normal;
+                }
+                return normal_vector;
+              });
+#if WITH_CUDA
+      raycaster.setEnableCuda(options_.enable_cuda);
+#endif
+      // TODO: Add minimum range to raycast query. Otherwise unknown voxels are captured instead of the interesting ones.
+      std::vector<OccupiedTreeType::IntersectionResultWithScreenCoordinates> raycast_results =
+              raycaster.getRaycastHitVoxelsWithScreenCoordinates(viewpoint, remove_duplicates);
+      for (size_t i = 0; i < raycast_results.size(); ++i) {
+        OccupiedTreeType::IntersectionResultWithScreenCoordinates& ir = raycast_results[i];
+        const FloatType depth = depth_map(ir.screen_coordinates(1), ir.screen_coordinates(0));
+        if (depth <= 0 || std::isinf(depth)) {
+          const WeightType information = scorer.computeViewpointObservationScore(
+                  viewpoint, ir.intersection_result.node, ir.screen_coordinates);
+          viewpoint_planner::VoxelType* voxel = ir.intersection_result.node;
+          const WeightType new_weight = std::max<WeightType>(
+                  0, voxel->getObject()->weight - options_.invalid_pixel_observation_factor * information);
+          voxel->getObject()->weight = new_weight;
+          BH_ASSERT(voxel->getObject()->weight >= 0);
+          const BoundingBoxType& bbox = voxel->getBoundingBox();
+          const octomap::point3d oct_min(bbox.getMinimum(0), bbox.getMinimum(1), bbox.getMinimum(2));
+          const octomap::point3d oct_max(bbox.getMaximum(0), bbox.getMaximum(1), bbox.getMaximum(2));
+          for (auto it = octree_->begin_leafs_bbx(oct_min, oct_max); it != octree_->end_leafs_bbx(); ++it) {
+            it->setWeight(new_weight);
+          }
+        }
+      }
+    }
+  }
 }
 
 ViewpointPlannerData::WeightType ViewpointPlannerData::computeObservationCountFactor(CounterType observation_count) const {
@@ -490,13 +594,16 @@ std::unique_ptr<ViewpointPlannerData::OccupancyMapType>
 ViewpointPlannerData::generateAugmentedOctree(std::unique_ptr<RawOccupancyMapType> raw_octree) const {
   bh::Timer timer;
   if (!isTreeConsistent(*raw_octree.get())) {
-    throw AIT_EXCEPTION("Input tree is inconsistent");
+    throw BH_EXCEPTION("Input tree is inconsistent");
   }
 
   std::unique_ptr<OccupancyMapType> output_tree(convertToAugmentedMap(raw_octree.get()));
 
   if (!isTreeConsistent(*output_tree.get())) {
-    throw AIT_EXCEPTION("Augmented tree is inconsistent");
+    throw BH_EXCEPTION("Augmented tree is inconsistent");
+  }
+  for (auto it = output_tree->begin_tree(); it != output_tree->end_tree(); ++it) {
+    BH_ASSERT(it->getWeight() >= 0);
   }
   timer.printTimingMs("Converting raw input tree");
 
@@ -504,8 +611,8 @@ ViewpointPlannerData::generateAugmentedOctree(std::unique_ptr<RawOccupancyMapTyp
 //  timer = bh::Timer();
 //  // Augment tree with weights
 //  std::vector<TreeNavigatorType> query_nodes;
-//  AIT_ASSERT(OCCUPANCY_WEIGHT_DEPTH - OCCUPANCY_WEIGHT_REACH > 0);
-//  AIT_ASSERT(OCCUPANCY_WEIGHT_DEPTH_CUTOFF > OCCUPANCY_WEIGHT_DEPTH);
+//  BH_ASSERT(OCCUPANCY_WEIGHT_DEPTH - OCCUPANCY_WEIGHT_REACH > 0);
+//  BH_ASSERT(OCCUPANCY_WEIGHT_DEPTH_CUTOFF > OCCUPANCY_WEIGHT_DEPTH);
 //  for (auto it = output_tree->begin_tree(OCCUPANCY_WEIGHT_DEPTH); it != output_tree->end_tree(); ++it) {
 //    if (it.getDepth() == OCCUPANCY_WEIGHT_DEPTH) {
 //      query_nodes.push_back(TreeNavigatorType(output_tree.get(), it.getKey(), &(*it), it.getDepth()));
@@ -572,7 +679,7 @@ ViewpointPlannerData::generateAugmentedOctree(std::unique_ptr<RawOccupancyMapTyp
 //    while (!node_stack2.empty()) {
 //      TreeNavigatorType nav = node_stack2.top();
 //      node_stack2.pop();
-//      AIT_ASSERT(nav->getWeight() == 0);
+//      BH_ASSERT(nav->getWeight() == 0);
 //      nav->setWeight(total_weight);
 //      if (nav.hasChildren()) {
 //        for (size_t i = 0; i < 8; ++i) {
@@ -623,7 +730,7 @@ void ViewpointPlannerData::generateBVHTree(const OccupancyMapType* octree) {
 //#pragma omp parallel for
   for (size_t i = 0; i < poisson_mesh_->m_FaceIndicesVertices.size(); ++i) {
     const MeshType::Indices::Face& face = poisson_mesh_->m_FaceIndicesVertices[i];
-    AIT_ASSERT_STR(face.size() == 3, "Mesh faces need to have a valence of 3");
+    BH_ASSERT_STR(face.size() == 3, "Mesh faces need to have a valence of 3");
     const ml::vec3f& v1 = poisson_mesh_->m_Vertices[face[0]];
     const ml::vec3f& v2 = poisson_mesh_->m_Vertices[face[1]];
     const ml::vec3f& v3 = poisson_mesh_->m_Vertices[face[2]];
@@ -645,13 +752,13 @@ void ViewpointPlannerData::generateBVHTree(const OccupancyMapType* octree) {
     {
       objects_vector.resize(num_threads);
     }
-    static std::vector<MeshAnn::IndexType> knn_indices;
-    static std::vector<MeshAnn::DistanceType> knn_distances;
+    std::vector<MeshAnn::IndexType> knn_indices;
+    std::vector<MeshAnn::DistanceType> knn_distances;
     std::vector<typename OccupiedTreeType::ObjectWithBoundingBox>& local_objects = objects_vector[thread_index];
     const size_t report_leaf_interval = (size_t)octree->size() / 50.0;
     std::size_t i = 0;
     for (auto it = octree->begin_tree(); it != octree->end_tree(); ++it, ++i) {
-      if (i % report_leaf_interval == 0) {
+      if (thread_index == 0 && i % report_leaf_interval == 0) {
         const FloatType percentage = FloatType(100) * i / FloatType(octree->size());
         std::cout << "  processed " << percentage << " % of octree nodes" << std::endl;
       }
@@ -679,29 +786,32 @@ void ViewpointPlannerData::generateBVHTree(const OccupancyMapType* octree) {
         }
         object_with_bbox.object->normal.setZero();
         // Find nearest neighbor faces to compute normal of voxel/node
-        knn_indices.resize(mesh_knn);
-        knn_distances.resize(mesh_knn);
-        mesh_ann.knnSearch(center, mesh_knn, &knn_indices, &knn_distances);
-        for (std::size_t i = 0; i < knn_distances.size(); ++i) {
-          const MeshAnn::DistanceType dist_square = knn_distances[i];
-          const MeshAnn::IndexType index = knn_indices[i];
-          if (dist_square <= max_dist_square) {
-            const MeshType::Indices::Face& face = poisson_mesh_->m_FaceIndicesVertices[index];
-            const ml::vec3f& ml_v1 = poisson_mesh_->m_Vertices[face[0]];
-            const ml::vec3f& ml_v2 = poisson_mesh_->m_Vertices[face[1]];
-            const ml::vec3f& ml_v3 = poisson_mesh_->m_Vertices[face[2]];
-            const Vector3 v1(ml_v1.x, ml_v1.y, ml_v1.z);
-            const Vector3 v2(ml_v2.x, ml_v2.y, ml_v2.z);
-            const Vector3 v3(ml_v3.x, ml_v3.y, ml_v3.z);
-  //          Vector3 triangle_center(v1.x + v2.x + v3.x, v1.y + v2.y + v3.y, v1.z + v2.z + v3.z);
-  //          triangle_center /= 3;
-            const Vector3 normal = (v1 - v2).cross(v2 - v3).normalized();
-            const FloatType normal_weight = 1 / dist_square;
-            object_with_bbox.object->normal += normal_weight * normal;
+        if (!options_.enable_opengl) {
+          // If normals are not computed with OpenGL we average nearest neighbors
+          knn_indices.resize(mesh_knn);
+          knn_distances.resize(mesh_knn);
+          mesh_ann.knnSearch(center, mesh_knn, &knn_indices, &knn_distances);
+          for (std::size_t i = 0; i < knn_distances.size(); ++i) {
+            const MeshAnn::DistanceType dist_square = knn_distances[i];
+            const MeshAnn::IndexType index = knn_indices[i];
+            if (dist_square <= max_dist_square) {
+              const MeshType::Indices::Face &face = poisson_mesh_->m_FaceIndicesVertices[index];
+              const ml::vec3f &ml_v1 = poisson_mesh_->m_Vertices[face[0]];
+              const ml::vec3f &ml_v2 = poisson_mesh_->m_Vertices[face[1]];
+              const ml::vec3f &ml_v3 = poisson_mesh_->m_Vertices[face[2]];
+              const Vector3 v1(ml_v1.x, ml_v1.y, ml_v1.z);
+              const Vector3 v2(ml_v2.x, ml_v2.y, ml_v2.z);
+              const Vector3 v3(ml_v3.x, ml_v3.y, ml_v3.z);
+              //          Vector3 triangle_center(v1.x + v2.x + v3.x, v1.y + v2.y + v3.y, v1.z + v2.z + v3.z);
+              //          triangle_center /= 3;
+              const Vector3 normal = (v1 - v2).cross(v2 - v3).normalized();
+              const FloatType normal_weight = 1 / dist_square;
+              object_with_bbox.object->normal += normal_weight * normal;
+            }
           }
-        }
-        if (object_with_bbox.object->normal != Vector3::Zero()) {
-          object_with_bbox.object->normal.normalize();
+          if (object_with_bbox.object->normal != Vector3::Zero()) {
+            object_with_bbox.object->normal.normalize();
+          }
         }
 
 //        objects.push_back(object_with_bbox);
@@ -724,7 +834,7 @@ void ViewpointPlannerData::generateBVHTree(const OccupancyMapType* octree) {
 void ViewpointPlannerData::writeBVHTree(const std::string& filename) const {
   std::ofstream ofs(filename, std::ios::binary);
   if (!ofs) {
-    throw AIT_EXCEPTION(std::string("Unable to open file for writing: ") + filename);
+    throw BH_EXCEPTION(std::string("Unable to open file for writing: ") + filename);
   }
   boost::archive::binary_oarchive oa(ofs);
   oa << occupied_bvh_;
@@ -733,7 +843,7 @@ void ViewpointPlannerData::writeBVHTree(const std::string& filename) const {
 void ViewpointPlannerData::readCachedBVHTree(const std::string& filename) {
   std::ifstream ifs(filename, std::ios::binary);
   if (!ifs) {
-    throw AIT_EXCEPTION(std::string("Unable to open file for reading: ") + filename);
+    throw BH_EXCEPTION(std::string("Unable to open file for reading: ") + filename);
   }
   boost::archive::binary_iarchive ia(ifs);
   ia >> occupied_bvh_;
@@ -760,7 +870,7 @@ void ViewpointPlannerData::generateDistanceField() {
   seed_grid.setValues(std::numeric_limits<float>::max());
   for (size_t i = 0; i < poisson_mesh_->m_FaceIndicesVertices.size(); ++i) {
     const MeshType::Indices::Face& face = poisson_mesh_->m_FaceIndicesVertices[i];
-    AIT_ASSERT_STR(face.size() == 3, "Mesh faces need to have a valence of 3");
+    BH_ASSERT_STR(face.size() == 3, "Mesh faces need to have a valence of 3");
     const ml::vec3f& vertex1 = poisson_mesh_->m_Vertices[face[0]];
     const ml::vec3f& vertex2 = poisson_mesh_->m_Vertices[face[1]];
     const ml::vec3f& vertex3 = poisson_mesh_->m_Vertices[face[2]];

@@ -18,9 +18,9 @@
 #include <ompl/geometric/planners/rrt/RRTConnect.h>
 #include <ompl/geometric/planners/rrt/RRTstar.h>
 #include <ompl/geometric/planners/prm/PRMstar.h>
-#include <ait/eigen.h>
-#include <ait/math.h>
-#include <ait/options.h>
+#include <bh/eigen.h>
+#include <bh/math/utilities.h>
+#include <bh/config_options.h>
 #include "viewpoint_planner_data.h"
 
 namespace ob = ::ompl::base;
@@ -32,7 +32,7 @@ public:
   using FloatType = FloatT;
   USE_FIXED_EIGEN_TYPES(FloatType);
   using BoundingBoxType = ViewpointPlannerData::BoundingBoxType;
-  using Pose = ait::Pose<FloatType>;
+  using Pose = bh::Pose<FloatType>;
 
   using StateSpaceType = ob::SE3StateSpace;
 //  using StateSpaceType = ob::RealVectorStateSpace;
@@ -40,9 +40,9 @@ public:
   using PlannerType = og::RRTstar;
 //  using PlannerType = og::PRMstar;
 
-  struct Options : ait::ConfigOptions {
+  struct Options : bh::ConfigOptions {
     Options()
-    : ait::ConfigOptions("motion_planner", "MotionPlanner options") {
+    : bh::ConfigOptions("motion_planner", "MotionPlanner options") {
       addOption<FloatType>("max_motion_range", &max_motion_range);
       addOption<FloatType>("max_time_per_solve", &max_time_per_solve);
       addOption<std::size_t>("max_iterations_per_solve", &max_iterations_per_solve);
@@ -59,6 +59,8 @@ public:
   };
 
   struct Motion {
+    using PoseVector = EIGEN_ALIGNED_VECTOR(Pose);
+
     Motion()
     : distance(0), cost(0) {}
 
@@ -72,9 +74,36 @@ public:
       std::copy(other.poses.begin(), other.poses.end(), std::back_inserter(poses));
     }
 
+    FloatType computeDistance() const {
+      if (!isValid()) {
+        return std::numeric_limits<FloatType>::quiet_NaN();
+      }
+      FloatType accumulated_distance = 0;
+      for (auto it = poses.begin() + 1; it != poses.end(); ++it) {
+        auto prev_it = it - 1;
+        const FloatType local_distance = prev_it->getPositionDistanceTo(*it);
+        accumulated_distance += local_distance;
+      }
+      return accumulated_distance;
+    }
+
+    FloatType computeSE3Distance() const {
+      if (!isValid()) {
+        return std::numeric_limits<FloatType>::quiet_NaN();
+      }
+      FloatType accumulated_distance = 0;
+      for (auto it = poses.begin() + 1; it != poses.end(); ++it) {
+        auto prev_it = it - 1;
+        const FloatType local_distance = prev_it->getDistanceTo(*it);
+        accumulated_distance += local_distance;
+      }
+      return accumulated_distance;
+    }
+
     FloatType distance;
     FloatType cost;
-    std::vector<Pose> poses;
+    FloatType se3_distance;
+    PoseVector poses;
 
 private:
     // Boost serialization
@@ -84,7 +113,13 @@ private:
     void serialize(Archive& ar, const unsigned int version) {
       ar & distance;
       ar & cost;
+      if (version >= 1) {
+        ar & se3_distance;
+      }
       ar & poses;
+      if (version < 1) {
+        se3_distance = computeSE3Distance();
+      }
     }
   };
 
@@ -101,8 +136,8 @@ private:
     space_bbox_ = space_bbox;
   }
 
-  void setObjectExtent(const Vector3& object_extent) {
-    object_extent_ = object_extent;
+  void setObjectBoundingBox(const BoundingBoxType& object_bbox) {
+    object_bbox_ = object_bbox;
   }
 
   void initialize(const std::size_t planner_data_pool_size = std::thread::hardware_concurrency()) const {
@@ -112,8 +147,8 @@ private:
       return;
     }
 
-    AIT_ASSERT((object_extent_.array() != 0).all());
-    AIT_ASSERT(!space_bbox_.isEmpty());
+    BH_ASSERT(!object_bbox_.isEmpty());
+    BH_ASSERT(!space_bbox_.isEmpty());
 
     initialized_ = true;
 
@@ -155,7 +190,7 @@ private:
     if (!initialized_) {
       initialize();
     }
-//    ait::Timer timer;
+//    bh::Timer timer;
 
     LockedPlannerData planner_data = requestPlannerData();
 
@@ -169,8 +204,8 @@ private:
     if (!isStateValid(goal.get())) {
       std::cerr << "ERROR: goal state not valid: to=" << to << std::endl;
     }
-    AIT_ASSERT(isStateValid(start.get()));
-    AIT_ASSERT(isStateValid(goal.get()));
+    BH_ASSERT(isStateValid(start.get()));
+    BH_ASSERT(isStateValid(goal.get()));
 
     planner_data->problem_def->clearSolutionNonExistenceProof();
     planner_data->problem_def->clearSolutionPaths();
@@ -210,19 +245,19 @@ private:
       // Sanity check
       FloatType distance_square = (from.getWorldPosition() - to.getWorldPosition()).squaredNorm();
       FloatType distance_ompl = planner_data->problem_def->getOptimizationObjective()->motionCost(start.get(), goal.get()).value();
-      if (ait::isApproxSmaller(distance_ompl * distance_ompl, distance_square, 1e-2)) {
+      if (bh::isApproxSmaller(distance_ompl * distance_ompl, distance_square, FloatType(1e-2))) {
         std::cout << "WARNING: distance_ompl * distance_ompl < distance_square" << std::endl;
-        AIT_PRINT_VALUE(distance_square);
-        AIT_PRINT_VALUE(distance_ompl * distance_ompl);
-        AIT_PRINT_VALUE(distance_ompl);
-        AIT_DEBUG_BREAK;
+        BH_PRINT_VALUE(distance_square);
+        BH_PRINT_VALUE(distance_ompl * distance_ompl);
+        BH_PRINT_VALUE(distance_ompl);
+        BH_DEBUG_BREAK;
       }
-      if (ait::isApproxSmaller(motion_distance * motion_distance, distance_square, 1e-2)) {
+      if (bh::isApproxSmaller(motion_distance * motion_distance, distance_square, FloatType(1e-2))) {
         std::cout << "WARNING: motion_distance * motion_distance < distance_square" << std::endl;
-        AIT_PRINT_VALUE(motion_distance);
-        AIT_PRINT_VALUE(motion_distance * motion_distance);
-        AIT_PRINT_VALUE(distance_square);
-        AIT_DEBUG_BREAK;
+        BH_PRINT_VALUE(motion_distance);
+        BH_PRINT_VALUE(motion_distance * motion_distance);
+        BH_PRINT_VALUE(distance_square);
+        BH_DEBUG_BREAK;
       }
 
       Motion motion;
@@ -234,23 +269,35 @@ private:
         const StateSpaceType::StateType* state = static_cast<const StateSpaceType::StateType*>(geo_path->getState(i));
         Vector3 position(state->getX(), state->getY(), state->getZ());
         Quaternion quat;
-        if (i == 0) {
-          quat = from.quaternion();
-        }
-        else {
+        if (i > 0 && motion.distance > 0) {
           const StateSpaceType::StateType* prev_state = static_cast<const StateSpaceType::StateType*>(geo_path->getState(i - 1));
           accumulated_motion_distance += planner_data->problem_def->getOptimizationObjective()->motionCost(prev_state, state).value();
+          accumulated_motion_distance2 += (motion.poses.back().getWorldPosition() - position).norm();
           const FloatType fraction = accumulated_motion_distance / motion.distance;
-          quat = from.quaternion().slerp(fraction, to.quaternion());
+          if (i < geo_path->getStateCount() - 1) {
+            quat = from.quaternion().slerp(fraction, to.quaternion());
+          }
+          else {
+            quat = to.quaternion();
+          }
+        }
+        else if (i == geo_path->getStateCount() - 1) {
+          quat = to.quaternion();
+        }
+        else {
+          quat = from.quaternion();
         }
         Pose pose = Pose::createFromImageToWorldTransformation(position, quat);
-        if (!motion.poses.empty()) {
-          accumulated_motion_distance2 += (motion.poses.back().getWorldPosition() - pose.getWorldPosition()).norm();
-        }
+        BH_ASSERT(pose.quaternion().coeffs().array().isFinite().all());
         motion.poses.push_back(pose);
       }
-      AIT_ASSERT(ait::isApproxEqual(accumulated_motion_distance, motion_distance, 1e-2));
-      AIT_ASSERT(ait::isApproxEqual(accumulated_motion_distance2, motion_distance, 1e-2));
+      motion.distance = motion.computeDistance();
+      motion.cost = motion.distance;
+      motion.se3_distance = motion.computeSE3Distance();;
+      BH_ASSERT(bh::isApproxEqual(accumulated_motion_distance, motion_distance, FloatType(1e-2)));
+      BH_ASSERT(bh::isApproxEqual(accumulated_motion_distance2, motion_distance, FloatType(1e-2)));
+      BH_ASSERT(motion.poses.front() == from);
+      BH_ASSERT(motion.poses.back() == to);
       return std::make_pair(motion, true);
     }
     else {
@@ -263,7 +310,7 @@ private:
   bool isStateValid(const ob::State *state) const {
     const StateSpaceType::StateType* state_tmp = static_cast<const StateSpaceType::StateType*>(state);
     Vector3 position(state_tmp->getX(), state_tmp->getY(), state_tmp->getZ());
-    return data_->isValidObjectPosition(position, object_extent_);
+    return data_->isValidObjectPosition(position, object_bbox_);
   }
 
   ob::ScopedState<StateSpaceType> createStateFromPose(const Pose& pose, const std::shared_ptr<ob::SpaceInformation>& space_info) const {
@@ -280,7 +327,7 @@ private:
   }
 
   ob::PlannerTerminationCondition getTerminationCondition() const {
-    AIT_ASSERT(options_.max_time_per_solve > 0 || options_.max_iterations_per_solve > 0);
+    BH_ASSERT(options_.max_time_per_solve > 0 || options_.max_iterations_per_solve > 0);
     if (options_.max_time_per_solve > 0) {
       double duration = options_.max_time_per_solve;
       ob::PlannerTerminationCondition termination_cond = ob::timedPlannerTerminationCondition(duration, duration / 10);
@@ -321,7 +368,7 @@ private:
           break;
         }
       }
-      AIT_ASSERT_STR(planner_data_ptr != nullptr, "Unable to find a free planner data object");
+      BH_ASSERT_STR(planner_data_ptr != nullptr, "Unable to find a free planner data object");
       planner_data_ptr->in_use = true;
       ++motion_planner->num_planner_data_in_use_;
       return LockedPlannerData(planner_data_ptr, motion_planner);
@@ -379,7 +426,7 @@ private:
     }
 //    std::cout << "Bounding box=" << space_bbox_ << std::endl;
     planner_data.space->setBounds(bounds);
-    FloatType fraction = object_extent_.maxCoeff() / 2 / space_bbox_.getMaxExtent();
+    FloatType fraction = object_bbox_.getMaxExtent() / (2 * space_bbox_.getMaxExtent());
     planner_data.space->setLongestValidSegmentFraction(fraction);
 
     planner_data.space_info = std::make_shared<ob::SpaceInformation>(planner_data.space);
@@ -400,7 +447,7 @@ private:
   Options options_;
 
   BoundingBoxType space_bbox_;
-  Vector3 object_extent_;
+  BoundingBoxType object_bbox_;
 
   std::shared_ptr<ompl::msg::OutputHandler> ompl_output_handler_;
 
@@ -412,3 +459,6 @@ private:
   mutable std::size_t num_planner_data_in_use_;
   mutable std::vector<PlannerData> planner_data_pool_;
 };
+
+BOOST_CLASS_VERSION(typename MotionPlanner<double>::Motion, 1);
+BOOST_CLASS_VERSION(typename MotionPlanner<float>::Motion, 1);

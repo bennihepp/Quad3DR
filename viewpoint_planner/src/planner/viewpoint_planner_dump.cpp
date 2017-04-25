@@ -8,19 +8,18 @@
 
 #include "viewpoint_planner.h"
 
-#pragma GCC push_options
-#pragma GCC optimize("O0")
 QImage ViewpointPlanner::drawSparsePoints(
     const Viewpoint& viewpoint,
     const FloatType sparse_point_size /*= FloatType(2)*/) const {
-  const std::unordered_set<Point3DId>& sparse_points_visible = computeVisibleSparsePoints(viewpoint);
-  QImage img = drawPoissonMesh(viewpoint);
+  const std::unordered_map<Point3DId, Vector3>& sparse_points_visible = computeVisibleSparsePoints(viewpoint);
+  QImage img = offscreen_renderer_->drawPoissonMesh(viewpoint);
   QPainter painter(&img);
   QPen pen;
   pen.setColor(Qt::red);
   pen.setWidth(0.2);
   painter.setPen(pen);
-  for (const Point3DId& point3d_id: sparse_points_visible) {
+  for (const auto& entry : sparse_points_visible) {
+    const Point3DId& point3d_id = entry.first;
     const Point3D& point3d = data_->reconstruction_->getPoints3D().at(point3d_id);
     if (viewpoint.isWorldPointVisible(point3d.getPosition())) {
       const Vector2 point_image = viewpoint.projectWorldPointIntoImage(point3d.getPosition());
@@ -35,14 +34,15 @@ QImage ViewpointPlanner::drawSparsePoints(
     const ViewpointEntryIndex viewpoint_index,
     const FloatType sparse_point_size /*= FloatType(2)*/) const {
   const Viewpoint& viewpoint = viewpoint_entries_[viewpoint_index].viewpoint;
-  const std::unordered_set<Point3DId>& sparse_points_visible = getCachedVisibleSparsePoints(viewpoint_index);
+  const std::unordered_map<Point3DId, Vector3>& sparse_points_visible = getCachedVisibleSparsePoints(viewpoint_index);
   QImage img = drawPoissonMesh(viewpoint_index);
   QPainter painter(&img);
   QPen pen;
   pen.setColor(Qt::red);
   pen.setWidth(0.2);
   painter.setPen(pen);
-  for (const Point3DId& point3d_id: sparse_points_visible) {
+  for (const auto& entry : sparse_points_visible) {
+    const Point3DId& point3d_id = entry.first;
     const Point3D& point3d = data_->reconstruction_->getPoints3D().at(point3d_id);
     if (viewpoint.isWorldPointVisible(point3d.getPosition())) {
       const Vector2 point_image = viewpoint.projectWorldPointIntoImage(point3d.getPosition());
@@ -83,11 +83,11 @@ QImage ViewpointPlanner::drawSparseMatching(
     const Viewpoint& viewpoint1, const Viewpoint& viewpoint2,
     const bool draw_lines /*= true*/,
     const FloatType sparse_point_size /*= FloatType(2)*/, const FloatType match_line_width /*= FloatType(0.5)*/) const {
-  const std::unordered_set<Point3DId>& sparse_points_visible1 = computeVisibleSparsePoints(viewpoint1);
-  const std::unordered_set<Point3DId>& sparse_points_visible2 = computeVisibleSparsePoints(viewpoint2);
+  const std::unordered_map<Point3DId, Vector3>& sparse_points_visible1 = computeVisibleSparsePoints(viewpoint1);
+  const std::unordered_map<Point3DId, Vector3>& sparse_points_visible2 = computeVisibleSparsePoints(viewpoint2);
   const QImage img1 = drawSparsePoints(viewpoint1, sparse_point_size);
   const QImage img2 = drawSparsePoints(viewpoint2, sparse_point_size);
-  AIT_ASSERT(img1.height() == img2.height());
+  BH_ASSERT(img1.height() == img2.height());
   QImage img(img1.width() + img2.width(), img1.height(), QImage::Format_ARGB32);
   QPainter painter(&img);
   painter.setRenderHint(QPainter::Antialiasing);
@@ -100,10 +100,13 @@ QImage ViewpointPlanner::drawSparseMatching(
   pen_not_matchable.setWidth(match_line_width);
   pen_not_matchable.setColor(Qt::yellow);
   if (draw_lines) {
-    for (const Point3DId& point3d_id: sparse_points_visible1) {
+    for (const auto& entry : sparse_points_visible1) {
+      const Point3DId& point3d_id = entry.first;
+      const Vector3& normal1 = entry.second;
       if (sparse_points_visible2.count(point3d_id) > 0) {
         const Point3D& point3d = data_->reconstruction_->getPoints3D().at(point3d_id);
-        const bool matchable = isSparsePointMatchable(viewpoint1, viewpoint2, point3d);
+        const Vector3& normal2 = sparse_points_visible2.at(point3d_id);
+        const bool matchable = isSparsePointMatchable(viewpoint1, viewpoint2, point3d, normal1, normal2);
         if (matchable) {
           painter.setPen(pen_matchable);
         }
@@ -126,13 +129,13 @@ QImage ViewpointPlanner::drawSparseMatching(
     const ViewpointEntryIndex viewpoint_index1, const ViewpointEntryIndex viewpoint_index2,
     const bool draw_lines /*= true*/,
     const FloatType sparse_point_size /*= FloatType(2)*/, const FloatType match_line_width /*= FloatType(0.5)*/) const {
-  const std::unordered_set<Point3DId>& sparse_points_visible1 = getCachedVisibleSparsePoints(viewpoint_index1);
-  const std::unordered_set<Point3DId>& sparse_points_visible2 = getCachedVisibleSparsePoints(viewpoint_index2);
+  const std::unordered_map<Point3DId, Vector3>& sparse_points_visible1 = getCachedVisibleSparsePoints(viewpoint_index1);
+  const std::unordered_map<Point3DId, Vector3>& sparse_points_visible2 = getCachedVisibleSparsePoints(viewpoint_index2);
   const Viewpoint& viewpoint1 = viewpoint_entries_[viewpoint_index1].viewpoint;
   const Viewpoint& viewpoint2 = viewpoint_entries_[viewpoint_index2].viewpoint;
   const QImage img1 = drawSparsePoints(viewpoint_index1, sparse_point_size);
   const QImage img2 = drawSparsePoints(viewpoint_index2, sparse_point_size);
-  AIT_ASSERT(img1.height() == img2.height());
+  BH_ASSERT(img1.height() == img2.height());
   QImage img(img1.width() + img2.width(), img1.height(), QImage::Format_ARGB32);
   QPainter painter(&img);
   painter.setRenderHint(QPainter::Antialiasing);
@@ -145,10 +148,13 @@ QImage ViewpointPlanner::drawSparseMatching(
   pen_not_matchable.setWidth(match_line_width);
   pen_not_matchable.setColor(Qt::yellow);
   if (draw_lines) {
-    for (const Point3DId& point3d_id: sparse_points_visible1) {
+    for (const auto& entry : sparse_points_visible1) {
+      const Point3DId& point3d_id = entry.first;
+      const Vector3& normal1 = entry.second;
       if (sparse_points_visible2.count(point3d_id) > 0) {
         const Point3D& point3d = data_->reconstruction_->getPoints3D().at(point3d_id);
-        const bool matchable = isSparsePointMatchable(viewpoint1, viewpoint2, point3d);
+        const Vector3& normal2 = sparse_points_visible2.at(point3d_id);
+        const bool matchable = isSparsePointMatchable(viewpoint1, viewpoint2, point3d, normal1, normal2);
         if (matchable) {
           painter.setPen(pen_matchable);
         }
@@ -199,4 +205,3 @@ void ViewpointPlanner::dumpSparseMatching(
   const QImage img = drawSparseMatching(viewpoint1, viewpoint2, draw_lines, sparse_point_size, match_line_width);
   img.save(QString::fromStdString(filename));
 }
-#pragma GCC pop_options

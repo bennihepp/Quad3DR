@@ -18,7 +18,7 @@ Viewpoint::Viewpoint(const PinholeCamera* camera, const Pose& pose, FloatType pr
 : camera_(camera), pose_(pose), projection_margin_(projection_margin),
   transformation_world_to_image_(pose_.getTransformationWorldToImage()) {
   if (!pose.isValid()) {
-    throw AIT_EXCEPTION("Received invalid pose");
+    throw BH_EXCEPTION("Received invalid pose");
   }
 }
 
@@ -50,6 +50,15 @@ Viewpoint& Viewpoint::operator=(Viewpoint&& other) {
     transformation_world_to_image_ = std::move(other.transformation_world_to_image_);
   }
   return *this;
+}
+
+bool Viewpoint::operator==(const Viewpoint& other) const {
+  return pose() == other.pose()
+          && camera() == other.camera();
+}
+
+bool Viewpoint::operator!=(const Viewpoint& other) const {
+  return !(*this == other);
 }
 
 Viewpoint::FloatType Viewpoint::getDistanceTo(const Viewpoint& other) const {
@@ -124,8 +133,6 @@ Viewpoint::Vector3 Viewpoint::projectWorldPointIntoCamera(const Vector3& point_w
   return point_camera;
 }
 
-#pragma GCC push_options
-#pragma GCC optimize("O0")
 bool Viewpoint::isWorldPointVisible(const Vector3& point_world) const {
   Vector3 point_camera  = transformation_world_to_image_ * point_world.homogeneous();
   if (point_camera(3) < 0) {
@@ -143,4 +150,3 @@ Viewpoint::Vector2 Viewpoint::projectWorldPointIntoImage(const Vector3& point_wo
   Vector2 point_image = camera_->projectPoint(point_camera);
   return point_image;
 }
-#pragma GCC pop_options

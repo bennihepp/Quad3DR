@@ -7,12 +7,14 @@
 
 #pragma once
 
-#include <ait/color.h>
+#include <bh/color.h>
 #include "../reconstruction/sparse_reconstruction.h"
 #include "triangle_drawer.h"
 #include "line_drawer.h"
 
-template <typename FloatType>
+namespace rendering {
+
+template<typename FloatType>
 class ViewpointDrawer {
   const FloatType CAMERA_SIZE_SPEED = 0.1f;
   const FloatType MIN_CAMERA_SIZE = 0.01f;
@@ -22,20 +24,20 @@ class ViewpointDrawer {
   USE_FIXED_EIGEN_TYPES(FloatType)
 
 public:
-  using Pose = ait::Pose<FloatType>;
-  using Color4 = ait::Color4<FloatType>;
+  using Pose = bh::Pose<FloatType>;
+  using Color4 = bh::Color4<FloatType>;
 
   ViewpointDrawer();
 
   ~ViewpointDrawer();
 
-  void setCamera(const reconstruction::PinholeCamera& camera);
+  void setCamera(const reconstruction::PinholeCamera &camera);
 
-  void setViewpoints(const std::vector<Pose>& poses);
+  void setViewpoints(const std::vector<Pose> &poses);
 
-  void setViewpoints(const std::vector<Pose>& poses, const Color4& color);
+  void setViewpoints(const std::vector<Pose> &poses, const Color4 &color);
 
-  void setViewpoints(const std::vector<Pose>& poses, const std::vector<Color4>& colors);
+  void setViewpoints(const std::vector<Pose> &poses, const std::vector<Color4> &colors);
 
   void changeCameraSize(const FloatType delta);
 
@@ -49,22 +51,22 @@ public:
 
   void upload();
 
-  void draw(const QMatrix4x4& pvm_matrix, const int width, const int height);
+  void draw(const QMatrix4x4 &pvm_matrix, const int width, const int height);
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
 private:
   void setColor(FloatType r, FloatType g, FloatType b, FloatType a);
 
-  void setColor(const Color4& color);
+  void setColor(const Color4 &color);
 
-  void setColors(const std::vector<Color4>& colors);
+  void setColors(const std::vector<Color4> &colors);
 
   void uploadCameraData();
 
-  void generateImageModel(const reconstruction::PinholeCamera& camera, const ait::Pose<FloatType>& pose,
-      const FloatType camera_size, const Color4& color,
-      std::array<OGLLineData, 8>& lines, std::array<OGLTriangleData, 2>& triangles);
+  void generateImageModel(const reconstruction::PinholeCamera &camera, const bh::Pose<FloatType> &pose,
+                          const FloatType camera_size, const Color4 &color,
+                          std::array<OGLLineData, 8> &lines, std::array<OGLTriangleData, 2> &triangles);
 
   reconstruction::PinholeCamera camera_;
   std::vector<Pose> poses_;
@@ -74,5 +76,7 @@ private:
   TriangleDrawer camera_triangle_drawer_;
   LineDrawer camera_line_drawer_;
 };
+
+}
 
 #include "viewpoint_drawer.hxx"

@@ -10,19 +10,19 @@
 #include <memory>
 #include <csignal>
 
-#include <ait/boost.h>
+#include <bh/boost.h>
 #include <boost/program_options.hpp>
 #include <boost/filesystem.hpp>
 
-#include <ait/common.h>
-#include <ait/eigen.h>
-#include <ait/utilities.h>
-#include <ait/options.h>
-#include <ait/eigen_options.h>
-#include <ait/eigen_utils.h>
-#include <ait/math/geometry.h>
+#include <bh/common.h>
+#include <bh/eigen.h>
+#include <bh/utilities.h>
+#include <bh/config_options.h>
+#include <bh/eigen_options.h>
+#include <bh/eigen_utils.h>
+#include <bh/math/geometry.h>
 
-#include <ait/mLib.h>
+#include <bh/mLib/mLib.h>
 
 #include "../planner/viewpoint_planner.h"
 #include "../planner/viewpoint_planner_serialization.h"
@@ -42,12 +42,12 @@ using PointCloudIOType = ml::PointCloudIO<FloatType>;
 class BaselineViewpointPathCmdline {
 public:
 
-  class Options : public ait::ConfigOptions {
+  class Options : public bh::ConfigOptions {
   public:
     static const string kPrefix;
 
     Options()
-    : ait::ConfigOptions(kPrefix) {
+    : bh::ConfigOptions(kPrefix) {
       addOption<bool>("verbose", &verbose);
       addOption<Vector3>("object_center", &object_center);
       addOption<std::size_t>("num_of_viewpoints", &num_of_viewpoints);
@@ -68,24 +68,24 @@ public:
     FloatType circle_factor = FloatType(1);
   };
 
-  static std::map<string, std::unique_ptr<ait::ConfigOptions>> getConfigOptions() {
-    std::map<string, std::unique_ptr<ait::ConfigOptions>> config_options;
+  static std::map<string, std::unique_ptr<bh::ConfigOptions>> getConfigOptions() {
+    std::map<string, std::unique_ptr<bh::ConfigOptions>> config_options;
     config_options.emplace(std::piecewise_construct,
         std::forward_as_tuple(Options::kPrefix),
-        std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new Options())));
+        std::forward_as_tuple(static_cast<bh::ConfigOptions*>(new Options())));
     config_options.emplace(std::piecewise_construct,
       std::forward_as_tuple("viewpoint_planner.data"),
-      std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlannerData::Options())));
+      std::forward_as_tuple(static_cast<bh::ConfigOptions*>(new ViewpointPlannerData::Options())));
     config_options.emplace(std::piecewise_construct,
       std::forward_as_tuple("viewpoint_planner"),
-      std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlanner::Options())));
+      std::forward_as_tuple(static_cast<bh::ConfigOptions*>(new ViewpointPlanner::Options())));
     config_options.emplace(std::piecewise_construct,
       std::forward_as_tuple("motion_planner"),
-      std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new ViewpointPlanner::MotionPlannerType::Options())));
+      std::forward_as_tuple(static_cast<bh::ConfigOptions*>(new ViewpointPlanner::MotionPlannerType::Options())));
     return config_options;
   }
 
-  BaselineViewpointPathCmdline(const std::map<string, std::unique_ptr<ait::ConfigOptions>>& config_options,
+  BaselineViewpointPathCmdline(const std::map<string, std::unique_ptr<bh::ConfigOptions>>& config_options,
       const string& viewpoint_path_filename, const string& viewpoint_path_filename_txt)
   : options_(*dynamic_cast<Options*>(config_options.at(Options::kPrefix).get())),
     planner_ptr_(nullptr),
@@ -132,39 +132,39 @@ public:
       comp_data.num_connected_entries = 0;
       for (std::size_t i = 0; i < num_of_viewpoints; ++i) {
         if (verbose) {
-          AIT_PRINT_VALUE(i);
+          BH_PRINT_VALUE(i);
         }
         const FloatType current_angle = 2 * M_PI * (i / FloatType(num_of_viewpoints));
         if (verbose) {
-          AIT_PRINT_VALUE(current_angle);
+          BH_PRINT_VALUE(current_angle);
         }
         const float x = circle_radius * std::cos(current_angle);
         const float y = circle_radius * std::sin(current_angle);
         const float z = circle_height;
         const Vector3 viewpoint_position = Vector3(object_center(0), object_center(1), 0) + Vector3(x, y, z);
         if (verbose) {
-          AIT_PRINT_VALUE(viewpoint_position);
+          BH_PRINT_VALUE(viewpoint_position);
         }
         const Vector3 rotation_z_axis = (object_center - viewpoint_position).normalized();
         const Vector3 rotation_x_axis = rotation_z_axis.cross(Vector3::UnitZ()).normalized();
         const Vector3 rotation_y_axis = rotation_z_axis.cross(rotation_x_axis).normalized();
         if (verbose) {
-          AIT_PRINT_VALUE(rotation_x_axis);
-          AIT_PRINT_VALUE(rotation_y_axis);
-          AIT_PRINT_VALUE(rotation_z_axis);
+          BH_PRINT_VALUE(rotation_x_axis);
+          BH_PRINT_VALUE(rotation_y_axis);
+          BH_PRINT_VALUE(rotation_z_axis);
         }
         Matrix3x3 rotation_matrix;
         rotation_matrix.col(0) = rotation_x_axis;
         rotation_matrix.col(1) = rotation_y_axis;
         rotation_matrix.col(2) = rotation_z_axis;
         if (verbose) {
-          AIT_PRINT_VALUE(rotation_matrix);
+          BH_PRINT_VALUE(rotation_matrix);
         }
         const Quaternion viewpoint_quaternion(rotation_matrix);
         const Quaternion viewpoint_quaternion2 = bh::getZLookAtQuaternion(object_center - viewpoint_position, Vector3::UnitZ());
         if (verbose) {
-          AIT_PRINT_VALUE(viewpoint_quaternion);
-          AIT_PRINT_VALUE(viewpoint_quaternion2);
+          BH_PRINT_VALUE(viewpoint_quaternion);
+          BH_PRINT_VALUE(viewpoint_quaternion2);
         }
         const ViewpointPlanner::Pose pose =
             ViewpointPlanner::Pose::createFromImageToWorldTransformation(viewpoint_position, viewpoint_quaternion);
@@ -215,7 +215,7 @@ private:
 const string BaselineViewpointPathCmdline::Options::kPrefix = "baseline_viewpoint_path";
 
 std::pair<bool, boost::program_options::variables_map> processOptions(
-    int argc, char** argv, std::map<string, std::unique_ptr<ait::ConfigOptions>>& config_options)
+    int argc, char** argv, std::map<string, std::unique_ptr<bh::ConfigOptions>>& config_options)
 {
   namespace po = boost::program_options;
 
@@ -244,7 +244,7 @@ std::pair<bool, boost::program_options::variables_map> processOptions(
     }
     std::ifstream config_in(vm["config-file"].as<string>());
     if (!config_in) {
-      throw AIT_EXCEPTION("Unable to open config file");
+      throw BH_EXCEPTION("Unable to open config file");
     }
     else {
       po::store(parse_config_file(config_in, config_file_options), vm);
@@ -282,7 +282,7 @@ void disableCtrlCHandler() {
 
 int main(int argc, char** argv)
 {
-  std::map<std::string, std::unique_ptr<ait::ConfigOptions>> config_options =
+  std::map<std::string, std::unique_ptr<bh::ConfigOptions>> config_options =
       BaselineViewpointPathCmdline::getConfigOptions();
 
   // Handle command line and config file

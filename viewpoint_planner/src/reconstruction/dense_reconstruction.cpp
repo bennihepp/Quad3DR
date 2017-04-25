@@ -6,7 +6,7 @@
 //  Created on: Dec 11, 2016
 //==================================================
 
-#include <ait/filesystem.h>
+#include <bh/filesystem.h>
 #include <iostream>
 #include "dense_reconstruction.h"
 
@@ -20,7 +20,7 @@ void DenseReconstruction::read(const std::string& path, const bool read_sfm_gps_
   path_ = path;
   depth_maps_.clear();
   normal_maps_.clear();
-  SparseReconstruction::read(ait::joinPaths(path, "sparse"), read_sfm_gps_transformation);
+  SparseReconstruction::read(bh::joinPaths(path, "sparse"), read_sfm_gps_transformation);
 }
 
 const DenseReconstruction::DepthMap& DenseReconstruction::getDepthMap(ImageId image_id, DenseMapType dense_map_type) const {
@@ -41,25 +41,35 @@ const DenseReconstruction::NormalMap& DenseReconstruction::getNormalMap(ImageId 
   return it->second;
 }
 
+/// Clear cached depth maps
+void DenseReconstruction::clearCachedDepthMaps() const {
+  depth_maps_.clear();
+}
+
+/// Clear cached normal maps
+void DenseReconstruction::clearCachedNormalMaps() const {
+  normal_maps_.clear();
+}
+
 DenseReconstruction::DepthMap DenseReconstruction::readDepthMap(ImageId image_id, DenseMapType dense_map_type) const {
   const ImageColmap& image = getImages().at(image_id);
-  std::string depth_maps_path = ait::joinPaths(path_, "stereo", "depth_maps");
+  std::string depth_maps_path = bh::joinPaths(path_, "stereo", "depth_maps");
   std::string depth_map_filename = image.name() + "." + denseTypeToString(dense_map_type) + ".bin";
   std::cout << "Reading depth map " << depth_map_filename << " for image " << image.name() << std::endl;
   DepthMap depth_map;
-  depth_map.readColmapFormat(ait::joinPaths(depth_maps_path, depth_map_filename));
-  AIT_ASSERT_STR(depth_map.channels() == 1, "Depth map must have 1 channel");
+  depth_map.readColmapFormat(bh::joinPaths(depth_maps_path, depth_map_filename));
+  BH_ASSERT_STR(depth_map.channels() == 1, "Depth map must have 1 channel");
   return depth_map;
 }
 
 DenseReconstruction::NormalMap DenseReconstruction::readNormalMap(ImageId image_id, DenseMapType dense_map_type) const {
   const ImageColmap& image = getImages().at(image_id);
-  std::string normal_maps_path = ait::joinPaths(path_, "stereo", "normal_maps");
+  std::string normal_maps_path = bh::joinPaths(path_, "stereo", "normal_maps");
   std::string normal_map_filename = image.name() + "." + denseTypeToString(dense_map_type) + ".bin";
   std::cout << "Reading normal map " << normal_map_filename << " for image " << image.name() << std::endl;
   NormalMap normal_map;
-  normal_map.readColmapFormat(ait::joinPaths(normal_maps_path, normal_map_filename));
-  AIT_ASSERT_STR(normal_map.channels() == 3, "Normal map must have 3 channel");
+  normal_map.readColmapFormat(bh::joinPaths(normal_maps_path, normal_map_filename));
+  BH_ASSERT_STR(normal_map.channels() == 3, "Normal map must have 3 channel");
   return normal_map;
 }
 
@@ -74,7 +84,7 @@ std::string DenseReconstruction::denseTypeToString(DenseMapType dense_map_type) 
   case GEOMETRIC_FUSED:
     return "geometric.fused";
   }
-  throw AIT_EXCEPTION("Unknown dense map type");
+  throw BH_EXCEPTION("Unknown dense map type");
 }
 
 void DenseReconstruction::readAndCacheDepthMap(ImageId image_id, DenseMapType dense_map_type) const {

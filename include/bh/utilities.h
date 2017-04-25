@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <chrono>
 #include <thread>
+#include <type_traits>
 #include "common.h"
 
 namespace bh {
@@ -23,6 +24,7 @@ namespace bh {
 /// Normalize value between 0 and 1 based on min and max
 template <typename T>
 T normalize(const T& value, const T& min, const T& max) {
+  static_assert(std::is_floating_point<T>::value, "Normalize only works with floating point types.");
   return (value - min) / (max - min);
 }
 

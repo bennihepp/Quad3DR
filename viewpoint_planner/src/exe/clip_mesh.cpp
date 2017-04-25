@@ -10,17 +10,17 @@
 #include <memory>
 #include <csignal>
 
-#include <ait/boost.h>
+#include <bh/boost.h>
 #include <boost/program_options.hpp>
 #include <boost/filesystem.hpp>
 
-#include <ait/common.h>
-#include <ait/eigen.h>
-#include <ait/utilities.h>
-#include <ait/options.h>
-#include <ait/math/geometry.h>
+#include <bh/common.h>
+#include <bh/eigen.h>
+#include <bh/utilities.h>
+#include <bh/config_options.h>
+#include <bh/math/geometry.h>
 
-#include <ait/mLib.h>
+#include <bh/mLib/mLib.h>
 
 using std::cout;
 using std::cerr;
@@ -30,7 +30,7 @@ using std::string;
 using FloatType = float;
 USE_FIXED_EIGEN_TYPES(FloatType)
 
-using BoundingBoxType = ait::BoundingBox3D<FloatType>;
+using BoundingBoxType = bh::BoundingBox3D<FloatType>;
 using MeshType = ml::MeshData<FloatType>;
 using MeshIOType = ml::MeshIO<FloatType>;
 using TriMeshType = ml::TriMesh<FloatType>;
@@ -38,12 +38,12 @@ using TriMeshType = ml::TriMesh<FloatType>;
 class ClipAndTransformMeshCmdline {
 public:
 
-  class Options : public ait::ConfigOptions {
+  class Options : public bh::ConfigOptions {
   public:
     static const string kPrefix;
 
     Options()
-    : ait::ConfigOptions(kPrefix) {
+    : bh::ConfigOptions(kPrefix) {
       addOption<FloatType>("clip_bbox_min_x");
       addOption<FloatType>("clip_bbox_min_y");
       addOption<FloatType>("clip_bbox_min_z");
@@ -55,15 +55,15 @@ public:
     ~Options() override {}
   };
 
-  static std::map<string, std::unique_ptr<ait::ConfigOptions>> getConfigOptions() {
-    std::map<string, std::unique_ptr<ait::ConfigOptions>> config_options;
+  static std::map<string, std::unique_ptr<bh::ConfigOptions>> getConfigOptions() {
+    std::map<string, std::unique_ptr<bh::ConfigOptions>> config_options;
     config_options.emplace(std::piecewise_construct,
         std::forward_as_tuple(Options::kPrefix),
-        std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new Options())));
+        std::forward_as_tuple(static_cast<bh::ConfigOptions*>(new Options())));
     return config_options;
   }
 
-  ClipAndTransformMeshCmdline(const std::map<string, std::unique_ptr<ait::ConfigOptions>>& config_options,
+  ClipAndTransformMeshCmdline(const std::map<string, std::unique_ptr<bh::ConfigOptions>>& config_options,
       const string& in_mesh_filename, const string& out_mesh_filename)
   : options_(*dynamic_cast<Options*>(config_options.at(Options::kPrefix).get())),
     in_mesh_filename_(in_mesh_filename),
@@ -115,7 +115,7 @@ public:
     }
     for (std::size_t i = 0; i < mesh.m_FaceIndicesVertices.size(); ++i) {
       const MeshType::Indices::Face& vertex_face = mesh.m_FaceIndicesVertices[i];
-      AIT_ASSERT_STR(vertex_face.size() == 3, "Mesh faces need to have a valence of 3");
+      BH_ASSERT_STR(vertex_face.size() == 3, "Mesh faces need to have a valence of 3");
       size_t index1 = vertex_face[0];
       size_t index2 = vertex_face[1];
       size_t index3 = vertex_face[2];
@@ -181,7 +181,7 @@ private:
 const string ClipAndTransformMeshCmdline::Options::kPrefix = "clip_mesh";
 
 std::pair<bool, boost::program_options::variables_map> processOptions(
-    int argc, char** argv, std::map<string, std::unique_ptr<ait::ConfigOptions>>& config_options)
+    int argc, char** argv, std::map<string, std::unique_ptr<bh::ConfigOptions>>& config_options)
 {
   namespace po = boost::program_options;
 
@@ -210,7 +210,7 @@ std::pair<bool, boost::program_options::variables_map> processOptions(
     }
     std::ifstream config_in(vm["config-file"].as<string>());
     if (!config_in) {
-      throw AIT_EXCEPTION("Unable to open config file");
+      throw BH_EXCEPTION("Unable to open config file");
     }
     else {
       po::store(parse_config_file(config_in, config_file_options), vm);
@@ -248,7 +248,7 @@ void disableCtrlCHandler() {
 
 int main(int argc, char** argv)
 {
-  std::map<std::string, std::unique_ptr<ait::ConfigOptions>> config_options =
+  std::map<std::string, std::unique_ptr<bh::ConfigOptions>> config_options =
       ClipAndTransformMeshCmdline::getConfigOptions();
 
   // Handle command line and config file

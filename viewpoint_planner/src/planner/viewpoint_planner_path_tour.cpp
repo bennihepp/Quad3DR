@@ -14,12 +14,12 @@
 #include <boost/graph/metric_tsp_approx.hpp>
 #include <boost/heap/binomial_heap.hpp>
 #include <boost/heap/fibonacci_heap.hpp>
+#include <bh/algorithm.h>
 
 using std::swap;
 
-#pragma GCC optimize("O0")
-
-void ViewpointPlanner::computeViewpointTour() {
+void ViewpointPlanner::computeViewpointTour(const bool use_manual_start_position) {
+  const bool verbose = true;
   const bool recompute_all = true;
 #pragma omp parallel for
   for (std::size_t i = 0; i < viewpoint_paths_.size(); ++i) {
@@ -36,12 +36,73 @@ void ViewpointPlanner::computeViewpointTour() {
     solveApproximateTSP(&viewpoint_path, &comp_data);
   }
 
-  // Improve solution with 2 Opt
-#pragma omp parallel for
+  if (options_.viewpoint_path_2opt_enable) {
+    //  // Improve solution with 2 Opt
+    // Cannot use multiple threads due to offscreen rendering for sparse matching
+    //#pragma omp parallel for
+    for (std::size_t i = 0; i < viewpoint_paths_.size(); ++i) {
+      ViewpointPath &viewpoint_path = viewpoint_paths_[i];
+      ViewpointPathComputationData &comp_data = viewpoint_paths_data_[i];
+      improveViewpointTourWith2Opt(&viewpoint_path, &comp_data);
+    }
+  }
+
+  if (use_manual_start_position && options_.isSet("drone_start_position")) {
+    // Reorder viewpoint tour to start at drone_start_position
+    for (std::size_t i = 0; i < viewpoint_paths_.size(); ++i) {
+      ViewpointPath& viewpoint_path = viewpoint_paths_[i];
+      const auto closest_it = bh::argmin(
+              viewpoint_path.order.begin(), viewpoint_path.order.end(),
+              [&](const size_t order_idx) {
+                const ViewpointPathEntry &path_entry = viewpoint_path.entries[order_idx];
+                const Vector3 &world_position = path_entry.viewpoint.pose().getWorldPosition();
+                const FloatType dist = (world_position - options_.drone_start_position).squaredNorm();
+                return dist;
+              }
+      );
+      if (verbose) {
+        std::cout << "Path entry closest to drone start position: "
+                  << viewpoint_path.entries[*closest_it].viewpoint_index << std::endl;
+      }
+      std::vector<size_t> new_order;
+      auto it = closest_it;
+      do {
+        new_order.push_back(*it);
+        ++it;
+        if (it == std::end(viewpoint_path.order)) {
+          it = std::begin(viewpoint_path.order);
+        }
+      }
+      while (it != closest_it);
+      viewpoint_path.order = std::move(new_order);
+    }
+  }
+
   for (std::size_t i = 0; i < viewpoint_paths_.size(); ++i) {
     ViewpointPath& viewpoint_path = viewpoint_paths_[i];
-    ViewpointPathComputationData& comp_data = viewpoint_paths_data_[i];
-    improveViewpointTourWith2Opt(&viewpoint_path, &comp_data);
+    std::cout << "Viewpoint path " << i << std::endl;
+    for (auto it = viewpoint_path.order.begin(); it != viewpoint_path.order.end(); ++it) {
+      auto next_it = it + 1;
+      if (next_it == viewpoint_path.order.end()) {
+        next_it = viewpoint_path.order.begin();
+      }
+      const Pose& pose1 = viewpoint_path.entries[*it].viewpoint.pose();
+      const Pose& pose2 = viewpoint_path.entries[*next_it].viewpoint.pose();
+      const ViewpointEntryIndex viewpoint_index1 = viewpoint_path.entries[*it].viewpoint_index;
+      const ViewpointEntryIndex viewpoint_index2 = viewpoint_path.entries[*next_it].viewpoint_index;
+//      const bool matchable = isSparseMatchable(viewpoint_index1, viewpoint_index2);
+      const bool matchable = isSparseMatchable2(viewpoint_index1, viewpoint_index2);
+      const FloatType translation_distance = pose1.getPositionDistanceTo(pose2);
+      const FloatType angular_distance = pose1.getAngularDistanceTo(pose2);
+      std::cout << "  " << viewpoint_index1 << " -> " << viewpoint_index2 << ": "
+                << "matchable=" << matchable
+                << " translation_distance=" << translation_distance
+                << " angular_distance=" << angular_distance * 180 / M_PI << std::endl;
+    }
+  }
+
+  if (verbose) {
+    reportViewpointPathsStats();
   }
 }
 
@@ -178,7 +239,7 @@ void ViewpointPlanner::ensureConnectedViewpointPath(
       const ViewpointEntryIndex to_index = it->viewpoint_index;
   //    std::cout << "  searching path to viewpoint " << to_index << std::endl;
       bool found = findAndAddShortestMotion(path_entry.viewpoint_index, to_index);
-      AIT_ASSERT(found);
+      BH_ASSERT(found);
       if (!found) {
         found_motions = false;
         break;
@@ -187,7 +248,7 @@ void ViewpointPlanner::ensureConnectedViewpointPath(
     if (!found_motions) {
       std::cout << "Could not find motion path for viewpoint on path" << path_entry.viewpoint_index << std::endl;
     }
-    AIT_ASSERT(found_motions);
+    BH_ASSERT(found_motions);
     ++comp_data->num_connected_entries;
   }
 }
@@ -257,15 +318,16 @@ ViewpointPlanner::FloatType ViewpointPlanner::computeTourLength(const ViewpointP
     const ViewpointEntryIndex to_index = viewpoint_path.entries[*next_it].viewpoint_index;
     if (!hasViewpointMotion(from_index, to_index)) {
       std::cout << "WARNING: No motion from viewpoint " << from_index << " to viewpoint " << to_index << std::endl;
+      tour_length += std::numeric_limits<FloatType>::infinity();
     }
     else {
       const FloatType dist = viewpoint_graph_.getWeightByNode(from_index, to_index);
-      if (!ait::isApproxEqual(dist, getViewpointMotion(from_index, to_index).distance(), FloatType(1e-2))) {
+      if (!bh::isApproxEqual(dist, getViewpointMotion(from_index, to_index).distance(), FloatType(1e-2))) {
         std::cout << "WARNING: dist != getViewpointMotion(from_index, to_index).distance " << __FILE__ << ":" << __LINE__ << std::endl;
-        AIT_PRINT_VALUE(dist);
-        AIT_PRINT_VALUE(getViewpointMotion(from_index, to_index).distance());
+        BH_PRINT_VALUE(dist);
+        BH_PRINT_VALUE(getViewpointMotion(from_index, to_index).distance());
       }
-//      AIT_ASSERT(dist == getViewpointMotion(from_index, to_index).distance);
+//      BH_ASSERT(dist == getViewpointMotion(from_index, to_index).distance);
       tour_length += dist;
     }
   }
@@ -292,9 +354,26 @@ void ViewpointPlanner::improveViewpointTourWith2Opt(
         std::vector<std::size_t> new_order = swap2Opt(viewpoint_path, comp_data, k_start, k_end);
         const FloatType new_tour_length = computeTourLength(*viewpoint_path, new_order);
         if (new_tour_length < shortest_tour_length) {
-          viewpoint_path->order = std::move(new_order);
-          shortest_tour_length = new_tour_length;
-          improvement_made = true;
+          // Check if new tour is matchable
+          bool matchable = true;
+          if (options_.viewpoint_path_2opt_check_sparse_matching) {
+            for (size_t i = k_start - 1; i < k_end + 1; ++i) {
+              const size_t from_index = i;
+              size_t to_index = i + 1;
+              if (to_index == new_order.size()) {
+                to_index = 0;
+              }
+              if (!isSparseMatchable2(from_index, to_index)) {
+                matchable = false;
+                break;
+              }
+            }
+          }
+          if (matchable) {
+            viewpoint_path->order = std::move(new_order);
+            shortest_tour_length = new_tour_length;
+            improvement_made = true;
+          }
         }
       }
     }
@@ -330,7 +409,7 @@ void ViewpointPlanner::improveViewpointTourWith2Opt(
   }
 }
 
-void ViewpointPlanner::augmentedViewpointPathForSparseMatching(ViewpointPath* viewpoint_path) {
+void ViewpointPlanner::augmentedViewpointPathWithSparseMatchingViewpoints(ViewpointPath* viewpoint_path) {
   ViewpointPath new_viewpoint_path(*viewpoint_path);
   if (viewpoint_path->order.size() > 1) {
     new_viewpoint_path.order.clear();
@@ -340,89 +419,91 @@ void ViewpointPlanner::augmentedViewpointPathForSparseMatching(ViewpointPath* vi
         next_it = viewpoint_path->order.begin();
       }
       new_viewpoint_path.order.push_back(*it);
-      if (new_viewpoint_path.order.size() > 1) {
-        // TODO
-        bool draw_lines = false;
-        const Viewpoint& viewpoint1 = new_viewpoint_path.entries[*(new_viewpoint_path.order.rbegin() + 1)].viewpoint;
-        const Viewpoint& viewpoint2 = new_viewpoint_path.entries[*(new_viewpoint_path.order.rbegin())].viewpoint;
-        if (options_.dump_stereo_matching_images) {
-          dumpSparseMatching(
-              viewpoint1, viewpoint2,
-              "dump/sparse_points_augmented_" + std::to_string(it - viewpoint_path->order.begin()) + "_" +
-              std::to_string(new_viewpoint_path.entries.size()) + ".png",
-              draw_lines);
-          draw_lines = true;
-          dumpSparseMatching(
-              viewpoint1, viewpoint2,
-              "dump/sparse_matching_augmented_" + std::to_string(it - viewpoint_path->order.begin()) + "_" +
-              std::to_string(new_viewpoint_path.entries.size()) + ".png",
-              draw_lines);
-        }
-      }
+//      if (new_viewpoint_path.order.size() > 1) {
+//        // TODO
+//        bool draw_lines = false;
+//        const Viewpoint& viewpoint1 = new_viewpoint_path.entries[*(new_viewpoint_path.order.rbegin() + 1)].viewpoint;
+//        const Viewpoint& viewpoint2 = new_viewpoint_path.entries[*(new_viewpoint_path.order.rbegin())].viewpoint;
+//        if (options_.dump_stereo_matching_images) {
+//          dumpSparseMatching(
+//              viewpoint1, viewpoint2,
+//              "dump/sparse_points_augmented_" + std::to_string(it - viewpoint_path->order.begin()) + "_" +
+//              std::to_string(new_viewpoint_path.entries.size()) + ".png",
+//              draw_lines);
+//          draw_lines = true;
+//          dumpSparseMatching(
+//              viewpoint1, viewpoint2,
+//              "dump/sparse_matching_augmented_" + std::to_string(it - viewpoint_path->order.begin()) + "_" +
+//              std::to_string(new_viewpoint_path.entries.size()) + ".png",
+//              draw_lines);
+//        }
+//      }
 
       const ViewpointEntryIndex idx = viewpoint_path->entries[*it].viewpoint_index;
       const ViewpointEntryIndex next_idx = viewpoint_path->entries[*next_it].viewpoint_index;
       const ViewpointMotion motion = getViewpointMotion(idx, next_idx);
-      for (auto it2 = motion.begin() + 1; it2 != motion.end() - 1; ++it2) {
+      for (auto it2 = motion.begin() + 1; it2 != motion.end(); ++it2) {
         const ViewpointEntryIndex new_idx = *it2;
         const ViewpointEntryIndex prev_idx = new_viewpoint_path.entries[new_viewpoint_path.order.back()].viewpoint_index;
         const ViewpointEntry& new_viewpoint_entry = viewpoint_entries_[new_idx];
-        ViewpointPathEntry new_path_entry;
-        new_path_entry.mvs_viewpoint = false;
-        new_path_entry.viewpoint_index = new_idx;
-        new_path_entry.viewpoint = new_viewpoint_entry.viewpoint;
-        new_viewpoint_path.order.push_back(new_viewpoint_path.entries.size());
-        new_viewpoint_path.entries.push_back(new_path_entry);
+        if (*it2 != next_idx) {
+          new_viewpoint_path.order.push_back(new_viewpoint_path.entries.size());
+          ViewpointPathEntry new_path_entry;
+          new_path_entry.mvs_viewpoint = false;
+          new_path_entry.viewpoint_index = new_idx;
+          new_path_entry.viewpoint = new_viewpoint_entry.viewpoint;
+          new_viewpoint_path.entries.push_back(new_path_entry);
+        }
         const SE3Motion& se3_motion = motion.se3Motions()[it2 - 1 - motion.begin()];
         ViewpointMotion sub_motion({ prev_idx, new_idx }, { se3_motion });
         addViewpointMotion(std::move(sub_motion));
         // TODO
-        if (options_.dump_stereo_matching_images) {
-          bool draw_lines = false;
-          const Viewpoint& viewpoint1 = new_viewpoint_path.entries[*(new_viewpoint_path.order.rbegin() + 1)].viewpoint;
-          const Viewpoint& viewpoint2 = new_viewpoint_path.entries[*(new_viewpoint_path.order.rbegin())].viewpoint;
-          dumpSparseMatching(
-              viewpoint1, viewpoint2,
-              "dump/sparse_points_augmented_" + std::to_string(it - viewpoint_path->order.begin()) + "_" +
-              std::to_string(new_viewpoint_path.entries.size()) + ".png",
-              draw_lines);
-          draw_lines = true;
-          dumpSparseMatching(
-              viewpoint1, viewpoint2,
-              "dump/sparse_matching_augmented_" + std::to_string(it - viewpoint_path->order.begin()) + "_" +
-              std::to_string(new_viewpoint_path.entries.size()) + ".png",
-              draw_lines);
-        }
+//        if (options_.dump_stereo_matching_images) {
+//          bool draw_lines = false;
+//          const Viewpoint& viewpoint1 = new_viewpoint_path.entries[*(new_viewpoint_path.order.rbegin() + 1)].viewpoint;
+//          const Viewpoint& viewpoint2 = new_viewpoint_path.entries[*(new_viewpoint_path.order.rbegin())].viewpoint;
+//          dumpSparseMatching(
+//              viewpoint1, viewpoint2,
+//              "dump/sparse_points_augmented_" + std::to_string(it - viewpoint_path->order.begin()) + "_" +
+//              std::to_string(new_viewpoint_path.entries.size()) + ".png",
+//              draw_lines);
+//          draw_lines = true;
+//          dumpSparseMatching(
+//              viewpoint1, viewpoint2,
+//              "dump/sparse_matching_augmented_" + std::to_string(it - viewpoint_path->order.begin()) + "_" +
+//              std::to_string(new_viewpoint_path.entries.size()) + ".png",
+//              draw_lines);
+//        }
       }
     }
   }
   *viewpoint_path = new_viewpoint_path;
-  std::vector<FloatType> sparse_matching_scores;
-  for (auto it = viewpoint_path->order.begin(); it != viewpoint_path->order.end(); ++it) {
-    auto next_it = it + 1;
-    if (next_it == viewpoint_path->order.end()) {
-      next_it = viewpoint_path->order.begin();
-    }
-    const std::size_t idx = *it;
-    const std::size_t next_idx = *next_it;
-    const Viewpoint& viewpoint = viewpoint_path->entries[idx].viewpoint;
-    const Viewpoint& next_viewpoint = viewpoint_path->entries[next_idx].viewpoint;
-    const FloatType sparse_matching_score = computeSparseMatchingScore(viewpoint, next_viewpoint);
-    sparse_matching_scores.push_back(sparse_matching_score);
-  }
-  std::cout << "New viewpoint path:" << std::endl;
-  for (auto it = viewpoint_path->order.begin(); it != viewpoint_path->order.end(); ++it) {
-    const std::size_t idx = *it;
-    const FloatType sparse_matching_score = sparse_matching_scores[it - viewpoint_path->order.begin()];
-    std::cout << "  i=" << idx << " entry=" << viewpoint_path->entries[idx].viewpoint_index
-        << " sparse matching score " << sparse_matching_score << std::endl;
-  }
+//  std::vector<FloatType> sparse_matching_scores;
+//  for (auto it = viewpoint_path->order.begin(); it != viewpoint_path->order.end(); ++it) {
+//    auto next_it = it + 1;
+//    if (next_it == viewpoint_path->order.end()) {
+//      next_it = viewpoint_path->order.begin();
+//    }
+//    const std::size_t idx = *it;
+//    const std::size_t next_idx = *next_it;
+//    const Viewpoint& viewpoint = viewpoint_path->entries[idx].viewpoint;
+//    const Viewpoint& next_viewpoint = viewpoint_path->entries[next_idx].viewpoint;
+//    const FloatType sparse_matching_score = computeSparseMatchingScore(viewpoint, next_viewpoint);
+//    sparse_matching_scores.push_back(sparse_matching_score);
+//  }
+//  std::cout << "New viewpoint path:" << std::endl;
+//  for (auto it = viewpoint_path->order.begin(); it != viewpoint_path->order.end(); ++it) {
+//    const std::size_t idx = *it;
+//    const FloatType sparse_matching_score = sparse_matching_scores[it - viewpoint_path->order.begin()];
+//    std::cout << "  i=" << idx << " entry=" << viewpoint_path->entries[idx].viewpoint_index
+//        << " sparse matching score " << sparse_matching_score << std::endl;
+//  }
   std::cout << "New viewpoint path has " << viewpoint_path->entries.size() << " viewpoints" << std::endl;
 
 //  const auto get_motion_pose_lambda = [](const ViewpointMotion& motion, const FloatType fraction_done) -> Pose {
 ////    const Pose& first_pose = motion.poses.front();
 ////    const Pose& last_pose = motion.poses.back();
-//    AIT_ASSERT(fraction_done <= 1);
+//    BH_ASSERT(fraction_done <= 1);
 //    FloatType accumulated_fraction = 0;
 //    for (auto next_it = motion.poses.begin() + 1; next_it != motion.poses.end(); ++next_it) {
 //      auto prev_it = next_it - 1;
@@ -430,7 +511,7 @@ void ViewpointPlanner::augmentedViewpointPathForSparseMatching(ViewpointPath* vi
 //      FloatType segment_fraction = segment_distance / motion.distance;
 //      if (accumulated_fraction + segment_fraction >= fraction_done) {
 //        const FloatType segment_factor = (fraction_done - accumulated_fraction) / segment_fraction;
-//        AIT_ASSERT(segment_factor <= 1);
+//        BH_ASSERT(segment_factor <= 1);
 //        const Vector3 translation = prev_it->translation() + segment_factor * (next_it->translation() - prev_it->translation());
 //        const Quaternion quaternion = prev_it->quaternion().slerp(segment_factor, next_it->quaternion());
 ////        const Quaternion quaternion = first_pose.quaternion().slerp(fraction_done, last_pose.quaternion());
@@ -489,7 +570,7 @@ void ViewpointPlanner::augmentedViewpointPathForSparseMatching(ViewpointPath* vi
 //      FloatType motion_done = 0;
 //      while (!isSparseMatchable(viewpoint_entry_tmp.viewpoint, viewpoint_entry_end.viewpoint)) {
 //        const FloatType matching_score = computeSparseMatchingScore(viewpoint_entry_tmp.viewpoint, viewpoint_entry_end.viewpoint);
-//        AIT_PRINT_VALUE(matching_score);
+//        BH_PRINT_VALUE(matching_score);
 //        bool tentative_viewpoint_matchable = false;
 //        FloatType tentative_motion_done = 1;
 //        ViewpointEntry tentative_viewpoint_entry;
@@ -504,7 +585,7 @@ void ViewpointPlanner::augmentedViewpointPathForSparseMatching(ViewpointPath* vi
 //              << ", increment_distance=" << increment_distance << ", increment_angular_distance=" << increment_angular_distance * 180 / M_PI << std::endl;
 //          tentative_viewpoint_matchable = isSparseMatchable(viewpoint_entry_tmp.viewpoint, tentative_viewpoint_entry.viewpoint);
 //          const FloatType matching_score = computeSparseMatchingScore(viewpoint_entry_tmp.viewpoint, tentative_viewpoint_entry.viewpoint);
-//          AIT_PRINT_VALUE(matching_score);
+//          BH_PRINT_VALUE(matching_score);
 //        }
 //        ViewpointEntryIndex prev_idx = new_viewpoint_path.entries[new_viewpoint_path.order.back()].viewpoint_index;
 //        ViewpointEntryIndex new_idx = viewpoint_entries_.size();
@@ -581,5 +662,213 @@ void ViewpointPlanner::augmentedViewpointPathForSparseMatching(ViewpointPath* vi
 //        << " sparse matching score " << sparse_matching_score << std::endl;
 //  }
 //  std::cout << "New viewpoint path has " << viewpoint_path->entries.size() << " viewpoints" << std::endl;
-//  AIT_ASSERT(viewpoint_path->order.size() == viewpoint_path->entries.size());
+//  BH_ASSERT(viewpoint_path->order.size() == viewpoint_path->entries.size());
+}
+
+void ViewpointPlanner::makeViewpointMotionsSparseMatchable(ViewpointPath* viewpoint_path) {
+  std::unique_lock<std::mutex> lock = acquireLock();
+  if (viewpoint_path->order.size() > 1) {
+    for (auto it = viewpoint_path->order.begin(); it != viewpoint_path->order.end(); ++it) {
+      auto next_it = it + 1;
+      if (next_it == viewpoint_path->order.end()) {
+        next_it = viewpoint_path->order.begin();
+      }
+      const ViewpointEntryIndex idx = viewpoint_path->entries[*it].viewpoint_index;
+      const ViewpointEntryIndex next_idx = viewpoint_path->entries[*next_it].viewpoint_index;
+      const ViewpointMotion motion = getViewpointMotion(idx, next_idx);
+      std::cout << "Ensuring sparse matchability from viewpoint " << idx << " to " << next_idx << std::endl;
+      ViewpointMotion new_motion = makeViewpointMotionSparseMatchable(motion);
+      addViewpointMotion(std::move(new_motion));
+    }
+  }
+  reportViewpointPathsStats();
+}
+
+ViewpointPlanner::ViewpointMotion ViewpointPlanner::makeViewpointMotionSparseMatchable(
+        const ViewpointMotion& motion) {
+  // Extend viewpoint motion with sparse matching viewpoints to fulfilll limits
+//  const auto interpolate_viewpoint_se3_motion_lambda = [](
+//          const Viewpoint &viewpoint1,
+//          const SE3Motion& se3_motion) -> Viewpoint {
+//    const Pose& pose1 = viewpoint1.pose();
+//    const FloatType interpolation_factor = FloatType(0.8);
+//    auto it = se3_motion.poses.begin();
+//    while (isWithinSparseMatchingLimits(pose1, *it)) {
+//      ++it;
+//    }
+//    const Viewpoint interpolated_viewpoint = Viewpoint(&interpolated_viewpoint.camera(), interpolated_pose);
+//    return interpolated_viewpoint;
+//  };
+//
+//  const auto get_sub_se3_motion_lambda = [](const SE3Motion& se3_motion, const Viewpoint& end_viewpoint) {
+//    SE3Motion sub_motion;
+//    for (auto it = se3_motion.poses.begin(); it != se3_motion.poses.end(); ++it) {
+//      sub_motion.poses.push_back(*it);
+//      sub_motion.
+//    }
+//    return sub_motion;
+//  };
+
+  const auto get_interpolated_pose_lambda = [&](const Pose& pose1, const Pose& pose2, const FloatType factor) -> Pose {
+    BH_ASSERT(factor >= 0);
+    BH_ASSERT(factor <= 1);
+    const Vector3 translation = pose1.translation() + factor * (pose2.translation() - pose1.translation());
+    const Quaternion quaternion = pose1.quaternion().slerp(factor, pose2.quaternion());
+    const Pose interpolated_pose = Pose::createFromImageToWorldTransformation(translation, quaternion);
+    return interpolated_pose;
+  };
+
+  const auto compute_segment_fraction_lambda = [&](const SE3Motion& se3_motion,
+                                                   const SE3Motion::PoseVector::const_iterator prev_it,
+                                                   const SE3Motion::PoseVector::const_iterator next_it) {
+    FloatType segment_fraction;
+    if (se3_motion.se3_distance > 0) {
+      const FloatType segment_distance = next_it->getDistanceTo(*prev_it);
+      BH_ASSERT(segment_distance > 0);
+      segment_fraction = segment_distance / se3_motion.se3_distance;
+    }
+    else {
+      segment_fraction = 1 / FloatType(se3_motion.poses.size() - 1);
+    }
+    return segment_fraction;
+  };
+
+  const auto get_max_matchable_fraction_lambda = [&](const SE3Motion& se3_motion) -> FloatType {
+    Viewpoint viewpoint1(&getVirtualCamera(), se3_motion.poses.front());
+    Viewpoint viewpoint2_tmp(&getVirtualCamera(), se3_motion.poses.back());
+    // Early break
+    if (isSparseMatchable2(viewpoint1, viewpoint2_tmp, options_.sparse_matching_voxels_conservative_iou_threshold)) {
+      return 1;
+    }
+    FloatType accumulated_fraction = 0;
+    for (auto next_it = se3_motion.poses.begin() + 1; next_it != se3_motion.poses.end(); ++next_it) {
+      auto prev_it = next_it - 1;
+      const FloatType segment_fraction = compute_segment_fraction_lambda(se3_motion, prev_it, next_it);
+      Viewpoint viewpoint2(&getVirtualCamera(), *next_it);
+      if (!isSparseMatchable2(viewpoint1, viewpoint2, options_.sparse_matching_voxels_conservative_iou_threshold)) {
+        // Perform binary search on SE3 motion segment to find matchable viewpoint
+        const Pose &pose1 = *prev_it;
+        const Pose &pose2 = *next_it;
+        FloatType lower_fraction = FloatType(0);
+        FloatType upper_fraction = FloatType(1);
+        while (upper_fraction - lower_fraction > FloatType(0.01)) {
+          const FloatType fraction = (lower_fraction + upper_fraction) / 2;
+          const Pose interpolated_pose = get_interpolated_pose_lambda(pose1, pose2, fraction);
+          const Viewpoint interpolated_viewpoint(&getVirtualCamera(), interpolated_pose);
+          if (isSparseMatchable2(viewpoint1, interpolated_viewpoint,
+                                 options_.sparse_matching_voxels_conservative_iou_threshold)) {
+            lower_fraction = fraction;
+          }
+          else {
+            upper_fraction = fraction;
+          }
+        }
+        if (lower_fraction == 0) {
+          std::cout << "WARNING: Could not find interpolated viewpoint between "
+                       << pose1 << " and " << pose2 << "  that is sparse matchable" << std::endl;
+        }
+        return accumulated_fraction + segment_fraction * lower_fraction;
+      }
+      accumulated_fraction += segment_fraction;
+    }
+    return 1;
+  };
+
+  const auto split_se3_motion_lambda = [&](const SE3Motion& se3_motion, const FloatType fraction)
+          -> std::pair<SE3Motion, SE3Motion> {
+    BH_ASSERT(fraction <= 1);
+    SE3Motion se3_motion1;
+    SE3Motion se3_motion2;
+    se3_motion1.poses.push_back(se3_motion.poses.front());
+    FloatType accumulated_fraction = 0;
+    bool split_happened = false;
+    for (auto next_it = se3_motion.poses.begin() + 1; next_it != se3_motion.poses.end(); ++next_it) {
+      auto prev_it = next_it - 1;
+      const FloatType segment_fraction = compute_segment_fraction_lambda(se3_motion, prev_it, next_it);
+      BH_ASSERT(segment_fraction >= -0.01);
+      BH_ASSERT(segment_fraction <= 1.01);
+      const FloatType segment_fraction_clamped = bh::clamp(segment_fraction);
+      const FloatType new_accumulated_fraction = accumulated_fraction + segment_fraction_clamped;
+      if (!split_happened && new_accumulated_fraction >= fraction) {
+        const FloatType segment_factor = (fraction - accumulated_fraction) / segment_fraction_clamped;
+        BH_ASSERT(segment_factor >= 0);
+        BH_ASSERT(segment_factor <= 1);
+        const Vector3 translation = prev_it->translation() + segment_factor * (next_it->translation() - prev_it->translation());
+        const Quaternion quaternion = prev_it->quaternion().slerp(segment_factor, next_it->quaternion());
+//        const Quaternion quaternion = first_pose.quaternion().slerp(fraction_done, last_pose.quaternion());
+        const Pose pose = Pose::createFromImageToWorldTransformation(translation, quaternion);
+        se3_motion1.poses.push_back(pose);
+        se3_motion2.poses.push_back(pose);
+        split_happened = true;
+        BH_ASSERT(se3_motion1.poses.back() == se3_motion2.poses.front());
+      }
+      if (!split_happened) {
+        se3_motion1.poses.push_back(*next_it);
+      }
+      else {
+        se3_motion2.poses.push_back(*next_it);
+      }
+      accumulated_fraction = new_accumulated_fraction;
+    }
+    se3_motion1.distance = fraction * se3_motion.distance;
+    se3_motion1.cost = fraction * se3_motion.cost;
+    se3_motion1.se3_distance = fraction * se3_motion.se3_distance;
+    se3_motion2.distance = se3_motion.distance - se3_motion1.distance;
+    se3_motion2.cost = se3_motion.cost - se3_motion1.cost;
+    se3_motion2.se3_distance = se3_motion.se3_distance * se3_motion1.se3_distance;
+    BH_ASSERT(se3_motion1.poses.back() == se3_motion2.poses.front());
+    BH_ASSERT(se3_motion.poses.front() == se3_motion1.poses.front());
+    BH_ASSERT(se3_motion.poses.back() == se3_motion2.poses.back());
+    return std::make_pair(se3_motion1, se3_motion2);
+  };
+
+  std::vector<ViewpointEntryIndex> new_motion_viewpoint_indices;
+  new_motion_viewpoint_indices.push_back(motion.viewpointIndices()[0]);
+  ViewpointMotion::SE3MotionVector new_motion_se3_motions;
+  for (size_t i = 1; i < motion.viewpointIndices().size(); ++i) {
+    const ViewpointEntryIndex next_viewpoint_index = motion.viewpointIndices()[i];
+    SE3Motion se3_motion = motion.se3Motions()[i - 1];
+    BH_ASSERT(se3_motion.poses.front() == viewpoint_entries_[motion.viewpointIndices()[i - 1]].viewpoint.pose());
+    BH_ASSERT(se3_motion.poses.back() == viewpoint_entries_[motion.viewpointIndices()[i]].viewpoint.pose());
+
+    while (true) {
+      const FloatType max_matchable_fraction = get_max_matchable_fraction_lambda(se3_motion);
+      BH_ASSERT(max_matchable_fraction >= 0);
+      BH_ASSERT(max_matchable_fraction <= 1);
+      if (max_matchable_fraction < 1) {
+        if (max_matchable_fraction == 0) {
+          std::cout << "WARNING: Could not find sparse matchable motion from viewpoint "
+                    << motion.fromIndex() << " to " << motion.toIndex()
+                    << " (i=" << i << ", in-between viewpoint=" << motion.viewpointIndices()[i] << ")" << std::endl;
+          return motion;
+        }
+        SE3Motion se3_motion1;
+        SE3Motion se3_motion2;
+        std::tie(se3_motion1, se3_motion2) = split_se3_motion_lambda(se3_motion, max_matchable_fraction);
+
+        // Sanity checks
+        const Viewpoint& prev_viewpoint = viewpoint_entries_[new_motion_viewpoint_indices.back()].viewpoint;
+        const Viewpoint& next_viewpoint = viewpoint_entries_[next_viewpoint_index].viewpoint;
+        BH_ASSERT(se3_motion1.poses.front() == prev_viewpoint.pose());
+        BH_ASSERT(se3_motion2.poses.back() == next_viewpoint.pose());
+        BH_ASSERT(se3_motion1.poses.back() == se3_motion2.poses.front());
+
+        ViewpointEntry split_motion_viewpoint_entry;
+        split_motion_viewpoint_entry.viewpoint = Viewpoint(&prev_viewpoint.camera(), se3_motion1.poses.back());
+        const bool ignore_viewpoint_count_grid = true;
+        const ViewpointEntryIndex split_motion_viewpoint_index = addViewpointEntryWithoutLock(
+                split_motion_viewpoint_entry, ignore_viewpoint_count_grid);
+        new_motion_viewpoint_indices.push_back(split_motion_viewpoint_index);
+        new_motion_se3_motions.push_back(se3_motion1);
+        se3_motion = se3_motion2;
+      }
+      else {
+        new_motion_viewpoint_indices.push_back(next_viewpoint_index);
+        new_motion_se3_motions.push_back(se3_motion);
+        break;
+      }
+    }
+  }
+  const ViewpointMotion new_motion(new_motion_viewpoint_indices, new_motion_se3_motions);
+  return new_motion;
 }

@@ -9,39 +9,41 @@
 #include "voxel_drawer.h"
 #include <array>
 #include <boost/assign.hpp>
-#include <ait/qt_utils.h>
+#include <bh/qt/utils.h>
 
-inline std::ostream& operator<<(std::ostream& out, const OGLVoxelData& voxel) {
+namespace rendering {
+
+inline std::ostream &operator<<(std::ostream &out, const OGLVoxelData &voxel) {
   out << voxel.vertex << " [" << voxel.size << "]";
   return out;
 }
 
 VoxelDrawer::VoxelDrawer()
-: num_voxels_(0),
-  voxel_position_tex_(QOpenGLTexture::TargetBuffer),
-  vertex_offset_normal_tex_(QOpenGLTexture::TargetBuffer),
-  color_tex_(QOpenGLTexture::TargetBuffer),
-  voxel_info_tex_(QOpenGLTexture::TargetBuffer),
-  voxel_size_factor_(1),
-  color_flags_(ColorFlags::Fixed),
-  weight_color_scale_(1),
-  weight_color_offset_(0),
-  observation_count_color_scale_(1),
-  observation_count_color_offset_(0),
-  information_color_scale_(1),
-  information_color_offset_(0),
-  alpha_override_(-1.0f),
-  light_position_(0, 0, 100),
-  min_occupancy_(std::numeric_limits<float>::lowest()),
-  max_occupancy_(std::numeric_limits<float>::max()),
-  min_observations_(std::numeric_limits<float>::lowest()),
-  max_observations_(std::numeric_limits<float>::max()),
-  min_voxel_size_(std::numeric_limits<float>::lowest()),
-  max_voxel_size_(std::numeric_limits<float>::max()),
-  min_weight_(std::numeric_limits<float>::lowest()),
-  max_weight_(std::numeric_limits<float>::max()),
-  min_information_(std::numeric_limits<float>::lowest()),
-  max_information_(std::numeric_limits<float>::max()) {}
+        : num_voxels_(0),
+          voxel_position_tex_(QOpenGLTexture::TargetBuffer),
+          vertex_offset_normal_tex_(QOpenGLTexture::TargetBuffer),
+          color_tex_(QOpenGLTexture::TargetBuffer),
+          voxel_info_tex_(QOpenGLTexture::TargetBuffer),
+          voxel_size_factor_(1),
+          color_flags_(ColorFlags::Fixed),
+          weight_color_scale_(1),
+          weight_color_offset_(0),
+          observation_count_color_scale_(1),
+          observation_count_color_offset_(0),
+          information_color_scale_(1),
+          information_color_offset_(0),
+          alpha_override_(-1.0f),
+          light_position_(0, 0, 100),
+          min_occupancy_(std::numeric_limits<float>::lowest()),
+          max_occupancy_(std::numeric_limits<float>::max()),
+          min_observations_(std::numeric_limits<float>::lowest()),
+          max_observations_(std::numeric_limits<float>::max()),
+          min_voxel_size_(std::numeric_limits<float>::lowest()),
+          max_voxel_size_(std::numeric_limits<float>::max()),
+          min_weight_(std::numeric_limits<float>::lowest()),
+          max_weight_(std::numeric_limits<float>::max()),
+          min_information_(std::numeric_limits<float>::lowest()),
+          max_information_(std::numeric_limits<float>::max()) {}
 
 VoxelDrawer::~VoxelDrawer() {
   clear();
@@ -101,6 +103,10 @@ void VoxelDrawer::init() {
   color_tex_.create();
   voxel_info_vbo_.create();
   voxel_info_tex_.create();
+}
+
+const QThread* VoxelDrawer::getVaoThread() const {
+  return vao_.thread();
 }
 
 size_t VoxelDrawer::numOfVoxels() const {
@@ -177,11 +183,11 @@ std::vector<OGLVertexData> VoxelDrawer::computeVertexOffsets() {
   vertex_offsets[kVerticesPerVoxel + 7] = +unit_z;
   vertex_offsets[kVerticesPerVoxel + 8] = +unit_z;
   // TOP 2
-  vertex_offsets[9]  = offset_corners[6];
+  vertex_offsets[9] = offset_corners[6];
   vertex_offsets[10] = offset_corners[5];
   vertex_offsets[11] = offset_corners[7];
   // TOP 2 normal
-  vertex_offsets[kVerticesPerVoxel + 9]  = +unit_z;
+  vertex_offsets[kVerticesPerVoxel + 9] = +unit_z;
   vertex_offsets[kVerticesPerVoxel + 10] = +unit_z;
   vertex_offsets[kVerticesPerVoxel + 11] = +unit_z;
 
@@ -256,7 +262,7 @@ std::vector<OGLVertexData> VoxelDrawer::computeVertexOffsets() {
   return vertex_offsets;
 }
 
-void VoxelDrawer::uploadColors(const std::vector<OGLColorData>& color_data) {
+void VoxelDrawer::uploadColors(const std::vector<OGLColorData> &color_data) {
   assert(color_data.size() == num_voxels_);
 
   // Create texture with voxel positions
@@ -265,8 +271,8 @@ void VoxelDrawer::uploadColors(const std::vector<OGLColorData>& color_data) {
   glBindBuffer(GL_TEXTURE_BUFFER, 0);
 }
 
-void VoxelDrawer::upload(const std::vector<OGLVoxelData>& voxel_data, const std::vector<OGLColorData>& color_data,
-    const std::vector<OGLVoxelInfoData>& info_data) {
+void VoxelDrawer::upload(const std::vector<OGLVoxelData> &voxel_data, const std::vector<OGLColorData> &color_data,
+                         const std::vector<OGLVoxelInfoData> &info_data) {
   num_voxels_ = voxel_data.size();
 
   program_.bind();
@@ -280,7 +286,8 @@ void VoxelDrawer::upload(const std::vector<OGLVoxelData>& voxel_data, const std:
   // Create texture with vertex offsets (same for each voxel)
   std::vector<OGLVertexData> vertex_offsets = computeVertexOffsets();
   glBindBuffer(GL_TEXTURE_BUFFER, vertex_offset_normal_vbo_.bufferId());
-  glBufferData(GL_TEXTURE_BUFFER, vertex_offsets.size() * sizeof(OGLVertexData), vertex_offsets.data(), GL_DYNAMIC_DRAW);
+  glBufferData(GL_TEXTURE_BUFFER, vertex_offsets.size() * sizeof(OGLVertexData), vertex_offsets.data(),
+               GL_DYNAMIC_DRAW);
   glBindBuffer(GL_TEXTURE_BUFFER, 0);
 
   // Create texture with voxel info
@@ -294,7 +301,11 @@ void VoxelDrawer::upload(const std::vector<OGLVoxelData>& voxel_data, const std:
   uploadColors(color_data);
 }
 
-void VoxelDrawer::draw(const QMatrix4x4& pvm_matrix, const QMatrix4x4& view_matrix, const QMatrix4x4& model_matrix) {
+void VoxelDrawer::draw(const QMatrix4x4 &pvm_matrix, const QMatrix4x4 &view_matrix, const QMatrix4x4 &model_matrix) {
+  draw(pvm_matrix, view_matrix * model_matrix);
+}
+
+void VoxelDrawer::draw(const QMatrix4x4 &pvm_matrix, const QMatrix4x4 &vm_matrix) {
   if (num_voxels_ == 0) {
     return;
   }
@@ -327,8 +338,7 @@ void VoxelDrawer::draw(const QMatrix4x4& pvm_matrix, const QMatrix4x4& view_matr
 
   // Set transformation matrices
   program_.setUniformValue("u_pvm_matrix", pvm_matrix);
-  program_.setUniformValue("u_view_matrix", view_matrix);
-  program_.setUniformValue("u_model_matrix", model_matrix);
+  program_.setUniformValue("u_vm_matrix", vm_matrix);
 
   // TEXTURE (Position)
   glActiveTexture(GL_TEXTURE0);
@@ -365,12 +375,13 @@ void VoxelDrawer::setVoxelSizeFactor(const float voxel_size_factor) {
 
 std::vector<std::pair<std::string, VoxelDrawer::ColorFlags>> VoxelDrawer::getAvailableColorFlags() {
   std::vector<std::pair<std::string, VoxelDrawer::ColorFlags>> modes = boost::assign::pair_list_of
-      ("Fixed", Fixed)
-      ("Weight", Weight)
-      ("Occupancy", Occupancy)
-      ("ObservationCount", ObservationCount)
-      ("UnknownLowAlpha", UnknownLowAlpha)
-      ("Information", Information);
+          ("Fixed", Fixed)
+          ("Weight", Weight)
+          ("Occupancy", Occupancy)
+          ("ObservationCount", ObservationCount)
+          ("UnknownLowAlpha", UnknownLowAlpha)
+          ("Information", Information)
+          ("Index", Index);
   return modes;
 }
 
@@ -391,22 +402,22 @@ void VoxelDrawer::resetAlpha() {
   alpha_override_ = -1.0f;
 }
 
-void VoxelDrawer::setLightPosition(const QVector3D& light_position) {
+void VoxelDrawer::setLightPosition(const QVector3D &light_position) {
   light_position_ = light_position;
 }
 
 void VoxelDrawer::setObservationsRange(const uint32_t low_observations, const uint32_t high_observations) {
-  observation_count_color_scale_ = 1 / (float)(high_observations - low_observations);
+  observation_count_color_scale_ = 1 / (float) (high_observations - low_observations);
   observation_count_color_offset_ = low_observations;
 }
 
 void VoxelDrawer::setWeightRange(const float low_weight, const float high_weight) {
-  weight_color_scale_ = 1 / (float)(high_weight - low_weight);
+  weight_color_scale_ = 1 / (float) (high_weight - low_weight);
   weight_color_offset_ = low_weight;
 }
 
 void VoxelDrawer::setInformationRange(const float low_information, const float high_information) {
-  information_color_scale_ = 1 / (float)(high_information - low_information);
+  information_color_scale_ = 1 / (float) (high_information - low_information);
   information_color_offset_ = low_information;
 }
 
@@ -448,4 +459,6 @@ void VoxelDrawer::setMinInformation(const float min_information) {
 
 void VoxelDrawer::setMaxInformation(const float max_information) {
   max_information_ = std::min(max_information, std::numeric_limits<float>::max());
+}
+
 }

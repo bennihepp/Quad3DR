@@ -177,7 +177,7 @@ private:
                              const FloatT t_min = 0,
                              const FloatT t_max = std::numeric_limits<FloatT>::max()) const;
 
-  bool _intersectRecursive(const size_t node_index,
+  void _intersectRecursive(const size_t node_index,
                            const size_t depth,
                            const RayDataType& ray,
                            const FloatT t_min,
@@ -188,7 +188,7 @@ private:
                                                const FloatT t_min = 0,
                                                const FloatT t_max = std::numeric_limits<FloatT>::max()) const;
 
-  bool _intersectRangeRecursive(const size_t node_index,
+  void _intersectRangeRecursive(const size_t node_index,
                                 const size_t depth,
                                 const RayDataType& ray,
                                 const FloatT t_min,

@@ -191,54 +191,39 @@ auto AABBTree<ColliderT, FloatT>::_intersect(
   const size_t root_index = 0;
   const size_t depth = 0;
   RayIntersection cri_result;
-  const bool does_intersect = _intersectRecursive(root_index, depth, ray, t_min, t_max, &cri_result);
-  if (does_intersect) {
-    BH_ASSERT(cri_result.doesIntersect());
-  }
+  _intersectRecursive(root_index, depth, ray, t_min, t_max, &cri_result);
   return cri_result;
 }
 
 template <typename ColliderT, typename FloatT>
-auto AABBTree<ColliderT, FloatT>::_intersectRecursive(
+void AABBTree<ColliderT, FloatT>::_intersectRecursive(
         const size_t node_index,
         const size_t depth,
         const RayDataType& ray,
         const FloatT t_min,
         const FloatT t_max,
-        RayIntersection* cri_result) const -> bool {
+        RayIntersection* cri_result) const {
   const Node& node = getNode(node_index);
   const SimpleRayIntersection ri = node.boundingBox().intersect(ray, t_min, t_max);
-  if (!ri.doesIntersect()) {
-    return false;
+  // Early break
+  if (!ri.doesIntersect() || ri.rayT() > cri_result->rayT()) {
+    return;
   }
 
   if (node.isLeaf()) {
     const SimpleRayIntersection ri = node.collider().intersect(ray, t_min, t_max);
     if (ri.doesIntersect() && ri.rayT() <= cri_result->rayT()) {
       *cri_result = RayIntersection(node_index, depth, ri.rayT());
-      return true;
     }
-    else {
-      return false;
-    }
+    return;
   }
 
-  bool does_intersect = false;
   if (node.hasLeftChild()) {
-    const bool child_does_intersect = _intersectRecursive(
-            node.leftChildIndex(), depth + 1, ray, t_min, t_max, cri_result);
-    if (child_does_intersect) {
-      does_intersect = true;
-    }
+    _intersectRecursive(node.leftChildIndex(), depth + 1, ray, t_min, t_max, cri_result);
   }
   if (node.hasRightChild()) {
-    const bool child_does_intersect = _intersectRecursive(
-            node.rightChildIndex(), depth + 1, ray, t_min, t_max, cri_result);
-    if (child_does_intersect) {
-      does_intersect = true;
-    }
+    _intersectRecursive(node.rightChildIndex(), depth + 1, ray, t_min, t_max, cri_result);
   }
-  return does_intersect;
 }
 
 template <typename ColliderT, typename FloatT>
@@ -271,15 +256,16 @@ auto AABBTree<ColliderT, FloatT>::_intersectRange(
 }
 
 template <typename ColliderT, typename FloatT>
-auto AABBTree<ColliderT, FloatT>::_intersectRangeRecursive(
+void AABBTree<ColliderT, FloatT>::_intersectRangeRecursive(
         const size_t node_index,
         const size_t depth,
         const RayDataType& ray,
         const FloatT t_min,
         const FloatT t_max,
-        std::vector<RayIntersection>* cri_results) const -> bool {
+        std::vector<RayIntersection>* cri_results) const {
   const Node& node = getNode(node_index);
   const SimpleRayIntersection ri = node.boundingBox().intersect(ray, t_min, t_max);
+  // Early break
   if (!ri.doesIntersect()) {
     return;
   }

@@ -75,19 +75,19 @@ namespace bh {
 
 class Exception : public std::exception {
 public:
-    Exception(const std::string& what)
-    : std::exception() {
-        what_ = what;
-    }
+  explicit Exception(const std::string& what)
+      : std::exception() {
+      what_ = what;
+  }
 
-    Exception(const char* what)
-    : std::exception() {
-        what_ = std::string(what);
-    }
+  explicit Exception(const char* what)
+      : std::exception() {
+      what_ = std::string(what);
+  }
 
-    const char* what() const NOEXCEPT {
-        return what_.c_str();
-    }
+  const char* what() const NOEXCEPT {
+      return what_.c_str();
+  }
 
 private:
     std::string what_;
@@ -95,13 +95,11 @@ private:
 
 class Error : public Exception {
 public:
-    Error(const std::string& what)
-    : Exception(what) {
-    }
+  explicit Error(const std::string& what)
+    : Exception(what) {}
 
-    Error(const char* what)
-    : Exception(what) {
-    }
+  explicit Error(const char* what)
+    : Exception(what) {}
 };
 
 void debugBreakFunction();

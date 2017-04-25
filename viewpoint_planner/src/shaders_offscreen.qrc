@@ -6,5 +6,9 @@
         <file>shaders/triangles_normals.v.glsl</file>
         <file>shaders/triangles_depth.f.glsl</file>
         <file>shaders/triangles_depth.v.glsl</file>
+        <file>shaders/triangles_indices.f.glsl</file>
+        <file>shaders/triangles_indices.v.glsl</file>
+        <file>shaders/voxels.v.glsl</file>
+        <file>shaders/voxels.f.glsl</file>
     </qresource>
 </RCC>

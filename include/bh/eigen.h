@@ -103,6 +103,7 @@ BH_EIGEN_SPECIALIZE(Eigen::Matrix3x4d)
 BH_EIGEN_SPECIALIZE(Eigen::Quaternionf)
 BH_EIGEN_SPECIALIZE(Eigen::Quaterniond)
 
+#define EIGEN_ALIGNED_VECTOR(T) std::vector<T, Eigen::aligned_allocator<T>>;
 #define EIGEN_ALIGNED_UNORDERED_MAP(Key, T) std::unordered_map<Key, T, std::hash<Key>, std::equal_to<Key>, \
     Eigen::aligned_allocator<std::pair<Key, T>>>;
 #define EIGEN_ALIGNED_UNORDERED_MAP2(Key, T, Hash) std::unordered_map<Key, T, Hash, std::equal_to<Key>, \
@@ -110,12 +111,34 @@ BH_EIGEN_SPECIALIZE(Eigen::Quaterniond)
 #define EIGEN_ALIGNED_UNORDERED_MAP3(Key, T, Hash, EqualTo) std::unordered_map<Key, T, Hash, EqualTo, \
     Eigen::aligned_allocator<std::pair<Key, T>>>;
 
-#define USE_FIXED_EIGEN_TYPES(FloatType) \
+#define BH_USE_FIXED_EIGEN_TYPES(FloatType) \
     using Vector2 = Eigen::Matrix<FloatType, 2, 1>; \
     using Vector3 = Eigen::Matrix<FloatType, 3, 1>; \
     using Vector4 = Eigen::Matrix<FloatType, 4, 1>; \
+    using ColumnVector2 = Eigen::Matrix<FloatType, 1, 2>; \
+    using ColumnVector3 = Eigen::Matrix<FloatType, 1, 3>; \
+    using ColumnVector4 = Eigen::Matrix<FloatType, 1, 4>; \
     using Matrix4x4 = Eigen::Matrix<FloatType, 4, 4>; \
     using Matrix3x3 = Eigen::Matrix<FloatType, 3, 3>; \
+    using Matrix2x2 = Eigen::Matrix<FloatType, 2, 2>; \
     using Matrix3x4 = Eigen::Matrix<FloatType, 3, 4>; \
+    using MatrixDynamic = Eigen::Matrix<FloatType, Eigen::Dynamic, Eigen::Dynamic>; \
+    using VectorDynamic = Eigen::Matrix<FloatType, Eigen::Dynamic, 1>; \
+    using ColumnVectorDynamic = Eigen::Matrix<FloatType, 1, Eigen::Dynamic>; \
     using Quaternion = Eigen::Quaternion<FloatType>; \
     using AngleAxis = Eigen::AngleAxis<FloatType>;
+
+#define USE_FIXED_EIGEN_TYPES(FloatType) BH_USE_FIXED_EIGEN_TYPES(FloatType);
+
+namespace bh {
+
+template<typename FloatT>
+class EigenTypes {
+public:
+  EigenTypes() = delete;
+
+  using FloatType = FloatT;
+  USE_FIXED_EIGEN_TYPES(FloatT);
+};
+
+}

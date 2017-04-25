@@ -1,8 +1,7 @@
 #version 330
 
 // UNIFORMS
-uniform mat4 u_view_matrix;
-uniform mat4 u_model_matrix;
+uniform mat4 u_vm_matrix;
 uniform mat4 u_pvm_matrix;
 
 uniform float u_voxel_size_factor;
@@ -43,6 +42,7 @@ out vec3 v_vertex_normal_cameraspace;
 //out vec3 v_light_direction;
 //out vec3 v_light_position;
 flat out int v_keep_flag;
+flat out int v_do_shading;
 
 const int VERTICES_PER_VOXEL = 12 * 3;
 
@@ -53,6 +53,7 @@ const uint COLOR_OCCUPANCY = 1u << 4u;
 const uint COLOR_OBSERVATION_COUNT = 1u << 5u;
 const uint COLOR_UNKNOWN_LOW_ALPHA = 1u << 6u;
 const uint COLOR_INFORMATION = 1u << 7u;
+const uint COLOR_INDEX = 1u << 8u;
 
 void computeVoxelOffsetIndex(out int voxel_index, out int offset_index) {
   voxel_index = gl_VertexID / VERTICES_PER_VOXEL;
@@ -93,8 +94,20 @@ vec4 transformVectorToCameraspace(mat4 view_model_matrix, vec4 vector) {
   return vector_cameraspace;
 }
 
+vec4 indexToColor(int index) {
+    int r = (index & 0x000000FF) >> 0;
+    int g = (index & 0x0000FF00) >> 8;
+    int b = (index & 0x00FF0000) >> 16;
+	vec4 color;
+    color.r = r / 255.0;
+    color.g = g / 255.0;
+    color.b = b / 255.0;
+	color.a = 1;
+	return color;
+}
+
 void main(void) {
-  mat4 view_model_matrix = u_view_matrix * u_model_matrix;
+  mat4 view_model_matrix = u_vm_matrix;
 
   // Retrieve voxel and offset index
   int voxel_index;
@@ -136,6 +149,7 @@ void main(void) {
   gl_Position = u_pvm_matrix * vertex_position;
 
   v_color = computeVoxelColor(voxel_index);
+  v_do_shading = 1;
 
   // Apply color flags
   if ((u_color_mode & COLOR_WEIGHT) != 0u) {
@@ -160,6 +174,11 @@ void main(void) {
     if (observation_count == 0) {
       v_color = vec4(1, 1, 0, 0.2);
     }
+  }
+  // TODO: Coloring of unknown voxels. Make configurable with uniforms.
+  if ((u_color_mode & COLOR_INDEX) != 0u) {
+    v_color = indexToColor(voxel_index);
+    v_do_shading = 0;
   }
   else {
     v_color.a = u_alpha_override >= 0 ? u_alpha_override : v_color.a;

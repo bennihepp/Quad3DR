@@ -17,23 +17,23 @@
 #include <QOpenGLFunctions_3_3_Core>
 #include "point_drawer.h"
 
-struct OGLVoxelData
-{
-  OGLVoxelData()
-  : size(1) {}
+namespace rendering {
 
-  OGLVoxelData(const OGLVertexData& vertex, float size)
-  : vertex(vertex), size(size) {}
+struct OGLVoxelData {
+  OGLVoxelData()
+      : size(1) {}
+
+  OGLVoxelData(const OGLVertexData &vertex, float size)
+      : vertex(vertex), size(size) {}
 
   OGLVertexData vertex;
   float size;
 };
 
-struct OGLVoxelInfoData
-{
+struct OGLVoxelInfoData {
   OGLVoxelInfoData(float occupancy, float observation_count, float weight, float information = 0.0f)
-  : occupancy(occupancy), observation_count(observation_count),
-    weight(weight), information(information) {}
+      : occupancy(occupancy), observation_count(observation_count),
+        weight(weight), information(information) {}
 
   float occupancy;
   float observation_count;
@@ -41,10 +41,9 @@ struct OGLVoxelInfoData
   float information;
 };
 
-std::ostream& operator<<(std::ostream& out, const OGLVoxelData& voxel);
+std::ostream &operator<<(std::ostream &out, const OGLVoxelData &voxel);
 
-class VoxelDrawer : protected QOpenGLFunctions_3_3_Core
-{
+class VoxelDrawer : protected QOpenGLFunctions_3_3_Core {
 public:
   const unsigned int kVerticesPerVoxel = 12 * 3;
 
@@ -55,6 +54,7 @@ public:
     ObservationCount = 1 << 5,
     UnknownLowAlpha = 1 << 6,
     Information = 1 << 7,
+    Index = 1 << 8,
   };
 
   VoxelDrawer();
@@ -65,16 +65,20 @@ public:
 
   void init();
 
+  const QThread* getVaoThread() const;
+
   size_t numOfVoxels() const;
 
   std::vector<OGLVertexData> computeVertexOffsets();
 
-  void uploadColors(const std::vector<OGLColorData>& color_data);
+  void uploadColors(const std::vector<OGLColorData> &color_data);
 
-  void upload(const std::vector<OGLVoxelData>& voxel_data, const std::vector<OGLColorData>& color_data,
-      const std::vector<OGLVoxelInfoData>& info_data);
+  void upload(const std::vector<OGLVoxelData> &voxel_data, const std::vector<OGLColorData> &color_data,
+              const std::vector<OGLVoxelInfoData> &info_data);
 
-  void draw(const QMatrix4x4& pvm_matrix, const QMatrix4x4& view_matrix, const QMatrix4x4& model_matrix);
+  void draw(const QMatrix4x4 &pvm_matrix, const QMatrix4x4 &vm_matrix);
+
+  void draw(const QMatrix4x4 &pvm_matrix, const QMatrix4x4 &view_matrix, const QMatrix4x4 &model_matrix);
 
   void setVoxelSizeFactor(const float voxel_size_factor);
 
@@ -88,29 +92,36 @@ public:
 
   void resetAlpha();
 
-  void setLightPosition(const QVector3D& light_position);
+  void setLightPosition(const QVector3D &light_position);
 
   // Ranges for color computation (has to be set from outside because multiple VoxelDrawers could be displaying different ranges)
 
   void setObservationsRange(const uint32_t low_observations, const uint32_t high_observations);
+
   void setWeightRange(const float low_weight, const float high_weight);
+
   void setInformationRange(const float low_information, const float high_information);
 
   // Voxel display filters
 
   void setMinOccupancy(const float min_occupancy);
+
   void setMaxOccupancy(const float max_occupancy);
 
   void setMinObservations(const uint32_t min_observations);
+
   void setMaxObservations(const uint32_t max_observations);
 
   void setMinVoxelSize(const float min_voxel_size);
+
   void setMaxVoxelSize(const float max_voxel_size);
 
   void setMinWeight(const float min_weight);
+
   void setMaxWeight(const float max_weight);
 
   void setMinInformation(const float min_information);
+
   void setMaxInformation(const float max_information);
 
 private:
@@ -147,3 +158,5 @@ private:
   float min_information_;
   float max_information_;
 };
+
+}

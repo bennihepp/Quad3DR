@@ -37,7 +37,7 @@ public:
   ContinuousGrid3D(const BoundingBoxType& grid_bbox, const size_t dim_x, const size_t dim_y, const size_t dim_z)
   : Base(dim_x, dim_y, dim_z), grid_bbox_(grid_bbox) {
     const Vector3 dim_vec = this->getDimensions().template cast<CoordType>();
-    grid_increment_ = grid_bbox_.getExtent().array() / (dim_vec.array() + 1);
+    grid_increment_ = grid_bbox_.getExtent().array() / dim_vec.array();
   }
 
   const BoundingBoxType& getGridBbox() const {
@@ -58,13 +58,13 @@ public:
 
   Vector3s getGridIndices(const Vector3& xyz) const {
     Vector3 indices_float = (xyz - getGridOrigin()).cwiseQuotient(getGridIncrement());
-    Vector3s indices(indices_float.array().round().template cast<size_t>());
+    Vector3s indices(indices_float.array().floor().template cast<size_t>());
     for (int i = 0; i < indices.rows(); ++i) {
       if (indices(i) < 0 && xyz(i) >= grid_bbox_.getMinimum(i)) {
         indices(i) = 0;
       }
       if (indices(i) >= this->getDimensions()(i) && xyz(i) <= grid_bbox_.getMaximum(i)) {
-        indices(i) = this->getDimensions()(i);
+        indices(i) = this->getDimensions()(i) - 1;
       }
     }
     return indices;

@@ -10,16 +10,17 @@
 #include <iostream>
 #include <sstream>
 #include <unordered_map>
-#include <ait/boost.h>
+#include <bh/boost.h>
 #include <boost/functional.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/filesystem.hpp>
-#include <ait/eigen.h>
-#include <ait/eigen_utils.h>
-#include <ait/common.h>
-#include <ait/filesystem.h>
-#include <ait/utilities.h>
-#include <ait/string_utils.h>
+#include <bh/eigen.h>
+#include <bh/eigen_utils.h>
+#include <bh/common.h>
+#include <bh/filesystem.h>
+#include <bh/utilities.h>
+#include <bh/string_utils.h>
+#include <bh/vision/cameras.h>
 
 // Representations for a sparse reconstruction from Colmap.
 // File input adapted from Colmap.
@@ -47,6 +48,21 @@ using CameraMapType = SparseReconstruction::CameraMapType;
 using ImageMapType = SparseReconstruction::ImageMapType;
 using Point3DMapType = SparseReconstruction::Point3DMapType;
 
+auto PinholeCamera::createSimple(
+        const size_t width, const size_t height, const FloatType focal_length) -> PinholeCamera {
+  return createSimple(width, height, focal_length, focal_length);
+}
+
+auto PinholeCamera::createSimple(
+        const size_t width, const size_t height,
+        const FloatType focal_length_x, const FloatType focal_length_y) -> PinholeCamera {
+  CameraMatrix intrinsics = CameraMatrix::Identity();
+  intrinsics(0, 0) = focal_length_x;
+  intrinsics(1, 1) = focal_length_y;
+  PinholeCamera camera(width, height, intrinsics);
+  return camera;
+}
+
 PinholeCamera::PinholeCamera()
 : width_(0), height_(0), intrinsics_(CameraMatrix::Zero()) {}
 
@@ -58,6 +74,23 @@ bool PinholeCamera::isValid() const {
       && intrinsics_(0, 0) > 0
       && intrinsics_(1, 1) > 0
       && intrinsics_(2, 2) > 0;
+}
+
+bool PinholeCamera::operator==(const PinholeCamera& other) const {
+  return width() == other.width()
+          && height() == other.height()
+          && intrinsics() == other.intrinsics();
+}
+
+bool PinholeCamera::operator!=(const PinholeCamera& other) const {
+  return !(*this == other);
+}
+
+PinholeCamera PinholeCamera::getScaledCamera(const FloatType scale_factor) const {
+  const size_t scaled_width = (size_t)(width() * scale_factor);
+  const size_t scaled_height = (size_t)(height() * scale_factor);
+  const CameraMatrix scaled_intrinsics = bh::vision::getScaledIntrinsics(intrinsics(), scale_factor);
+  return PinholeCamera(scaled_width, scaled_height, scaled_intrinsics);
 }
 
 size_t PinholeCamera::width() const {
@@ -179,7 +212,7 @@ CameraId PinholeCameraColmap::id() const {
 
 CameraMatrix PinholeCameraColmap::makeIntrinsicsFromParameters(const std::vector<FloatType>& params) {
   if (params.size() != 4) {
-    throw AIT_EXCEPTION(std::string("Expected 4 parameters but got ") + std::to_string(params.size()));
+    throw BH_EXCEPTION(std::string("Expected 4 parameters but got ") + std::to_string(params.size()));
   }
   CameraMatrix intrinsics;
   intrinsics.setIdentity();
@@ -264,11 +297,11 @@ void SparseReconstruction::read(const std::string& path, const bool read_sfm_gps
   cameras_.clear();
   images_.clear();
   points3D_.clear();
-  readCameras(ait::joinPaths(path, "cameras.txt"));
-  readImages(ait::joinPaths(path, "images.txt"));
-  readPoints3D(ait::joinPaths(path, "points3D.txt"));
+  readCameras(bh::joinPaths(path, "cameras.txt"));
+  readImages(bh::joinPaths(path, "images.txt"));
+  readPoints3D(bh::joinPaths(path, "points3D.txt"));
   if (read_sfm_gps_transformation) {
-    readGpsTransformation(ait::joinPaths(path, "gps_transformation.txt"));
+    readGpsTransformation(bh::joinPaths(path, "gps_transformation.txt"));
     has_sfm_gps_transformation_ = true;
   }
 }
@@ -349,7 +382,7 @@ void SparseReconstruction::computePoint3DNormalAndStatistics(Point3D& point) con
 void SparseReconstruction::readCameras(std::string filename) {
   std::ifstream in(filename);
   if (!in) {
-    throw AIT_EXCEPTION("Unable to open cameras file");
+    throw BH_EXCEPTION("Unable to open cameras file");
   }
   readCameras(in);
 }
@@ -359,7 +392,7 @@ void SparseReconstruction::readCameras(std::istream& in) {
   std::string item;
 
   while (std::getline(in, line)) {
-    ait::trim(line);
+    bh::trim(line);
 
     if (line.empty() || line[0] == '#') {
       continue;
@@ -369,31 +402,31 @@ void SparseReconstruction::readCameras(std::istream& in) {
 
     // ID
     std::getline(line_stream, item, ' ');
-    ait::trim(item);
+    bh::trim(item);
     CameraId camera_id = boost::lexical_cast<CameraId>(item);
 
     // MODEL
     std::getline(line_stream, item, ' ');
-    ait::trim(item);
+    bh::trim(item);
     if (item != "PINHOLE") {
-      throw AIT_EXCEPTION(std::string("Unsupported camera model: ") + item);
+      throw BH_EXCEPTION(std::string("Unsupported camera model: ") + item);
     }
 
     // WIDTH
     std::getline(line_stream, item, ' ');
-    ait::trim(item);
+    bh::trim(item);
     size_t width = boost::lexical_cast<size_t>(item);
 
     // HEIGHT
     std::getline(line_stream, item, ' ');
-    ait::trim(item);
+    bh::trim(item);
     size_t height = boost::lexical_cast<size_t>(item);
 
     // PARAMS
     std::vector<FloatType> params;
     while (!line_stream.eof()) {
       std::getline(line_stream, item, ' ');
-      ait::trim(item);
+      bh::trim(item);
       params.push_back(boost::lexical_cast<FloatType>(item));
     }
 
@@ -406,7 +439,7 @@ void SparseReconstruction::readCameras(std::istream& in) {
 void SparseReconstruction::readImages(std::string filename) {
   std::ifstream in(filename);
   if (!in) {
-    throw AIT_EXCEPTION("Unable to open images file");
+    throw BH_EXCEPTION("Unable to open images file");
   }
   readImages(in);
 }
@@ -416,7 +449,7 @@ void SparseReconstruction::readImages(std::istream& in) {
   std::string item;
 
   while (std::getline(in, line)) {
-    ait::trim(line);
+    bh::trim(line);
 
     if (line.empty() || line[0] == '#') {
       continue;
@@ -468,7 +501,7 @@ void SparseReconstruction::readImages(std::istream& in) {
 
     // POINTS2D
     std::getline(in, line);
-    ait::trim(line);
+    bh::trim(line);
     std::stringstream line_stream2(line);
 
     std::vector<Vector2> points;
@@ -506,7 +539,7 @@ void SparseReconstruction::readImages(std::istream& in) {
 void SparseReconstruction::readPoints3D(std::string filename) {
   std::ifstream in(filename);
   if (!in) {
-    throw AIT_EXCEPTION("Unable to open points3D file");
+    throw BH_EXCEPTION("Unable to open points3D file");
   }
   readPoints3D(in);
 }
@@ -516,7 +549,7 @@ void SparseReconstruction::readPoints3D(std::istream& in) {
   std::string item;
 
   while (std::getline(in, line)) {
-    ait::trim(line);
+    bh::trim(line);
 
     if (line.empty() || line[0] == '#') {
       continue;
@@ -559,7 +592,7 @@ void SparseReconstruction::readPoints3D(std::istream& in) {
       Point3D::TrackEntry track_entry;
 
       std::getline(line_stream, item, ' ');
-      ait::trim(item);
+      bh::trim(item);
       if (item.empty()) {
         break;
       }
@@ -580,7 +613,7 @@ void SparseReconstruction::readPoints3D(std::istream& in) {
 void SparseReconstruction::readGpsTransformation(std::string filename) {
   std::ifstream in(filename);
   if (!in) {
-    throw AIT_EXCEPTION("Unable to open GPS transformation file");
+    throw BH_EXCEPTION("Unable to open GPS transformation file");
   }
   readGpsTransformation(in);
 }
@@ -590,10 +623,10 @@ void SparseReconstruction::readGpsTransformation(std::istream& in) {
   std::string item;
 
   std::getline(in, line);
-  ait::trim(line);
+  bh::trim(line);
   while (line.empty() || line[0] == '#') {
     std::getline(in, line);
-    ait::trim(line);
+    bh::trim(line);
   }
 
   {
@@ -608,7 +641,7 @@ void SparseReconstruction::readGpsTransformation(std::istream& in) {
   }
 
   std::getline(in, line);
-  ait::trim(line);
+  bh::trim(line);
   {
     // SFM centroid factors
     std::stringstream line_stream1(line);
@@ -619,7 +652,7 @@ void SparseReconstruction::readGpsTransformation(std::istream& in) {
   }
 
   std::getline(in, line);
-  ait::trim(line);
+  bh::trim(line);
   {
     // GPS centroid factors
     std::stringstream line_stream1(line);
@@ -630,7 +663,7 @@ void SparseReconstruction::readGpsTransformation(std::istream& in) {
   }
 
   std::getline(in, line);
-  ait::trim(line);
+  bh::trim(line);
   {
     // SFM to GPS quaternion
     std::stringstream line_stream1(line);
@@ -646,7 +679,7 @@ void SparseReconstruction::readGpsTransformation(std::istream& in) {
   }
 
   std::getline(in, line);
-  ait::trim(line);
+  bh::trim(line);
   {
     // GPS reference coordinates
     std::stringstream line_stream1(line);

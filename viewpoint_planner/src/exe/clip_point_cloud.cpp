@@ -10,17 +10,17 @@
 #include <memory>
 #include <csignal>
 
-#include <ait/boost.h>
+#include <bh/boost.h>
 #include <boost/program_options.hpp>
 #include <boost/filesystem.hpp>
 
-#include <ait/common.h>
-#include <ait/eigen.h>
-#include <ait/utilities.h>
-#include <ait/options.h>
-#include <ait/math/geometry.h>
+#include <bh/common.h>
+#include <bh/eigen.h>
+#include <bh/utilities.h>
+#include <bh/config_options.h>
+#include <bh/math/geometry.h>
 
-#include <ait/mLib.h>
+#include <bh/mLib/mLib.h>
 
 using std::cout;
 using std::cerr;
@@ -30,19 +30,19 @@ using std::string;
 using FloatType = float;
 USE_FIXED_EIGEN_TYPES(FloatType)
 
-using BoundingBoxType = ait::BoundingBox3D<FloatType>;
+using BoundingBoxType = bh::BoundingBox3D<FloatType>;
 using PointCloudType = ml::PointCloud<FloatType>;
 using PointCloudIOType = ml::PointCloudIO<FloatType>;
 
 class ClipPointCloudCmdline {
 public:
 
-  class Options : public ait::ConfigOptions {
+  class Options : public bh::ConfigOptions {
   public:
     static const string kPrefix;
 
     Options()
-    : ait::ConfigOptions(kPrefix) {
+    : bh::ConfigOptions(kPrefix) {
       addOption<FloatType>("clip_bbox_min_x");
       addOption<FloatType>("clip_bbox_min_y");
       addOption<FloatType>("clip_bbox_min_z");
@@ -54,15 +54,15 @@ public:
     ~Options() override {}
   };
 
-  static std::map<string, std::unique_ptr<ait::ConfigOptions>> getConfigOptions() {
-    std::map<string, std::unique_ptr<ait::ConfigOptions>> config_options;
+  static std::map<string, std::unique_ptr<bh::ConfigOptions>> getConfigOptions() {
+    std::map<string, std::unique_ptr<bh::ConfigOptions>> config_options;
     config_options.emplace(std::piecewise_construct,
         std::forward_as_tuple(Options::kPrefix),
-        std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new Options())));
+        std::forward_as_tuple(static_cast<bh::ConfigOptions*>(new Options())));
     return config_options;
   }
 
-  ClipPointCloudCmdline(const std::map<string, std::unique_ptr<ait::ConfigOptions>>& config_options,
+  ClipPointCloudCmdline(const std::map<string, std::unique_ptr<bh::ConfigOptions>>& config_options,
       const string& in_point_cloud_filename, const string& out_point_cloud_filename)
   : options_(*dynamic_cast<Options*>(config_options.at(Options::kPrefix).get())),
     in_point_cloud_filename_(in_point_cloud_filename),
@@ -115,7 +115,7 @@ private:
 const string ClipPointCloudCmdline::Options::kPrefix = "clip_point_cloud";
 
 std::pair<bool, boost::program_options::variables_map> processOptions(
-    int argc, char** argv, std::map<string, std::unique_ptr<ait::ConfigOptions>>& config_options)
+    int argc, char** argv, std::map<string, std::unique_ptr<bh::ConfigOptions>>& config_options)
 {
   namespace po = boost::program_options;
 
@@ -144,7 +144,7 @@ std::pair<bool, boost::program_options::variables_map> processOptions(
     }
     std::ifstream config_in(vm["config-file"].as<string>());
     if (!config_in) {
-      throw AIT_EXCEPTION("Unable to open config file");
+      throw BH_EXCEPTION("Unable to open config file");
     }
     else {
       po::store(parse_config_file(config_in, config_file_options), vm);
@@ -182,7 +182,7 @@ void disableCtrlCHandler() {
 
 int main(int argc, char** argv)
 {
-  std::map<std::string, std::unique_ptr<ait::ConfigOptions>> config_options =
+  std::map<std::string, std::unique_ptr<bh::ConfigOptions>> config_options =
       ClipPointCloudCmdline::getConfigOptions();
 
   // Handle command line and config file

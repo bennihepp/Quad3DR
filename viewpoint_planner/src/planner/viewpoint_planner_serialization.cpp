@@ -9,8 +9,6 @@
 #include "viewpoint_planner.h"
 #include "viewpoint_planner_serialization.h"
 
-#pragma GCC optimize("O0")
-
 void ViewpointPlanner::saveViewpointGraph(const std::string& filename) const {
   std::cout << "Writing viewpoint graph to " << filename << std::endl;
   std::cout << "Graph has " << viewpoint_graph_.numVertices() << " viewpoints"
@@ -32,7 +30,7 @@ void ViewpointPlanner::loadViewpointGraph(const std::string& filename) {
   boost::archive::binary_iarchive ia(ifs);
   std::size_t new_num_real_viewpoints;
   ia >> new_num_real_viewpoints;
-  AIT_ASSERT(new_num_real_viewpoints == num_real_viewpoints_);
+  BH_ASSERT(new_num_real_viewpoints == num_real_viewpoints_);
   ViewpointEntryLoader vel(&viewpoint_entries_, &data_->occupied_bvh_, &virtual_camera_);
   ia >> vel;
   viewpoint_graph_.clear();
@@ -58,8 +56,8 @@ void ViewpointPlanner::loadViewpointGraph(const std::string& filename) {
   ia >> viewpoint_graph_motions_;
   std::cout << "Loaded viewpoint graph with " << viewpoint_entries_.size() << " viewpoints "
       << " and " << viewpoint_graph_.numEdges() << " motions" << std::endl;
-  AIT_ASSERT(viewpoint_entries_.size() == viewpoint_graph_.numVertices());
-  AIT_ASSERT(viewpoint_graph_.numEdges() == viewpoint_graph_motions_.size());
+  BH_ASSERT(viewpoint_entries_.size() == viewpoint_graph_.numVertices());
+  BH_ASSERT(viewpoint_graph_.numEdges() == viewpoint_graph_motions_.size());
 
   // Consistency check that viewpoint motion distances and graph edge weights are equal
   for (ViewpointEntryIndex viewpoint_index = 0; viewpoint_index < viewpoint_entries_.size(); ++viewpoint_index) {
@@ -67,36 +65,20 @@ void ViewpointPlanner::loadViewpointGraph(const std::string& filename) {
     for (auto it = edges.begin(); it != edges.end(); ++it) {
       const FloatType weight = it.weight();
       const FloatType dist = getViewpointMotion(it.sourceNode(), it.targetNode()).distance();
-      if (!ait::isApproxEqual(weight, dist, FloatType(1e-2))) {
+      if (!bh::isApproxEqual(weight, dist, FloatType(1e-2))) {
         std::cout << "it.sourceNode()=" << it.sourceNode() << ", it.targetNode()=" << it.targetNode()
             << ", weight=" << weight << ", dist=" << dist << std::endl;
       }
-      AIT_ASSERT(it.source() == viewpoint_index);
-      AIT_ASSERT(it.sourceNode() == viewpoint_index);
-      AIT_ASSERT(it.target() == it.targetNode());
+      BH_ASSERT(it.source() == viewpoint_index);
+      BH_ASSERT(it.sourceNode() == viewpoint_index);
+      BH_ASSERT(it.target() == it.targetNode());
     }
   }
 
-  if (options_.ignore_real_observed_voxels) {
-    std::cout << "Clearing observed voxels for previous camera viewpoints" << std::endl;
-    for (std::size_t i = 0; i < num_real_viewpoints_; ++i) {
-      ViewpointEntry& viewpoint_entry = viewpoint_entries_[i];
-      viewpoint_entry.voxel_set.clear();
-    }
-  }
-  else {
-    std::cout << "Computing observed voxels for previous camera viewpoints" << std::endl;
-#pragma omp parallel for
-    for (std::size_t i = 0; i < num_real_viewpoints_; ++i) {
-      ViewpointEntry& viewpoint_entry = viewpoint_entries_[i];
-      if (viewpoint_entry.voxel_set.empty()) {
-        // Compute observed voxels and information
-        std::pair<VoxelWithInformationSet, FloatType> raycast_result =
-            getRaycastHitVoxelsWithInformationScore(viewpoint_entry.viewpoint);
-        const VoxelWithInformationSet& voxel_set = raycast_result.first;
-        viewpoint_entry.voxel_set = std::move(voxel_set);
-      }
-    }
+  std::cout << "Clearing observed voxels for previous camera viewpoints" << std::endl;
+  for (std::size_t i = 0; i < num_real_viewpoints_; ++i) {
+    ViewpointEntry& viewpoint_entry = viewpoint_entries_[i];
+    viewpoint_entry.voxel_set.clear();
   }
 }
 
@@ -108,6 +90,30 @@ void ViewpointPlanner::saveViewpointPath(const std::string& filename) const {
   boost::archive::binary_oarchive oa(ofs);
   ViewpointPathSaver vps(viewpoint_paths_, viewpoint_paths_data_, data_->occupied_bvh_);
   oa << vps;
+
+  // Save sparse matching viewpoints
+  std::unordered_map<ViewpointEntryIndex, Pose> sparse_matching_viewpoint_poses;
+  for (const ViewpointPath& viewpoint_path : viewpoint_paths_) {
+    for (auto from_it = viewpoint_path.order.begin(); from_it != viewpoint_path.order.end(); ++from_it) {
+      auto to_it = from_it + 1;
+      if (to_it == viewpoint_path.order.end()) {
+        to_it = viewpoint_path.order.begin();
+      }
+      const ViewpointEntryIndex from_index = viewpoint_path.entries[*from_it].viewpoint_index;
+      const ViewpointEntryIndex to_index = viewpoint_path.entries[*to_it].viewpoint_index;
+      if (hasViewpointMotion(from_index, to_index)) {
+        const ViewpointMotion &motion = getViewpointMotion(from_index, to_index);
+        for (auto vi_it = motion.viewpointIndices().begin() + 1;
+             vi_it != motion.viewpointIndices().end() - 1; ++vi_it) {
+          const Pose &pose = viewpoint_entries_[*vi_it].viewpoint.pose();
+          sparse_matching_viewpoint_poses.emplace(*vi_it, pose);
+        }
+      }
+    }
+  }
+  oa << sparse_matching_viewpoint_poses;
+
+  // Save viewpoint motion of path
   std::unordered_map<ViewpointIndexPair, ViewpointMotion, ViewpointIndexPair::Hash> local_viewpoint_path_motions;
   for (const ViewpointPath& viewpoint_path : viewpoint_paths_) {
     for (auto it1 = viewpoint_path.entries.begin(); it1 != viewpoint_path.entries.end(); ++it1) {
@@ -119,6 +125,17 @@ void ViewpointPlanner::saveViewpointPath(const std::string& filename) const {
             const ViewpointMotion& motion = it->second;
             local_viewpoint_path_motions.emplace(vip, motion);
           }
+//          else {
+//            const ViewpointMotion motion = findShortestMotionAStar(it1->viewpoint_index, it2->viewpoint_index);
+//            if (motion.isValid()) {
+//              const ViewpointMotion optimized_motion = optimizeViewpointMotion(motion);
+//              local_viewpoint_path_motions.emplace(vip, optimized_motion);
+//            }
+//            else {
+//              std::cout << "WARNING: No motion from path viewpoint " <<
+//                  it1->viewpoint_index << " to path viewpoint " << it2->viewpoint_index << std::endl;
+//            }
+//          }
         }
       }
     }
@@ -144,6 +161,7 @@ void ViewpointPlanner::saveViewpointPath(const std::string& filename) const {
   }
 }
 
+#pragma GCC optimize("O0")
 void ViewpointPlanner::loadViewpointPath(const std::string& filename) {
   resetViewpointPaths();
   std::unique_lock<std::mutex> lock(mutex_);
@@ -159,26 +177,11 @@ void ViewpointPlanner::loadViewpointPath(const std::string& filename) {
   std::unordered_map<ViewpointEntryIndex, ViewpointEntryIndex> old_to_new_viewpoint_mapping;
   for (ViewpointPath& viewpoint_path : tmp_viewpoint_paths) {
     for (std::size_t i = 0; i < viewpoint_path.entries.size(); ++i) {
-      ViewpointEntryIndex matching_viewpoint_index = (ViewpointEntryIndex)-1;
       ViewpointPathEntry& entry = viewpoint_path.entries[i];
-      const std::size_t knn = options_.viewpoint_motion_max_neighbors;
-      static std::vector<ViewpointANN::IndexType> knn_indices;
-      static std::vector<ViewpointANN::DistanceType> knn_distances;
-      knn_indices.resize(knn);
-      knn_distances.resize(knn);
-      viewpoint_ann_.knnSearch(entry.viewpoint.pose().getWorldPosition(), knn, &knn_indices, &knn_distances);
-      bool found = false;
-      for (std::size_t i = 0; i < knn_distances.size(); ++i) {
-        const ViewpointANN::DistanceType dist_square = knn_distances[i];
-        const ViewpointEntryIndex viewpoint_index = knn_indices[i];
-        if (entry.viewpoint.pose() == viewpoint_entries_[viewpoint_index].viewpoint.pose()) {
-          matching_viewpoint_index = viewpoint_index;
-          found = true;
-          break;
-        }
-      }
+      bool found;
+      ViewpointEntryIndex matching_viewpoint_index;
+      std::tie(found, matching_viewpoint_index) = findViewpointEntryWithPose(entry.viewpoint.pose());
       if (!found) {
-        ViewpointEntry new_viewpoint_entry;
         // Compute observed voxels and information and add to viewpoint graph
           std::pair<VoxelWithInformationSet, FloatType> raycast_result =
               getRaycastHitVoxelsWithInformationScore(entry.viewpoint);
@@ -192,28 +195,29 @@ void ViewpointPlanner::loadViewpointPath(const std::string& filename) {
           SE3Motion se3_motion;
           if (viewpoint_entries_.size() > num_real_viewpoints_) {
             const Pose& pose = entry.viewpoint.pose();
-            if (isValidObjectPosition(pose.getWorldPosition(), drone_extent_)) {
+            if (isValidObjectPosition(pose.getWorldPosition(), drone_bbox_)) {
+              const std::size_t knn = options_.viewpoint_motion_max_neighbors;
+              static std::vector<ViewpointANN::IndexType> knn_indices;
+              static std::vector<ViewpointANN::DistanceType> knn_distances;
+              knn_indices.resize(knn);
+              knn_distances.resize(knn);
+              viewpoint_ann_.knnSearch(entry.viewpoint.pose().getWorldPosition(), knn, &knn_indices, &knn_distances);
               for (std::size_t j = 0; j < knn_distances.size(); ++j) {
                 const ViewpointANN::DistanceType dist_square = knn_distances[j];
                 const ViewpointEntryIndex other_viewpoint_index = knn_indices[j];
-                if (other_viewpoint_index < num_real_viewpoints_) {
+                if (other_viewpoint_index == matching_viewpoint_index || other_viewpoint_index < num_real_viewpoints_) {
                   continue;
                 }
                 const Pose& other_pose = viewpoint_entries_[other_viewpoint_index].viewpoint.pose();
-                if (!isValidObjectPosition(other_pose.getWorldPosition(), drone_extent_)) {
+                if (!isValidObjectPosition(other_pose.getWorldPosition(), drone_bbox_)) {
                   std::cout << "WARNING: Nearest neighbor of viewpoint path is not a valid object position" << std::endl;
                   continue;
                 }
-                const bool matchable = isSparseMatchable(new_viewpoint_index, other_viewpoint_index);
+                const bool matchable = isSparseMatchable2(new_viewpoint_index, other_viewpoint_index);
                 if (!matchable) {
                   continue;
                 }
                 std::tie(se3_motion, found_motion) = motion_planner_.findMotion(pose, other_pose);
-                // TODO
-                if (viewpoint_path.entries[i].viewpoint_index == 2057) {
-                  std::cout << "  motion to " << other_viewpoint_index << ": matchable=" << matchable
-                      << ", found_motion=" << found_motion << std::endl;
-                }
                 if (found_motion) {
                   ViewpointMotion viewpoint_motion({ new_viewpoint_index, other_viewpoint_index }, { se3_motion });
                   addViewpointMotion(std::move(viewpoint_motion));
@@ -244,7 +248,27 @@ void ViewpointPlanner::loadViewpointPath(const std::string& filename) {
   for (const auto& entry : old_to_new_viewpoint_mapping) {
     std::cout << "  " << entry.first << " <-> " << entry.second << std::endl;
   }
-  //
+
+  // Load sparse matching viewpoints
+  std::unordered_map<ViewpointEntryIndex, Pose> sparse_matching_viewpoint_poses;
+  ia >> sparse_matching_viewpoint_poses;
+  for (auto& entry : sparse_matching_viewpoint_poses) {
+    const ViewpointEntryIndex old_index = entry.first;
+    const Pose& pose = entry.second;
+    bool found;
+    ViewpointEntryIndex matching_viewpoint_index;
+    std::tie(found, matching_viewpoint_index) = findViewpointEntryWithPose(pose);
+    if (!found) {
+      const VoxelWithInformationSet voxel_set;
+      const FloatType total_information = 0;
+      const ViewpointEntryIndex new_viewpoint_index = addViewpointEntryWithoutLock(
+              ViewpointEntry(getVirtualViewpoint(pose), total_information, voxel_set));
+      matching_viewpoint_index = new_viewpoint_index;
+    }
+    old_to_new_viewpoint_mapping.emplace(old_index, matching_viewpoint_index);
+  }
+
+  // Load viewpoint motions of path
   std::unordered_map<ViewpointIndexPair, ViewpointMotion, ViewpointIndexPair::Hash> local_viewpoint_path_motions;
   ia >> local_viewpoint_path_motions;
   // TODO: Compute hash of viewpoint graph and save with path. Then only load motions if hashes are equal.
@@ -264,7 +288,7 @@ void ViewpointPlanner::loadViewpointPath(const std::string& filename) {
       const ViewpointEntryIndex new_index = mapping_it->second;
       new_motion_indices.push_back(new_index);
       std::cout << old_index << " " << new_index << std::endl;
-      AIT_ASSERT(new_index < viewpoint_graph_.numVertices());
+      BH_ASSERT(new_index < viewpoint_graph_.numVertices());
     }
     if (new_motion_valid) {
       ViewpointMotion new_motion(new_motion_indices, motion.se3Motions());
@@ -300,10 +324,25 @@ void ViewpointPlanner::loadViewpointPath(const std::string& filename) {
 //    ensureConnectedViewpointPath(&viewpoint_path, &comp_data);
     for (auto from_it = viewpoint_path.order.begin(); from_it != viewpoint_path.order.end(); ++from_it) {
       for (auto to_it = viewpoint_path.order.begin(); to_it != from_it; ++to_it) {
-        const bool found_motion = findAndAddShortestMotion(
-            viewpoint_path.entries[*from_it].viewpoint_index, viewpoint_path.entries[*to_it].viewpoint_index);
-        if (!found_motion) {
-          std::cout << "WARNING: Could not find motion path from viewpoint " << *from_it << " to " << *to_it << std::endl;
+        const ViewpointEntryIndex from_index = viewpoint_path.entries[*from_it].viewpoint_index;
+        const ViewpointEntryIndex to_index = viewpoint_path.entries[*to_it].viewpoint_index;
+        if (!hasViewpointMotion(from_index, to_index)) {
+          if (!isValidObjectPosition(viewpoint_entries_[from_index].viewpoint.pose().getWorldPosition(), drone_bbox_)) {
+            std::cout << "WARNING: Viewpoint " << from_index << " is not a valid position" << std::endl;
+            continue;
+          }
+          if (!isValidObjectPosition(viewpoint_entries_[to_index].viewpoint.pose().getWorldPosition(), drone_bbox_)) {
+            std::cout << "WARNING: Viewpoint " << from_index << " is not a valid position" << std::endl;
+            continue;
+          }
+          std::cout << "Finding motion from " << viewpoint_path.entries[*from_it].viewpoint_index << " to "
+                    << viewpoint_path.entries[*to_it].viewpoint_index << std::endl;
+          const bool found_motion = findAndAddShortestMotion(
+                  from_index, to_index);
+          if (!found_motion) {
+            std::cout << "WARNING: Could not find motion path from viewpoint " << *from_it << " to " << *to_it
+                      << std::endl;
+          }
         }
       }
       ++comp_data.num_connected_entries;

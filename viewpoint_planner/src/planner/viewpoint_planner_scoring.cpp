@@ -13,114 +13,43 @@ ViewpointPlanner::WeightType ViewpointPlanner::computeResolutionInformationFacto
   const FloatType distance = (camera_position - node->getBoundingBox().getCenter()).norm();
   const FloatType size_x = node->getBoundingBox().getExtent(0);
   const FloatType relative_size_on_sensor = viewpoint.camera().computeRelativeSizeOnSensorHorizontal(size_x, distance);
-//  AIT_ASSERT(relative_size_on_sensor >= 0);
+//  BH_ASSERT(relative_size_on_sensor >= 0);
   const FloatType voxel_sensor_size_ratio_threshold = options_.voxel_sensor_size_ratio_threshold;
   if (relative_size_on_sensor >= voxel_sensor_size_ratio_threshold) {
     return 1;
   }
   const FloatType factor = std::exp(-voxel_sensor_size_ratio_falloff_factor_ * (voxel_sensor_size_ratio_threshold - relative_size_on_sensor));
-//  AIT_ASSERT(factor <= 1);
+//  BH_ASSERT(factor <= 1);
   return factor;
 }
 
-ViewpointPlanner::WeightType ViewpointPlanner::computeIncidenceInformationFactor(
-    const Viewpoint& viewpoint, const VoxelType* node, const Vector3& normal_vector) const {
-  if (normal_vector == Vector3::Zero()) {
-    return 1;
-  }
-  const Vector3& camera_position = viewpoint.pose().getWorldPosition();
-  const Vector3 incidence_vector = (camera_position - node->getBoundingBox().getCenter()).normalized();
-  FloatType dot_product = ait::clamp<FloatType>(incidence_vector.dot(normal_vector), -1, +1);
-  if (dot_product <= 0) {
-    if (options_.incidence_ignore_dot_product_sign) {
-      dot_product = std::abs(dot_product);
-    }
-    else {
-      return 0;
-    }
-  }
-  const FloatType angle = std::acos(dot_product);
-  if (angle <= incidence_angle_threshold_) {
-    return 1;
-  }
-  const FloatType factor = std::exp(-incidence_angle_falloff_factor_ * (angle - incidence_angle_threshold_));
-//  AIT_ASSERT(factor <= 1);
-  return factor;
-}
-
-ViewpointPlanner::WeightType ViewpointPlanner::computeIncidenceInformationFactor(
-    const Viewpoint& viewpoint, const VoxelType* node) const {
-#if WITH_OPENGL_OFFSCREEN
+ViewpointPlanner::Vector3 ViewpointPlanner::computeNormalVector(
+        const Viewpoint& viewpoint, const VoxelType* node, const Vector2& image_coordinates) const {
   Vector3 normal_vector;
   if (options_.enable_opengl) {
-    normal_vector = computePoissonMeshNormalVector(viewpoint, node->getBoundingBox().getCenter());
-  }
-  else {
-    normal_vector = node->getObject()->normal;
-  }
-#else
-  const Vector3& normal_vector = node->getObject()->normal;
-#endif
-
-  return computeIncidenceInformationFactor(viewpoint, node, normal_vector);
-}
-
-ViewpointPlanner::WeightType ViewpointPlanner::computeIncidenceInformationFactor(
-    const Viewpoint& viewpoint, const VoxelType* node, const Vector2& screen_coordinates) const {
-#if WITH_OPENGL_OFFSCREEN
-  Vector3 normal_vector;
-  if (options_.enable_opengl) {
-    const std::size_t x = static_cast<std::size_t>(screen_coordinates(0));
-    const std::size_t y = static_cast<std::size_t>(screen_coordinates(1));
+    const std::size_t x = static_cast<std::size_t>(image_coordinates(0));
+    const std::size_t y = static_cast<std::size_t>(image_coordinates(1));
     normal_vector = computePoissonMeshNormalVector(viewpoint, x, y);
   }
   else {
     normal_vector = node->getObject()->normal;
   }
-#else
-  const Vector3& normal_vector = node->getObject()->normal;
-#endif
-
-  return computeIncidenceInformationFactor(viewpoint, node, normal_vector);
+  return normal_vector;
 }
 
-std::unordered_set<Point3DId> ViewpointPlanner::computeProjectedMapPoints(const CameraId camera_id, const Pose& pose,
-    FloatType projection_margin) const {
-  Viewpoint viewpoint(&data_->reconstruction_->getCameras().at(camera_id), pose, projection_margin);
-  std::unordered_set<Point3DId> proj_points = viewpoint.getProjectedPoint3DIds(data_->reconstruction_->getPoints3D());
-  return proj_points;
+ViewpointPlanner::WeightType ViewpointPlanner::computeIncidenceInformationFactor(
+    const Viewpoint& viewpoint, const VoxelType* node, const Vector3& normal_vector) const {
+  return scorer_.computeIncidenceInformationFactor(viewpoint, node, normal_vector);
 }
 
-std::unordered_set<Point3DId> ViewpointPlanner::computeFilteredMapPoints(const CameraId camera_id, const Pose& pose,
-    FloatType projection_margin) const {
-  Viewpoint viewpoint(&data_->reconstruction_->getCameras().at(camera_id), pose, projection_margin);
-  std::unordered_set<Point3DId> proj_points = viewpoint.getProjectedPoint3DIdsFiltered(data_->reconstruction_->getPoints3D());
-  return proj_points;
+ViewpointPlanner::WeightType ViewpointPlanner::computeIncidenceInformationFactor(
+    const Viewpoint& viewpoint, const VoxelType* node) const {
+  return scorer_.computeIncidenceInformationFactor(viewpoint, node);
 }
 
-std::unordered_set<Point3DId> ViewpointPlanner::computeVisibleMapPoints(const CameraId camera_id, const Pose& pose,
-    FloatType projection_margin) const {
-  Viewpoint viewpoint(&data_->reconstruction_->getCameras().at(camera_id), pose, projection_margin);
-  std::unordered_set<Point3DId> proj_points = viewpoint.getProjectedPoint3DIds(data_->reconstruction_->getPoints3D());
-  removeOccludedPoints(pose, proj_points, kOcclusionDistMarginFactor * data_->octree_->getResolution());
-  return proj_points;
-}
-
-std::unordered_set<Point3DId> ViewpointPlanner::computeVisibleMapPointsFiltered(const CameraId camera_id, const Pose& pose,
-    FloatType projection_margin) const {
-  Viewpoint viewpoint(&data_->reconstruction_->getCameras().at(camera_id), pose, projection_margin);
-  std::unordered_set<Point3DId> proj_points = viewpoint.getProjectedPoint3DIdsFiltered(data_->reconstruction_->getPoints3D());
-  removeOccludedPoints(pose, proj_points, kOcclusionDistMarginFactor * data_->octree_->getResolution());
-  return proj_points;
-}
-
-ViewpointPlanner::GpsCoordinateType ViewpointPlanner::convertPositionToGps(const Vector3& position) const {
-  using GpsFloatType = typename GpsCoordinateType::FloatType;
-  using GpsConverter = ait::GpsConverter<GpsFloatType>;
-  const GpsCoordinateType gps_reference = data_->reconstruction_->sfmGpsTransformation().gps_reference;
-  const GpsConverter gps_converter = GpsConverter::createWGS84(gps_reference);
-  const GpsCoordinateType gps = gps_converter.convertEnuToGps(position.cast<GpsFloatType>());
-  return gps;
+ViewpointPlanner::WeightType ViewpointPlanner::computeIncidenceInformationFactor(
+    const Viewpoint& viewpoint, const VoxelType* node, const Vector2& screen_coordinates) const {
+  return scorer_.computeIncidenceInformationFactor(viewpoint, node, screen_coordinates);
 }
 
 Viewpoint ViewpointPlanner::getVirtualViewpoint(const Pose& pose) const {
@@ -203,13 +132,13 @@ ViewpointPlanner::FloatType ViewpointPlanner::computeNewInformation(
       auto it = viewpoint_path.observed_voxel_map.find(vi.voxel);
       if (it != viewpoint_path.observed_voxel_map.end()) {
         const WeightType voxel_weight = vi.voxel->getObject()->weight;
-        AIT_ASSERT(it->second <= voxel_weight);
+        BH_ASSERT(it->second <= voxel_weight);
         novel_information = std::min(observation_information, voxel_weight - it->second);
       }
-      AIT_ASSERT(novel_information >= 0);
+      BH_ASSERT(novel_information >= 0);
       return value + novel_information;
     });
-  //    VoxelWithInformationSet difference_set = ait::computeSetDifference(new_viewpoint.voxel_set, viewpoint_path.observed_voxel_set);
+  //    VoxelWithInformationSet difference_set = bh::computeSetDifference(new_viewpoint.voxel_set, viewpoint_path.observed_voxel_set);
   //    FloatType new_information = std::accumulate(difference_set.cbegin(), difference_set.cend(),
   //        FloatType { 0 }, [](const FloatType& value, const VoxelWithInformation& voxel) {
   //          return value + voxel.information;
@@ -259,7 +188,7 @@ ViewpointPlanner::FloatType ViewpointPlanner::evaluateNovelViewpointInformation(
 //    }
 //    else {
 //      const ViewpointEntry& stereo_viewpoint_entry = viewpoint_entries_[stereo_viewpoint_index];
-//      const auto overlap_set = ait::computeSetIntersection(viewpoint_entry.voxel_set, stereo_viewpoint_entry.voxel_set);
+//      const auto overlap_set = bh::computeSetIntersection(viewpoint_entry.voxel_set, stereo_viewpoint_entry.voxel_set);
 //      const FloatType new_information = std::accumulate(overlap_set.cbegin(), overlap_set.cend(),
 //        FloatType { 0 }, [&](const FloatType& value, const VoxelWithInformation& vi) {
 //          const FloatType observation_information = options_.viewpoint_information_factor * vi.information;
@@ -267,10 +196,10 @@ ViewpointPlanner::FloatType ViewpointPlanner::evaluateNovelViewpointInformation(
 //          auto it = viewpoint_path.observed_voxel_map.find(vi.voxel);
 //          if (it != viewpoint_path.observed_voxel_map.end()) {
 //            const WeightType voxel_weight = vi.voxel->getObject()->weight;
-//            AIT_ASSERT(it->second <= voxel_weight);
+//            BH_ASSERT(it->second <= voxel_weight);
 //            novel_information = std::min(observation_information, voxel_weight - it->second);
 //          }
-//          AIT_ASSERT(novel_information >= 0);
+//          BH_ASSERT(novel_information >= 0);
 //          return value + novel_information;
 //        });
 //      return new_information;

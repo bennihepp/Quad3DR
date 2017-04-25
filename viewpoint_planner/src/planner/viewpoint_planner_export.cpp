@@ -6,7 +6,7 @@
 //  Created on: Mar 6, 2017
 //==================================================
 
-#include <ait/filesystem.h>
+#include <bh/filesystem.h>
 #include <boost/filesystem.hpp>
 #include <rapidjson/document.h>
 #include <rapidjson/document.h>
@@ -15,8 +15,6 @@
 #include <rapidjson/stringbuffer.h>
 #include "viewpoint_planner.h"
 
-#pragma GCC optimize("O0")
-
 rapidjson::Document ViewpointPlanner::getViewpointPathAsJson(const ViewpointPath& viewpoint_path) const {
   std::cout << "Converting viewpoint path to JSON" << std::endl;
   BH_ASSERT(hasReconstruction());
@@ -24,7 +22,7 @@ rapidjson::Document ViewpointPlanner::getViewpointPathAsJson(const ViewpointPath
 
   using GpsCoordinateType = reconstruction::SfmToGpsTransformation::GpsCoordinate;
   using GpsFloatType = typename GpsCoordinateType::FloatType;
-  using GpsConverter = ait::GpsConverter<GpsFloatType>;
+  using GpsConverter = bh::GpsConverter<GpsFloatType>;
   const GpsCoordinateType gps_reference = data_->reconstruction_->sfmGpsTransformation().gps_reference;
   std::cout << "GPS reference: " << gps_reference << std::endl;
   const GpsConverter gps_converter = GpsConverter::createWGS84(gps_reference);
@@ -37,11 +35,26 @@ rapidjson::Document ViewpointPlanner::getViewpointPathAsJson(const ViewpointPath
   d.SetObject();
   auto& allocator = d.GetAllocator();
 
-  Value viewpoints(kArrayType);
-  using IteratorType = typename std::vector<std::size_t>::const_iterator;
-  const auto generate_json_viewpoint_lambda = [&](IteratorType prev_it, IteratorType it) {
-    const ViewpointPathEntry& path_entry = viewpoint_path.entries[*it];
-    const ViewpointEntry& viewpoint_entry = viewpoint_entries_[path_entry.viewpoint_index];
+  const auto generate_json_path_entry_lambda = [&](const size_t index, const Pose& pose) {
+    const GpsCoordinateType path_gps = gps_converter.convertEnuToGps(pose.getWorldPosition().cast<GpsFloatType>());
+    const GpsFloatType latitude = path_gps.latitude();
+    const GpsFloatType longitude = path_gps.longitude();
+    const GpsFloatType altitude = path_gps.altitude();
+    Value json_path_entry(kObjectType);
+    json_path_entry.AddMember("index", index, allocator);
+    json_path_entry.AddMember("latitude", latitude, allocator);
+    json_path_entry.AddMember("longitude", longitude, allocator);
+    json_path_entry.AddMember("altitude", altitude, allocator);
+    // TODO: Use actual yaw from motion?
+    const Vector3 viewing_direction = pose.rotation().col(2);
+    const FloatType yaw_radians = -std::atan2(viewing_direction(1), viewing_direction(0));
+    const FloatType yaw = bh::radiansToDegrees(yaw_radians);
+    json_path_entry.AddMember("yaw", yaw, allocator);
+    std::cout << "Yaw = " << yaw << std::endl;
+    return json_path_entry;
+  };
+
+  const auto generate_json_pose_lambda = [&](const ViewpointEntry& viewpoint_entry) {
     const GpsCoordinateType gps = gps_converter.convertEnuToGps(viewpoint_entry.viewpoint.pose().getWorldPosition().cast<GpsFloatType>());
     Value json_pose(kObjectType);
     const GpsFloatType latitude = gps.latitude();
@@ -50,15 +63,22 @@ rapidjson::Document ViewpointPlanner::getViewpointPathAsJson(const ViewpointPath
     // East is yaw = 0, south is yaw = 90, rotation axis is pointing in z-direction
     const Vector3 viewing_direction = viewpoint_entry.viewpoint.pose().rotation().col(2);
     const FloatType yaw_radians = -std::atan2(viewing_direction(1), viewing_direction(0));
-    const FloatType camera_pitch_radians = std::atan2(viewing_direction(2), viewing_direction.topRows(2).squaredNorm());
-    const FloatType yaw = ait::radiansToDegrees(yaw_radians);
-    const FloatType camera_yaw = 0;
-    const FloatType camera_pitch = ait::radiansToDegrees(camera_pitch_radians);
+    const FloatType yaw = bh::radiansToDegrees(yaw_radians);
     json_pose.AddMember("latitude", latitude, allocator);
     json_pose.AddMember("longitude", longitude, allocator);
     json_pose.AddMember("altitude", altitude, allocator);
     json_pose.AddMember("yaw", yaw, allocator);
-    Value json_path_array(kArrayType);
+    std::cout << "Yaw = " << yaw << std::endl;
+    return json_pose;
+  };
+
+  Value viewpoints(kArrayType);
+  using IteratorType = typename std::vector<std::size_t>::const_iterator;
+  const auto generate_json_viewpoints_lambda = [&](IteratorType prev_it, IteratorType it) {
+    const bool verbose = false;
+    std::vector<Value> json_viewpoints;
+    const ViewpointPathEntry& path_entry = viewpoint_path.entries[*it];
+    const ViewpointEntry& viewpoint_entry = viewpoint_entries_[path_entry.viewpoint_index];
     if (prev_it != it) {
       const ViewpointEntryIndex prev_idx = viewpoint_path.entries[*prev_it].viewpoint_index;
       const ViewpointEntryIndex idx = viewpoint_path.entries[*it].viewpoint_index;
@@ -66,44 +86,70 @@ rapidjson::Document ViewpointPlanner::getViewpointPathAsJson(const ViewpointPath
         std::cout << "No viewpoint motion between " << prev_idx << " and " << idx << std::endl;
       }
       const ViewpointMotion motion = getViewpointMotion(prev_idx, idx);
-      for (const SE3Motion& se3_motion : motion.se3Motions()) {
+      for (size_t i = 1; i < motion.viewpointIndices().size(); ++i) {
+        Value json_path_array(kArrayType);
+        const ViewpointEntryIndex viewpoint_index = motion.viewpointIndices()[i];
+        const ViewpointEntry &viewpoint_entry = viewpoint_entries_[viewpoint_index];
+        Value json_pose = generate_json_pose_lambda(viewpoint_entry);
+        // Retrieve motion to current viewpoint
+        const SE3Motion &se3_motion = motion.se3Motions()[i - 1];
         for (auto path_it = se3_motion.poses.begin(); path_it != se3_motion.poses.end(); ++path_it) {
-          const GpsCoordinateType path_gps = gps_converter.convertEnuToGps(path_it->getWorldPosition().cast<GpsFloatType>());
-          Value json_pose(kObjectType);
-          const GpsFloatType latitude = path_gps.latitude();
-          const GpsFloatType longitude = path_gps.longitude();
-          const GpsFloatType altitude = path_gps.altitude();
-          Value json_path_entry(kObjectType);
-          json_path_entry.AddMember("index", path_it - se3_motion.poses.begin(), allocator);
-          json_path_entry.AddMember("latitude", latitude, allocator);
-          json_path_entry.AddMember("longitude", longitude, allocator);
-          json_path_entry.AddMember("altitude", altitude, allocator);
-          // TODO: Use actual yaw from motion?
-          json_path_entry.AddMember("yaw", yaw, allocator);
+          const size_t index = path_it - se3_motion.poses.begin();
+          Value json_path_entry = generate_json_path_entry_lambda(index, *path_it);
           json_path_array.PushBack(json_path_entry, allocator);
         }
+        const bool mvs_viewpoint = (i == 0 || i == motion.viewpointIndices().size() - 1)
+                                   ? path_entry.mvs_viewpoint : false;
+        // We fix camera yaw to 0 and let the quad do all the rotation necessary
+        const FloatType camera_yaw = 0;
+        // Compute camera pitch
+        // East is yaw = 0, south is yaw = 90, rotation axis is pointing in z-direction
+        const Vector3 viewing_direction = viewpoint_entry.viewpoint.pose().rotation().col(2);
+        const FloatType camera_pitch_radians = std::atan2(viewing_direction(2), viewing_direction.topRows(2).squaredNorm());
+        const FloatType camera_pitch = bh::radiansToDegrees(camera_pitch_radians);
+        // Create JSON viewpoint structure
+        Value json_viewpoint(kObjectType);
+        json_viewpoint.AddMember("index", viewpoint_index, allocator);
+        json_viewpoint.AddMember("pose", json_pose, allocator);
+        json_viewpoint.AddMember("path", json_path_array, allocator);
+        json_viewpoint.AddMember("camera_yaw", camera_yaw, allocator);
+        json_viewpoint.AddMember("camera_pitch", camera_pitch, allocator);
+        json_viewpoint.AddMember("take_picture", true, allocator);
+        json_viewpoint.AddMember("mvs", mvs_viewpoint, allocator);
+        json_viewpoints.push_back(std::move(json_viewpoint));
       }
     }
     else {
-      Value json_path_entry(kObjectType);
-      json_path_entry.AddMember("index", 0, allocator);
-      json_path_entry.AddMember("latitude", latitude, allocator);
-      json_path_entry.AddMember("longitude", longitude, allocator);
-      json_path_entry.AddMember("altitude", altitude, allocator);
-      // TODO: Use actual yaw from motion?
-      json_path_entry.AddMember("yaw", yaw, allocator);
+      Value json_path_entry = generate_json_path_entry_lambda(0, path_entry.viewpoint.pose());
+      Value json_pose = generate_json_pose_lambda(viewpoint_entry);
+      Value json_path_array(kArrayType);
       json_path_array.PushBack(json_path_entry, allocator);
+      // We fix camera yaw to 0 and let the quad do all the rotation necessary
+      const FloatType camera_yaw = 0;
+      // Compute camera pitch
+      // East is yaw = 0, south is yaw = 90, rotation axis is pointing in z-direction
+      const Vector3 viewing_direction = viewpoint_entry.viewpoint.pose().rotation().col(2);
+      const FloatType camera_pitch_radians = std::atan2(viewing_direction(2), viewing_direction.topRows(2).squaredNorm());
+      const FloatType camera_pitch = bh::radiansToDegrees(camera_pitch_radians);
+      // Create JSON viewpoint structure
+      Value json_viewpoint(kObjectType);
+      json_viewpoint.AddMember("index", path_entry.viewpoint_index, allocator);
+      json_viewpoint.AddMember("pose", json_pose, allocator);
+      json_viewpoint.AddMember("path", json_path_array, allocator);
+      json_viewpoint.AddMember("camera_yaw", camera_yaw, allocator);
+      json_viewpoint.AddMember("camera_pitch", camera_pitch, allocator);
+      json_viewpoint.AddMember("take_picture", true, allocator);
+      json_viewpoint.AddMember("mvs", path_entry.mvs_viewpoint, allocator);
+      json_viewpoints.push_back(std::move(json_viewpoint));
     }
-    Value json_viewpoint(kObjectType);
-    json_viewpoint.AddMember("index", *it, allocator);
-    json_viewpoint.AddMember("pose", json_pose, allocator);
-    json_viewpoint.AddMember("path", json_path_array, allocator);
-    json_viewpoint.AddMember("camera_yaw", camera_yaw, allocator);
-    json_viewpoint.AddMember("camera_pitch", camera_pitch, allocator);
-    json_viewpoint.AddMember("take_picture", true, allocator);
-    json_viewpoint.AddMember("mvs", path_entry.mvs_viewpoint, allocator);
-    std::cout << "i=" << *it << ", latitude=" << latitude << ", longitude=" << longitude << std::endl;
-    return json_viewpoint;
+    if (verbose) {
+      const GpsCoordinateType gps = gps_converter.convertEnuToGps(
+              viewpoint_entry.viewpoint.pose().getWorldPosition().cast<GpsFloatType>());
+      const GpsFloatType latitude = gps.latitude();
+      const GpsFloatType longitude = gps.longitude();
+      std::cout << "i=" << *it << ", latitude=" << latitude << ", longitude=" << longitude << std::endl;
+    }
+    return json_viewpoints;
   };
 
   if (viewpoint_path.order.size() > 1) {
@@ -113,17 +159,20 @@ rapidjson::Document ViewpointPlanner::getViewpointPathAsJson(const ViewpointPath
       if (it == viewpoint_path.order.begin()) {
         prev_it = it;
       }
-      Value json_viewpoint = generate_json_viewpoint_lambda(prev_it, it);
-      const bool take_picture = true;
-      json_viewpoint.AddMember("take_picture", take_picture, allocator);
-      viewpoints.PushBack(json_viewpoint, allocator);
+      std::vector<Value> json_viewpoints = generate_json_viewpoints_lambda(prev_it, it);
+      std::cout << "Adding " << json_viewpoints.size() << " viewpoints to JSON object" << std::endl;
+      for (Value& json_viewpoint : json_viewpoints) {
+        viewpoints.PushBack(json_viewpoint, allocator);
+      }
     }
-    Value json_viewpoint = generate_json_viewpoint_lambda(
-        viewpoint_path.order.begin() + viewpoint_path.order.size() - 1, viewpoint_path.order.begin());
-    const bool take_picture = false;
-    json_viewpoint.AddMember("take_picture", take_picture, allocator);
+//    std::vector<Value> json_viewpoints = generate_json_viewpoints_lambda(
+//        viewpoint_path.order.begin() + viewpoint_path.order.size() - 1, viewpoint_path.order.begin());
+//    for (Value& json_viewpoint : json_viewpoints) {
+//      viewpoints.PushBack(json_viewpoint, allocator);
+//    }
   }
 
+  std::cout << "Total of " << viewpoints.Size() << " viewpoints to JSON object" << std::endl;
   d.AddMember("viewpoints", viewpoints, allocator);
   return d;
 }
@@ -200,7 +249,7 @@ void ViewpointPlanner::exportViewpointPathAsSparseReconstruction(
   std::cout << "Converting viewpoint path to sparse reconstruction" << std::endl;
   const std::size_t camera_id = 1;
 
-  std::ofstream ofs(ait::joinPaths(path, "cameras.txt"));
+  std::ofstream ofs(bh::joinPaths(path, "cameras.txt"));
   ofs << "# Camera list with one line of data per camera:" << std::endl;
   ofs << "#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]" << std::endl;
   ofs << "# Number of cameras: " << viewpoint_path.entries.size() << std::endl;
@@ -209,7 +258,7 @@ void ViewpointPlanner::exportViewpointPathAsSparseReconstruction(
       << getVirtualCamera().width() / 2 << " " << getVirtualCamera().height() / 2 << " " << 0 << std::endl;
   ofs.close();
 
-  ofs.open(ait::joinPaths(path, "images.txt"));
+  ofs.open(bh::joinPaths(path, "images.txt"));
   ofs << "# Image list with two lines of data per image:" << std::endl;
   ofs << "#   IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME" << std::endl;
   ofs << "#   POINTS2D[] as (X, Y, POINT3D_ID)" << std::endl;
@@ -235,7 +284,7 @@ void ViewpointPlanner::exportViewpointPathAsSparseReconstruction(
   }
   ofs.close();
 
-  ofs.open(ait::joinPaths(path, "points3D.txt"));
+  ofs.open(bh::joinPaths(path, "points3D.txt"));
   ofs << "# 3D point list with one line of data per point:" << std::endl;
   ofs << "#   POINT3D_ID, X, Y, Z, R, G, B, ERROR, TRACK[] as (IMAGE_ID, POINT2D_IDX)" << std::endl;
   ofs << "# Number of points: " << viewpoint_path.entries.size() << ", mean track length: 0" << std::endl;

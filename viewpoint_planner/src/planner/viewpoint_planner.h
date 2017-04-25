@@ -7,8 +7,8 @@
 //==================================================
 #pragma once
 
-#include <ait/eigen.h>
-#include <ait/eigen_serialization.h>
+#include <bh/eigen.h>
+#include <bh/eigen_serialization.h>
 #include <memory>
 #include <unordered_set>
 #include <boost/functional/hash.hpp>
@@ -16,32 +16,27 @@
 #include <boost/archive/binary_oarchive.hpp>
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/utility.hpp>
-#include <ait/boost_serialization_utils.h>
-#if WITH_OPENGL_OFFSCREEN
-#include <QOpenGLContext>
-#include <QOpenGLFramebufferObject>
-#include <QOffscreenSurface>
-#include <QOpenGLFunctions>
-#include <QSurfaceFormat>
-#include <ait/qt_utils.h>
-#include <ait/color.h>
-#include "../rendering/triangle_drawer.h"
-#endif
+#include <bh/boost_serialization_utils.h>
 #include <rapidjson/document.h>
-#include <ait/common.h>
-#include <ait/options.h>
-#include <ait/eigen_options.h>
-#include <ait/random.h>
-#include <ait/eigen_utils.h>
-#include <ait/serialization.h>
-#include <ait/graph_boost.h>
+#include <bh/common.h>
+#include <bh/config_options.h>
+#include <bh/eigen_options.h>
+#include <bh/random.h>
+#include <bh/eigen_utils.h>
+#include <bh/graph_boost.h>
 #include <bh/math/continuous_grid3d.h>
 #include <bh/nn/approximate_nearest_neighbor.h>
+#include <bh/opengl/offscreen_opengl.h>
+#include "../rendering/octree_drawer.h"
 #include "../mLib/mLib.h"
 #include "../octree/occupancy_map.h"
 #include "../reconstruction/dense_reconstruction.h"
 #include "viewpoint.h"
 #include "viewpoint_planner_data.h"
+#include "viewpoint_planner_types.h"
+#include "viewpoint_raycast.h"
+#include "viewpoint_score.h"
+#include "viewpoint_offscreen_renderer.h"
 #include "motion_planner.h"
 
 using reconstruction::CameraId;
@@ -63,15 +58,17 @@ public:
   using ContinuousGridType = bh::ContinuousGrid3D<FloatType, size_t>;
   using RegionType = ViewpointPlannerData::RegionType;
   using RayType = bh::Ray<FloatType>;
-  using Pose = ait::Pose<FloatType>;
+  using Pose = bh::Pose<FloatType>;
 
   static constexpr FloatType kDotProdEqualTolerance = FloatType { 1e-5 };
   static constexpr FloatType kOcclusionDistMarginFactor = FloatType { 4 };
 
-  struct Options : ait::ConfigOptions {
+  struct Options : bh::ConfigOptions {
     Options()
-    : ait::ConfigOptions("viewpoint_planner", "ViewpointPlanner options") {
+    : bh::ConfigOptions("viewpoint_planner", "ViewpointPlanner options") {
+#if WITH_CUDA
       addOption<bool>("enable_cuda", &enable_cuda);
+#endif
       addOption<bool>("enable_opengl", &enable_opengl);
       addOption<bool>("dump_poisson_mesh_normals_image", &dump_poisson_mesh_normals_image);
       addOption<bool>("dump_poisson_mesh_depth_image", &dump_poisson_mesh_depth_image);
@@ -83,10 +80,8 @@ public:
       addOption<FloatType>("virtual_camera_focal_length", &virtual_camera_focal_length);
       addOption<FloatType>("raycast_min_range", &raycast_min_range);
       addOption<FloatType>("raycast_max_range", &raycast_max_range);
-      addOption<bool>("ignore_real_observed_voxels", &ignore_real_observed_voxels);
-      addOption<FloatType>("drone_extent_x", 3);
-      addOption<FloatType>("drone_extent_y", 3);
-      addOption<FloatType>("drone_extent_z", 3);
+      addOption<Vector3>("drone_bbox_min", &drone_bbox_min);
+      addOption<Vector3>("drone_bbox_max", &drone_bbox_max);
       addOption<Vector3>("drone_start_position", &drone_start_position);
       addOptionalOption<Vector3>("sampling_bbox_min");
       addOptionalOption<Vector3>("sampling_bbox_max");
@@ -96,6 +91,8 @@ public:
       addOption<size_t>("pose_sample_num_trials", &pose_sample_num_trials);
       addOption<FloatType>("viewpoint_sample_without_reference_probability", &viewpoint_sample_without_reference_probability);
       addOption<size_t>("viewpoint_min_voxel_count", &viewpoint_min_voxel_count);
+      addOption<FloatType>("viewpoint_voxel_distance_threshold", &viewpoint_voxel_distance_threshold);
+      addOption<FloatType>("viewpoint_max_too_close_voxel_ratio", &viewpoint_max_too_close_voxel_ratio);
       addOption<FloatType>("viewpoint_min_information", &viewpoint_min_information);
       addOption<size_t>("viewpoint_sample_motion_and_matching_knn", &viewpoint_sample_motion_and_matching_knn);
       addOption<FloatType>("viewpoint_information_factor", &viewpoint_information_factor);
@@ -108,6 +105,7 @@ public:
       addOption<FloatType>("triangulation_min_information_overlap_ratio", &triangulation_min_information_overlap_ratio);
       addOption<size_t>("triangulation_knn", &triangulation_knn);
       addOption<size_t>("triangulation_min_count", &triangulation_min_count);
+      addOption<bool>("viewpoint_count_grid_enable", &viewpoint_count_grid_enable);
       addOption<size_t>("viewpoint_count_grid_dimension", &viewpoint_count_grid_dimension);
       addOption<size_t>("viewpoint_discard_dist_knn", &viewpoint_discard_dist_knn);
       addOption<FloatType>("viewpoint_discard_dist_thres_square", &viewpoint_discard_dist_thres_square);
@@ -129,12 +127,26 @@ public:
       addOption<FloatType>("incidence_angle_inv_falloff_factor_degrees", &incidence_angle_inv_falloff_factor_degrees);
       addOption<FloatType>("sparse_matching_depth_tolerance", &sparse_matching_depth_tolerance);
       addOption<FloatType>("sparse_matching_dot_product_threshold", &sparse_matching_dot_product_threshold);
+      addOption<FloatType>("sparse_matching_normal_dot_product_threshold", &sparse_matching_normal_dot_product_threshold);
       addOption<FloatType>("sparse_matching_score_threshold", &sparse_matching_score_threshold);
       addOption<FloatType>("sparse_matching_max_distance_deviation_factor", &sparse_matching_max_distance_deviation_factor);
       addOption<FloatType>("sparse_matching_max_normal_deviation_factor", &sparse_matching_max_normal_deviation_factor);
       addOption<FloatType>("sparse_matching_min_distance", &sparse_matching_min_distance);
       addOption<FloatType>("sparse_matching_min_angular_distance", &sparse_matching_min_angular_distance);
+      addOption<FloatType>("sparse_matching_max_distance", &sparse_matching_max_distance);
+      addOption<FloatType>("sparse_matching_max_angular_distance_degrees", &sparse_matching_max_angular_distance_degrees);
+      addOption<FloatType>("sparse_matching_shared_sector_ratio", &sparse_matching_shared_sector_ratio);
+      addOption<size_t>("sparse_matching_num_of_shared_sectors", &sparse_matching_num_of_shared_sectors);
+      addOption<FloatType>("sparse_matching_voxels_iou_threshold", &sparse_matching_voxels_iou_threshold);
+      addOption<FloatType>("sparse_matching_voxels_conservative_iou_threshold", &sparse_matching_voxels_conservative_iou_threshold);
+      addOption<FloatType>("sparse_matching_virtual_camera_factor", &sparse_matching_virtual_camera_factor);
+      addOption<FloatType>("sparse_matching_occupancy_threshold", &sparse_matching_occupancy_threshold);
+      addOption<size_t>("sparse_matching_observation_count_threshold", &sparse_matching_observation_count_threshold);
+      addOption<size_t>("sparse_matching_render_tree_depth", &sparse_matching_render_tree_depth);
+      addOption<bool>("sparse_matching_dump_voxel_images", &sparse_matching_dump_voxel_images);
+      addOption<bool>("viewpoint_path_2opt_enable", &viewpoint_path_2opt_enable);
       addOption<size_t>("viewpoint_path_2opt_max_k_length", &viewpoint_path_2opt_max_k_length);
+      addOption<bool>("viewpoint_path_2opt_check_sparse_matching", &viewpoint_path_2opt_check_sparse_matching);
       addOption<std::string>("viewpoint_graph_filename", &viewpoint_graph_filename);
       // TODO:
       addOption<size_t>("num_sampled_poses", &num_sampled_poses);
@@ -144,8 +156,10 @@ public:
 
     ~Options() override {}
 
+#if WITH_CUDA
     // Whether to enable CUDA
     bool enable_cuda = true;
+#endif
     // Whether to enable OpenGL
     bool enable_opengl = true;
     // Whether to dump the poisson mesh normals image after rendering
@@ -169,8 +183,9 @@ public:
     FloatType raycast_min_range = 0;
     FloatType raycast_max_range = 60;
 
-    // Whether to ignore the voxels already observed by a previous reconstruction
-    bool ignore_real_observed_voxels = false;
+    // Drone bounding box
+    Vector3 drone_bbox_min = Vector3(-10, -10, -10);
+    Vector3 drone_bbox_max = Vector3(10, 10, 10);
 
     // Viewpoint sampling parameters
 
@@ -191,6 +206,10 @@ public:
     bool viewpoint_generate_stereo_pairs;
     // Minimum voxel count for viewpoints
     size_t viewpoint_min_voxel_count = 100;
+    // Distance threshold to voxels (also see 'viewpoint_max_too_close_voxel_ratio')
+    FloatType viewpoint_voxel_distance_threshold = FloatType(15.0);
+    // Maximum ratio of voxels closer than 'viewpoint_voxel_distance_threshold'
+    FloatType viewpoint_max_too_close_voxel_ratio = FloatType(0.5);
     // Minimum information for viewpoints
     FloatType viewpoint_min_information = 10;
     // Number of neighbours to check for reachability and matchability when generating new viewpoint entry
@@ -216,6 +235,8 @@ public:
     // Minimum number of viewpairs that can triangulate a voxel to be observed
     size_t triangulation_min_count = 2;
 
+    // Whether to enable viewpoint count grid for sampling
+    bool viewpoint_count_grid_enable = false;
     // Dimension of the viewpoint count grid (x, y and z dimension)
     size_t viewpoint_count_grid_dimension = 100;
 
@@ -266,6 +287,8 @@ public:
     FloatType sparse_matching_depth_tolerance = FloatType(0.2);
     // Minimum dot product between viewpoint orientations for a point to be matchable
     FloatType sparse_matching_dot_product_threshold = FloatType(0.8);
+    // Minimum dot product between viewing ray and surface normal for a point to be matchable
+    FloatType sparse_matching_normal_dot_product_threshold = FloatType(0.6);
     // Threshold for sparse matching score
     FloatType sparse_matching_score_threshold = FloatType(50);
     // Within how many standard deviations of the sparse point distance a point is still visible
@@ -276,9 +299,31 @@ public:
     FloatType sparse_matching_min_distance = FloatType(1);
     // Angular distance threshold below which viewpoints are assumed to be matchable
     FloatType sparse_matching_min_angular_distance = 10 * FloatType(M_PI / 180.0);
+    // Distance threshold above which viewpoints are assumed to not be matchable
+    FloatType sparse_matching_max_distance = 4;
+    // Angular distance threshold above which viewpoints are assumed to not be matchable
+    FloatType sparse_matching_max_angular_distance_degrees = 20;
 
+    // Minimum number of common points in a sector to be considered shared
+    FloatType sparse_matching_shared_sector_ratio = FloatType(0.1);
+    // Minimum number of sectors with shared visible sparse points
+    size_t sparse_matching_num_of_shared_sectors = 3;
+
+    // Minimum IOU of visible triangles in two views to be matchable
+    FloatType sparse_matching_voxels_iou_threshold = 0.2;
+    FloatType sparse_matching_voxels_conservative_iou_threshold = 0.4;
+    FloatType sparse_matching_virtual_camera_factor = 2;
+    FloatType sparse_matching_occupancy_threshold = 0.6;
+    size_t sparse_matching_observation_count_threshold = 0;
+    size_t sparse_matching_render_tree_depth = 14;
+    bool sparse_matching_dump_voxel_images = false;
+
+    // Whether to enable 2 Opt
+    bool viewpoint_path_2opt_enable = true;
     // Maximum segment length that is reversed by 2 Opt
     size_t viewpoint_path_2opt_max_k_length = 15;
+    // Whether sparse matchability is checked for 2 Opt
+    bool viewpoint_path_2opt_check_sparse_matching = true;
 
     // Filename of serialized viewpoint graph
     std::string viewpoint_graph_filename = "";
@@ -311,64 +356,16 @@ public:
   using OccupancyType = OccupancyMapType::NodeType::OccupancyType;
   using CounterType = OccupancyMapType::NodeType::CounterType;
   using WeightType = OccupancyMapType::NodeType::WeightType;
-  using OccupiedTreeType = ViewpointPlannerData::OccupiedTreeType;
-  using VoxelType = ViewpointPlannerData::OccupiedTreeType::NodeType;
+  using OccupiedTreeType = viewpoint_planner::OccupiedTreeType;
+  using VoxelType = viewpoint_planner::OccupiedTreeType::NodeType;
 
   using MotionPlannerType = MotionPlanner<FloatType>;
   using SE3Motion = typename MotionPlannerType::Motion;
 
-  /// Voxel node and it's corresponding amount of information
-  struct VoxelWrapper {
-    VoxelWrapper(const VoxelType* voxel)
-    : voxel(voxel) {}
-
-    const VoxelType* voxel;
-
-    bool operator==(const VoxelWrapper& other) const {
-      return voxel == other.voxel;
-    }
-
-    struct Hash {
-      size_t operator()(const VoxelWrapper& voxel_with_information) const {
-        size_t val { 0 };
-              boost::hash_combine(val, voxel_with_information.voxel);
-              return val;
-      }
-    };
-  };
-
-  /// Voxel node and it's corresponding amount of information
-  struct VoxelWithInformation {
-    VoxelWithInformation(const VoxelType* voxel, const FloatType information)
-    : voxel(voxel), information(information) {}
-
-    const VoxelType* voxel;
-    FloatType information;
-
-    bool operator==(const VoxelWithInformation& other) const {
-      return voxel == other.voxel && information == other.information;
-    }
-
-    struct VoxelHash {
-      size_t operator()(const VoxelWithInformation& voxel_with_information) const {
-        size_t val { 0 };
-              boost::hash_combine(val, voxel_with_information.voxel);
-              return val;
-      }
-    };
-
-    struct Hash {
-      size_t operator()(const VoxelWithInformation& voxel_with_information) const {
-        size_t val { 0 };
-              boost::hash_combine(val, voxel_with_information.voxel);
-              boost::hash_combine(val, voxel_with_information.information);
-              return val;
-      }
-    };
-  };
-
-  using VoxelWithInformationSet = std::unordered_set<VoxelWithInformation, VoxelWithInformation::VoxelHash>;
-  using VoxelMap = std::unordered_map<VoxelWrapper, FloatType, VoxelWrapper::Hash>;
+  using VoxelWrapper = viewpoint_planner::VoxelWrapper;
+  using VoxelWithInformation = viewpoint_planner::VoxelWithInformation;
+  using VoxelWithInformationSet = viewpoint_planner::VoxelWithInformationSet;
+  using VoxelMap = viewpoint_planner::VoxelMap;
 
   /// Describes a viewpoint, the set of voxels observed by it and the corresponding information
   struct ViewpointEntry {
@@ -431,7 +428,7 @@ public:
         using std::swap;
         swap(this->index1, this->index2);
       }
-      AIT_ASSERT(this->index1 <= this->index2);
+      BH_ASSERT(this->index1 <= this->index2);
     }
 
     ViewpointEntryIndex index1;
@@ -512,22 +509,23 @@ public:
    public:
     using Iterator = std::vector<ViewpointEntryIndex>::iterator;
     using ConstIterator = std::vector<ViewpointEntryIndex>::const_iterator;
+    using SE3MotionVector = EIGEN_ALIGNED_VECTOR(SE3Motion);
 
     explicit ViewpointMotion() {}
 
-    explicit ViewpointMotion(const std::vector<ViewpointEntryIndex>& viewpoint_indices, const std::vector<SE3Motion>& se3_motions)
+    explicit ViewpointMotion(const std::vector<ViewpointEntryIndex>& viewpoint_indices, const SE3MotionVector& se3_motions)
     : viewpoint_indices_(viewpoint_indices), se3_motions_(se3_motions) {
-#if !AIT_RELEASE
-      AIT_ASSERT(viewpoint_indices_.size() >= 2);
-      AIT_ASSERT(se3_motions_.size() == viewpoint_indices_.size() - 1);
+#if !BH_RELEASE
+      BH_ASSERT(viewpoint_indices_.size() >= 2);
+      BH_ASSERT(se3_motions_.size() == viewpoint_indices_.size() - 1);
 #endif
     }
 
-    explicit ViewpointMotion(std::vector<ViewpointEntryIndex>&& viewpoint_indices, std::vector<SE3Motion>&& se3_motions)
+    explicit ViewpointMotion(std::vector<ViewpointEntryIndex>&& viewpoint_indices, SE3MotionVector&& se3_motions)
     : viewpoint_indices_(std::move(viewpoint_indices)), se3_motions_(std::move(se3_motions)) {
-#if !AIT_RELEASE
-      AIT_ASSERT(viewpoint_indices_.size() >= 2);
-      AIT_ASSERT(se3_motions_.size() == viewpoint_indices_.size() - 1);
+#if !BH_RELEASE
+      BH_ASSERT(viewpoint_indices_.size() >= 2);
+      BH_ASSERT(se3_motions_.size() == viewpoint_indices_.size() - 1);
 #endif
     }
 
@@ -562,7 +560,7 @@ public:
       return viewpoint_indices_;
     }
 
-    const std::vector<SE3Motion>& se3Motions() const {
+    const SE3MotionVector& se3Motions() const {
       return se3_motions_;
     }
 
@@ -570,14 +568,14 @@ public:
       const FloatType dist = std::accumulate(
           se3_motions_.begin(), se3_motions_.end(), FloatType(0), [] (const FloatType value, const SE3Motion& se3_motion) -> FloatType {
         // Sanity check
-//#if !AIT_RELEASE
-//        AIT_ASSERT(se3_motion.poses.size() >= 2);
+//#if !BH_RELEASE
+//        BH_ASSERT(se3_motion.poses.size() >= 2);
 //        FloatType local_dist = 0;
 //        for (auto pose_it = se3_motion.poses.begin() + 1; pose_it != se3_motion.poses.end(); ++pose_it) {
 //          const auto prev_pose_it = pose_it - 1;
 //          local_dist += (pose_it->getWorldPosition() - prev_pose_it->getWorldPosition()).norm();
 //        }
-//        AIT_ASSERT(ait::isApproxEqual(se3_motion.distance, local_dist, FloatType(1e-2)));
+//        BH_ASSERT(bh::isApproxEqual(se3_motion.distance, local_dist, FloatType(1e-2)));
 //#endif
         return value + se3_motion.distance;
       });
@@ -586,7 +584,7 @@ public:
 
     void append(const ViewpointMotion& other) {
       if (isValid()) {
-        AIT_ASSERT(toIndex() == other.fromIndex());
+        BH_ASSERT(toIndex() == other.fromIndex());
         for (auto it = other.viewpointIndices().begin() + 1; it != other.viewpointIndices().end(); ++it) {
           viewpoint_indices_.push_back(*it);
           const SE3Motion& se3_motion = other.se3Motions()[it - 1 - other.viewpointIndices().begin()];
@@ -599,7 +597,7 @@ public:
     }
 
     void reverse() {
-#if !AIT_RELEASE
+#if !BH_RELEASE
       const FloatType dist_before = distance();
 #endif
       std::reverse(viewpoint_indices_.begin(), viewpoint_indices_.end());
@@ -607,9 +605,9 @@ public:
       for (SE3Motion& se3_motion : se3_motions_) {
         std::reverse(se3_motion.poses.begin(), se3_motion.poses.end());
       }
-#if !AIT_RELEASE
+#if !BH_RELEASE
       const FloatType dist_after = distance();
-      AIT_ASSERT(ait::isApproxEqual(dist_before, dist_after, FloatType(1e-2)));
+      BH_ASSERT(bh::isApproxEqual(dist_before, dist_after, FloatType(1e-2)));
 #endif
     }
 
@@ -630,7 +628,7 @@ public:
     }
 
     std::vector<ViewpointEntryIndex> viewpoint_indices_;
-    std::vector<SE3Motion> se3_motions_;
+    SE3MotionVector se3_motions_;
   };
 
   struct ViewpointPath {
@@ -693,7 +691,7 @@ public:
     std::unordered_map<ViewpointPlanner::ViewpointEntryIndex, Vertex> viewpoint_index_to_vertex_map;
   };
 
-  using ViewpointGraph = Graph<ViewpointEntryIndex, FloatType>;
+  using ViewpointGraph = bh::Graph<ViewpointEntryIndex, FloatType>;
   using ViewpointANN = bh::ApproximateNearestNeighbor<FloatType, 3>;
   using FeatureViewpointMap = std::unordered_map<size_t, std::vector<const Viewpoint*>>;
 
@@ -701,16 +699,32 @@ public:
   ViewpointPlanner(const Options* options,
       const MotionPlannerType::Options* motion_options, std::unique_ptr<ViewpointPlannerData> data);
 
-  const Options getOptions() const;
+  const Options& getOptions() const;
 
   const ViewpointPlannerData& getPlannerData() const;
 
   ViewpointPlannerData& getPlannerData();
 
+  void ensureOctreeDrawerIsInitialized() const;
+
+  const viewpoint_planner::ViewpointOffscreenRenderer& getOffscreenRenderer() const;
+
+  viewpoint_planner::ViewpointOffscreenRenderer& getOffscreenRenderer();
+
+  const bh::opengl::OffscreenOpenGL<FloatType>& getOffscreenOpenGL() const;
+
+  bh::opengl::OffscreenOpenGL<FloatType>& getOffscreenOpenGL();
+
+  const rendering::OcTreeDrawer& getOctreeDrawer() const;
+
+  rendering::OcTreeDrawer& getOctreeDrawer();
+
   /// Get virtual camera
   const PinholeCamera& getVirtualCamera() const;
 
-  const Vector3& getDroneExtent() const;
+  const BoundingBoxType& getDroneBoundingBox() const;
+
+  Vector3 getDroneExtent() const;
 
   /// Set size of virtual camera used for raycasting by scaling a real camera.
   void setScaledVirtualCamera(CameraId camera_id, FloatType scale_factor);
@@ -750,7 +764,10 @@ public:
 
   bool isSparsePointVisible(const Viewpoint& viewpoint, const Point3D& point3d) const;
 
-  bool isSparsePointMatchable(const Viewpoint& viewpoint1, const Viewpoint& viewpoint2, const Point3D& point3d) const;
+//  bool isSparsePointMatchable(const Viewpoint& viewpoint1, const Viewpoint& viewpoint2, const Point3D& point3d) const;
+
+  bool isSparsePointMatchable(const Viewpoint& viewpoint1, const Viewpoint& viewpoint2,
+                              const Point3D& point3d, const Vector3& normal1, const Vector3& normal2) const;
 
   QImage drawSparsePoints(
       const Viewpoint& viewpoint, const FloatType sparse_point_size = FloatType(1.1)) const;
@@ -796,20 +813,27 @@ public:
       const bool draw_lines = true,
       const FloatType sparse_point_size = FloatType(1.1), const FloatType match_line_width = FloatType(0.05)) const;
 
-  std::unordered_set<Point3DId> computeVisibleSparsePoints(
+  std::unordered_map<Point3DId, ViewpointPlanner::Vector3> computeVisibleSparsePoints(
       const Viewpoint& viewpoint,
       const SparseReconstruction::Point3DMapType::const_iterator first,
       const SparseReconstruction::Point3DMapType::const_iterator last) const;
 
-  std::unordered_set<Point3DId> computeVisibleSparsePoints(const Viewpoint& viewpoint) const;
+  std::unordered_map<Point3DId, ViewpointPlanner::Vector3> computeVisibleSparsePoints(const Viewpoint& viewpoint) const;
 
   // Return visible sparse points for a specific viewpoint entry (computes them if not already cached)
-  const std::unordered_set<Point3DId>& getCachedVisibleSparsePoints(const ViewpointEntryIndex viewpoint_index) const;
+  const std::unordered_map<Point3DId, ViewpointPlanner::Vector3>& getCachedVisibleSparsePoints(const ViewpointEntryIndex viewpoint_index) const;
+
+  const std::unordered_set<size_t>& getCachedVisibleVoxels(const ViewpointEntryIndex viewpoint_index) const;
+
+//  FloatType computeSparseMatchingScore(
+//          const Viewpoint& ref_viewpoint, const Viewpoint& other_viewpoint,
+//          const std::unordered_set<Point3DId>& ref_visible_points,
+//          const std::unordered_set<Point3DId>& other_visible_points) const;
 
   FloatType computeSparseMatchingScore(
       const Viewpoint& ref_viewpoint, const Viewpoint& other_viewpoint,
-      const std::unordered_set<Point3DId>& ref_visible_points,
-      const std::unordered_set<Point3DId>& other_visible_points) const;
+      const std::unordered_map<Point3DId, Vector3>& ref_visible_points,
+      const std::unordered_map<Point3DId, Vector3>& other_visible_points) const;
 
   FloatType computeSparseMatchingScore(
       const Viewpoint& ref_viewpoint, const Viewpoint& other_viewpoint) const;
@@ -817,17 +841,58 @@ public:
   FloatType computeSparseMatchingScore(
       const ViewpointEntryIndex viewpoint_index1, const ViewpointEntryIndex viewpoint_index2) const;
 
+  bool isWithinSparseMatchingLimits(const Pose& pose1, const Pose& pose2) const;
+
+  bool isWithinSparseMatchingLimits(const Viewpoint& viewpoint1, const Viewpoint& viewpoint2) const;
+
   bool isSparseMatchable(
       const Viewpoint& ref_viewpoint, const Viewpoint& other_viewpoint,
-      const std::unordered_set<Point3DId>& ref_visible_points,
-      const std::unordered_set<Point3DId>& other_visible_points) const;
+      const std::unordered_map<Point3DId, Vector3>& ref_visible_points,
+      const std::unordered_map<Point3DId, Vector3>& other_visible_points) const;
+
+//  bool isSparseMatchable(
+//      const Viewpoint& ref_viewpoint, const Viewpoint& other_viewpoint,
+//      const std::unordered_set<Point3DId>& ref_visible_points,
+//      const std::unordered_set<Point3DId>& other_visible_points) const;
 
   bool isSparseMatchable(
       const ViewpointEntryIndex viewpoint_index1, const ViewpointEntryIndex viewpoint_index2) const;
 
   bool isSparseMatchable(const Viewpoint& ref_viewpoint, const Viewpoint& other_viewpoint) const;
 
-  void augmentedViewpointPathForSparseMatching(ViewpointPath* viewpoint_path);
+  bool isSparseMatchable2(const Viewpoint& viewpoint1, const Viewpoint& viewpoint2) const;
+
+  bool isSparseMatchable2(
+          const ViewpointEntryIndex& viewpoint_index1,
+          const ViewpointEntryIndex& viewpoint_index2) const;
+
+  bool isSparseMatchable2(
+          const Viewpoint& viewpoint1,
+          const Viewpoint& viewpoint2,
+          const std::unordered_set<size_t>& visible_voxels1,
+          const std::unordered_set<size_t>& visible_voxels2) const;
+
+  bool isSparseMatchable2(
+          const Viewpoint& viewpoint1, const Viewpoint& viewpoint2,
+          const FloatType iou_threshold) const;
+
+  bool isSparseMatchable2(
+          const ViewpointEntryIndex& viewpoint_index1,
+          const ViewpointEntryIndex& viewpoint_index2,
+          const FloatType iou_threshold) const;
+
+  bool isSparseMatchable2(
+          const Viewpoint& viewpoint1,
+          const Viewpoint& viewpoint2,
+          const std::unordered_set<size_t>& visible_voxels1,
+          const std::unordered_set<size_t>& visible_voxels2,
+          const FloatType iou_threshold) const;
+
+  void augmentedViewpointPathWithSparseMatchingViewpoints(ViewpointPath* viewpoint_path);
+
+  void makeViewpointMotionsSparseMatchable(ViewpointPath* viewpoint_path);
+
+  ViewpointMotion makeViewpointMotionSparseMatchable(const ViewpointMotion& motion);
 
   RegionType getRoi() const {
     return data_->roi_;
@@ -835,6 +900,10 @@ public:
 
   BoundingBoxType getRoiBbox() const {
     return data_->roi_bbox_;
+  }
+
+  const std::vector<RegionType>& getNoFlyZones() const {
+    return data_->no_fly_zones_;
   }
 
   BoundingBoxType getPositiveWeightBbox() const {
@@ -944,12 +1013,8 @@ public:
   /// Acquire lock to acces viewpoint entries (including graph and path) or reset the planning
   std::unique_lock<std::mutex> acquireLock();
 
-#if WITH_OPENGL_OFFSCREEN
-
   /// Acquire lock for using any OpenGL context
   std::unique_lock<std::mutex> acquireOpenGLLock() const;
-
-#endif
 
   // Pose and viewpoint sampling
 
@@ -971,20 +1036,20 @@ public:
        const bool biased_orientation = true) const;
 
   std::pair<bool, Pose> samplePose(const BoundingBoxType& bbox,
-      const Vector3& object_extent, size_t max_trials = (size_t)-1,
+      const BoundingBoxType& object_bbox, size_t max_trials = (size_t)-1,
       const bool biased_orientation = true) const;
 
   std::pair<bool, Pose> samplePose(const RegionType& region,
-      const Vector3& object_extent, size_t max_trials = (size_t)-1,
+      const BoundingBoxType& object_bbox, size_t max_trials = (size_t)-1,
       const bool biased_orientation = true) const;
 
   std::pair<bool, ViewpointPlanner::Vector3> samplePosition(const size_t max_trials = (size_t)-1) const;
 
   std::pair<bool, ViewpointPlanner::Vector3> samplePosition(const BoundingBoxType& bbox,
-      const Vector3& object_extent, size_t max_trials = (size_t)-1) const;
+      const BoundingBoxType& object_bbox, size_t max_trials = (size_t)-1) const;
 
   std::pair<bool, ViewpointPlanner::Vector3> samplePosition(const RegionType& region,
-      const Vector3& object_extent, size_t max_trials = (size_t)-1) const;
+      const BoundingBoxType& object_bbox, size_t max_trials = (size_t)-1) const;
 
   Pose::Quaternion sampleOrientation() const;
 
@@ -997,7 +1062,11 @@ public:
   Pose::Quaternion sampleBiasedOrientation(const Vector3& pos, const BoundingBoxType& bias_bbox) const;
 
   /// Check if an object can be placed at a position (i.e. is it free space)
-  bool isValidObjectPosition(const Vector3& position, const Vector3& object_extent) const;
+  bool isValidObjectPosition(const Vector3& position, const BoundingBoxType& object_bbox) const;
+
+  /// Find a viewpoint entry with a pose.
+  /// Returns whether a matching viewpoint was found and the corresponding index
+  std::pair<bool, ViewpointEntryIndex> findViewpointEntryWithPose(const Pose& pose) const;
 
   /// Generate a new viewpoint entry and add it to the graph.
   bool generateNextViewpointEntry();
@@ -1034,7 +1103,7 @@ public:
   const std::pair<std::vector<size_t>, size_t>& getConnectedComponents() const;
 
   /// Compute a viewpoint tour for all paths
-  void computeViewpointTour();
+  void computeViewpointTour(const bool use_manual_start_position = true);
 
   /// Add a path entry to a viewpoint path
   void addViewpointPathEntry(const size_t viewpoint_path_index,
@@ -1044,6 +1113,17 @@ public:
   /// Add a path entry to a viewpoint path
   void addViewpointPathEntry(const size_t viewpoint_path_index,
                              const Pose& pose,
+                             const bool ignore_observed_voxels = false);
+
+  /// Add a path entry to a viewpoint path
+  void addViewpointPathEntry(const size_t viewpoint_path_index,
+                             const ViewpointPathEntry& new_path_entry,
+                             const bool ignore_observed_voxels = false);
+
+  /// Add a path entry to a viewpoint path
+  void addViewpointPathEntry(ViewpointPath* viewpoint_path,
+                             ViewpointPathComputationData* comp_data,
+                             const ViewpointPathEntry& new_path_entry,
                              const bool ignore_observed_voxels = false);
 
   /// Add a path entry to a viewpoint path
@@ -1057,6 +1137,10 @@ public:
                                            const Pose& pose,
                                            const bool ignore_observed_voxels = false);
 
+  // Visible voxel computation
+
+  std::unordered_set<size_t> getVisibleVoxels(const Viewpoint& viewpoint) const;
+
   // Raycasting and information computation
 
   /// Return viewpoint with virtual camera
@@ -1064,97 +1148,61 @@ public:
 
   /// Perform raycast on the BVH tree.
   /// Returns a vector of hit voxels with additional info.
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxels(
-      const Viewpoint& viewpoint) const;
+  std::vector<OccupiedTreeType::IntersectionResult> getRaycastHitVoxels(
+      const Viewpoint& viewpoint, const bool remove_duplicates = true) const;
 
   /// Perform raycast on the BVH tree on a limited window around the center.
   /// Returns a vector of hit voxels with additional info.
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxels(
-      const Viewpoint& viewpoint, const size_t width, const size_t height) const;
+  std::vector<OccupiedTreeType::IntersectionResult> getRaycastHitVoxels(
+      const Viewpoint& viewpoint, const size_t width, const size_t height,
+      const bool remove_duplicates = true) const;
 
   /// Perform raycast on the BVH tree on a limited window around the center.
   /// Returns a vector of hit voxels with additional info.
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult>
+  std::vector<OccupiedTreeType::IntersectionResult>
   getRaycastHitVoxels(
       const Viewpoint& viewpoint,
       const size_t x_start, const size_t x_end,
-      const size_t y_start, const size_t y_end) const;
+      const size_t y_start, const size_t y_end,
+      const bool remove_duplicates = true) const;
 
   /// Perform raycast on the BVH tree.
   /// Returns a vector of hit voxels with additional info.
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResultWithScreenCoordinates>
+  std::vector<OccupiedTreeType::IntersectionResultWithScreenCoordinates>
   getRaycastHitVoxelsWithScreenCoordinates(
-      const Viewpoint& viewpoint) const;
+      const Viewpoint& viewpoint, const bool remove_duplicates = true) const;
 
   /// Perform raycast on the BVH tree on a limited window around the center.
   /// Returns a vector of hit voxels with additional info.
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResultWithScreenCoordinates>
+  std::vector<OccupiedTreeType::IntersectionResultWithScreenCoordinates>
   getRaycastHitVoxelsWithScreenCoordinates(
-      const Viewpoint& viewpoint, const size_t width, const size_t height) const;
+      const Viewpoint& viewpoint, const size_t width, const size_t height,
+      const bool remove_duplicates = true) const;
 
   /// Perform raycast on the BVH tree on a limited window around the center.
   /// Returns a vector of hit voxels with additional info.
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResultWithScreenCoordinates>
+  std::vector<OccupiedTreeType::IntersectionResultWithScreenCoordinates>
   getRaycastHitVoxelsWithScreenCoordinates(
       const Viewpoint& viewpoint,
       const size_t x_start, const size_t x_end,
-      const size_t y_start, const size_t y_end) const;
-
-#if WITH_CUDA
-
-  /// Perform raycast on the BVH tree.
-  /// Returns a vector of hit voxels with additional info.
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxelsCuda(
-      const Viewpoint& viewpoint) const;
-
-  /// Perform raycast on the BVH tree on a limited window around the center.
-  /// Returns a vector of hit voxels with additional info.
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult> getRaycastHitVoxelsCuda(
-      const Viewpoint& viewpoint, const size_t width, const size_t height) const;
-
-  /// Perform raycast on the BVH tree.
-  /// Returns a vector of hit voxels with additional info.
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult>
-  getRaycastHitVoxelsCuda(
-      const Viewpoint& viewpoint,
-      const size_t x_start, const size_t x_end,
-      const size_t y_start, const size_t y_end) const;
-
-  /// Perform raycast on the BVH tree.
-  /// Returns a vector of hit voxels with additional info.
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResultWithScreenCoordinates>
-  getRaycastHitVoxelsWithScreenCoordinatesCuda(
-      const Viewpoint& viewpoint) const;
-
-  /// Perform raycast on the BVH tree on a limited window around the center.
-  /// Returns a vector of hit voxels with additional info.
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResultWithScreenCoordinates>
-  getRaycastHitVoxelsWithScreenCoordinatesCuda(
-      const Viewpoint& viewpoint, const size_t width, const size_t height) const;
-
-  /// Perform raycast on the BVH tree.
-  /// Returns a vector of hit voxels with additional info.
-  std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResultWithScreenCoordinates>
-  getRaycastHitVoxelsWithScreenCoordinatesCuda(
-      const Viewpoint& viewpoint,
-      const size_t x_start, const size_t x_end,
-      const size_t y_start, const size_t y_end) const;
-
-#endif
+      const size_t y_start, const size_t y_end,
+      const bool remove_duplicates = true) const;
 
   /// Perform raycast on the BVH tree.
   /// Returns the set of hit voxels with corresponding information + the total information of all voxels.
   std::pair<VoxelWithInformationSet, FloatType>
     getRaycastHitVoxelsWithInformationScore(
             const Viewpoint& viewpoint,
-            const bool ignore_voxels_with_zero_information = false) const;
+            const bool ignore_voxels_with_zero_information = false,
+            const bool remove_duplicates = true) const;
 
   /// Perform raycast on the BVH tree on a centered window with specific size.
   /// Returns the set of hit voxels with corresponding information + the total information of all voxels.
   std::pair<VoxelWithInformationSet, FloatType>
     getRaycastHitVoxelsWithInformationScore(
             const Viewpoint& viewpoint, const size_t width, const size_t height,
-            const bool ignore_voxels_with_zero_information = false) const;
+            const bool ignore_voxels_with_zero_information = false,
+            const bool remove_duplicates = true) const;
 
   /// Perform raycast on the BVH tree.
   /// Returns the set of hit voxels with corresponding information + the total information of all voxels.
@@ -1163,7 +1211,24 @@ public:
         const Viewpoint& viewpoint,
         const size_t x_start, const size_t x_end,
         const size_t y_start, const size_t y_end,
-        const bool ignore_voxels_with_zero_information = false) const;
+        const bool ignore_voxels_with_zero_information = false,
+        const bool remove_duplicates = true) const;
+
+  /// Perform raycast on the BVH tree.
+  /// Returns a vector of hit voxels as a set.
+  std::unordered_set<const VoxelType*> getRaycastHitVoxelsSet(const Viewpoint& viewpoint) const;
+
+  /// Perform raycast on the BVH tree.
+  /// Returns a vector of hit voxels as a set.
+  std::unordered_set<const VoxelType*> getRaycastHitVoxelsSet(
+          const Viewpoint& viewpoint, const size_t width, const size_t height) const;
+
+  /// Perform raycast on the BVH tree.
+  /// Returns a vector of hit voxels as a set.
+  std::unordered_set<const VoxelType*> getRaycastHitVoxelsSet(
+          const Viewpoint& viewpoint,
+          const size_t x_start, const size_t x_end,
+          const size_t y_start, const size_t y_end) const;
 
   /// Returns the observation factor in [0, 1] for a single voxel.
   FloatType computeViewpointObservationFactor(const Viewpoint& viewpoint, const VoxelType* node) const;
@@ -1181,11 +1246,11 @@ public:
 
   /// Returns the observation score for a single hit voxel result.
   FloatType computeViewpointObservationScore(const Viewpoint& viewpoint,
-      const ViewpointPlannerData::OccupiedTreeType::IntersectionResult& result) const;
+      const OccupiedTreeType::IntersectionResult& result) const;
 
   /// Returns the observation score for a single hit voxel result.
   FloatType computeViewpointObservationScore(const Viewpoint& viewpoint,
-      const ViewpointPlannerData::OccupiedTreeType::IntersectionResultWithScreenCoordinates& result) const;
+      const OccupiedTreeType::IntersectionResultWithScreenCoordinates& result) const;
 
   /// Returns the observation score for a container of VoxelWithInformation objects.
   template <typename Iterator>
@@ -1194,40 +1259,15 @@ public:
   /// Compute information weighted center position of observed voxels
   Vector3 computeInformationVoxelCenter(const ViewpointEntry& viewpoint_entry) const;
 
-  // Matching score computation
-
-  std::unordered_set<Point3DId> computeProjectedMapPoints(const CameraId camera_id, const Pose& pose,
-      FloatType projection_margin=Viewpoint::DEFAULT_PROJECTION_MARGIN) const;
-
-  std::unordered_set<Point3DId> computeFilteredMapPoints(const CameraId camera_id, const Pose& pose,
-      FloatType projection_margin=Viewpoint::DEFAULT_PROJECTION_MARGIN) const;
-
-  std::unordered_set<Point3DId> computeVisibleMapPoints(const CameraId camera_id, const Pose& pose,
-      FloatType projection_margin=Viewpoint::DEFAULT_PROJECTION_MARGIN) const;
-
-  std::unordered_set<Point3DId> computeVisibleMapPointsFiltered(const CameraId camera_id, const Pose& pose,
-      FloatType projection_margin=Viewpoint::DEFAULT_PROJECTION_MARGIN) const;
-
   /// Convert local ENU coordinates to GPS coordinates
   using GpsCoordinateType = reconstruction::SfmToGpsTransformation::GpsCoordinate;
   GpsCoordinateType convertPositionToGps(const Vector3& position) const;
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-#if WITH_OPENGL_OFFSCREEN
-
   QImage drawPoissonMesh(const ViewpointEntryIndex viewpoint_index) const;
-  QImage drawPoissonMesh(const Viewpoint& viewpoint) const;
-  QImage drawPoissonMesh(const Pose& pose) const;
-  QImage drawPoissonMesh(const QMatrix4x4& pvm_matrix) const;
   QImage drawPoissonMeshNormals(const ViewpointEntryIndex viewpoint_index) const;
-  QImage drawPoissonMeshNormals(const Viewpoint& viewpoint) const;
-  QImage drawPoissonMeshNormals(const Pose& pose) const;
-  QImage drawPoissonMeshNormals(const QMatrix4x4& pvm_matrix) const;
   QImage drawPoissonMeshDepth(const ViewpointEntryIndex viewpoint_index) const;
-  QImage drawPoissonMeshDepth(const Viewpoint& viewpoint) const;
-  QImage drawPoissonMeshDepth(const Pose& pose) const;
-  QImage drawPoissonMeshDepth(const QMatrix4x4& pvm_matrix, const QMatrix4x4& vm_matrix) const;
 
   Vector3 computePoissonMeshNormalVector(const Viewpoint& viewpoint, const Vector3& position) const;
 
@@ -1239,24 +1279,22 @@ public:
   FloatType computePoissonMeshDepth(const Viewpoint& viewpoint,
                                          const size_t x, const size_t y) const;
 
-  ait::Color4<uint8_t> encodeDepthValue(const FloatType depth) const;
-
-  FloatType decodeDepthValue(const ait::Color4<uint8_t>& color) const;
-
-  FloatType decodeDepthValue(const QColor& color) const;
-
-  QImage convertEncodedDepthImageToRGB(const QImage& encoded_image, const FloatType min_depth, const FloatType max_depth) const;
-
-#endif
-
 private:
-  /// Remove duplicate hit voxels from raycast results
-  void removeDuplicateRaycastHitVoxels(
-      std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResult>* raycast_results) const;
+  /// Remove invalid hit voxels from raycast results
+  void removeInvalidRaycastHitVoxels(
+          std::vector<OccupiedTreeType::IntersectionResult>* raycast_results) const;
+
+  /// Remove invalid hit voxels from raycast results
+  void removeInvalidRaycastHitVoxels(
+          std::vector<OccupiedTreeType::IntersectionResultWithScreenCoordinates>* raycast_results) const;
 
   /// Remove duplicate hit voxels from raycast results
   void removeDuplicateRaycastHitVoxels(
-      std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResultWithScreenCoordinates>* raycast_results) const;
+      std::vector<OccupiedTreeType::IntersectionResult>* raycast_results) const;
+
+  /// Remove duplicate hit voxels from raycast results
+  void removeDuplicateRaycastHitVoxels(
+      std::vector<OccupiedTreeType::IntersectionResultWithScreenCoordinates>* raycast_results) const;
 
   /// Remove points that are occluded from the given pose.
   /// A point needs to be dist_margin behind a voxel surface to be removed.
@@ -1267,6 +1305,10 @@ private:
 
   /// Compute resolution information factor based on distance to voxel
   WeightType computeResolutionInformationFactor(const Viewpoint& viewpoint, const VoxelType* node) const;
+
+  /// Retrieve normal vector for specific viewpoint
+  Vector3 computeNormalVector(
+          const Viewpoint& viewpoint, const VoxelType* node, const Vector2& image_coordinates) const;
 
   /// Compute incidence information factor based on incidence angle
   WeightType computeIncidenceInformationFactor(
@@ -1281,10 +1323,20 @@ private:
       const Viewpoint& viewpoint, const VoxelType* node, const Vector2& screen_coordinates) const;
 
   /// Add a viewpoint entry to the graph.
-  ViewpointEntryIndex addViewpointEntry(ViewpointEntry&& viewpoint_entry);
+  ViewpointEntryIndex addViewpointEntry(
+          ViewpointEntry&& viewpoint_entry, const bool ignore_viewpoint_count_grid = false);
+
+  /// Add a viewpoint entry to the graph.
+  ViewpointEntryIndex addViewpointEntry(
+          const ViewpointEntry& viewpoint_entry, const bool ignore_viewpoint_count_grid = false);
 
   /// Add a viewpoint entry without acquiring a lock. Returns the index of the new viewpoint entry.
-  ViewpointEntryIndex addViewpointEntryWithoutLock(ViewpointEntry&& viewpoint_entry);
+  ViewpointEntryIndex addViewpointEntryWithoutLock(
+          ViewpointEntry&& viewpoint_entry, const bool ignore_viewpoint_count_grid = false);
+
+  /// Add a viewpoint entry without acquiring a lock. Returns the index of the new viewpoint entry.
+  ViewpointEntryIndex addViewpointEntryWithoutLock(
+          const ViewpointEntry& viewpoint_entry, const bool ignore_viewpoint_count_grid = false);
 
   /// Add a path entry to a viewpoint path
   void addViewpointPathEntryWithoutLock(ViewpointPath *viewpoint_path, ViewpointPathComputationData *comp_data,
@@ -1344,6 +1396,13 @@ private:
   /// Report info of current viewpoint paths
   void reportViewpointPathsStats() const;
 
+  /// Report info on viewpoint path
+  void reportViewpointPathsStats(const ViewpointPath& viewpoint_path) const;
+
+  /// Report info on viewpoint path
+  void reportViewpointPathsStats(
+          const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data) const;
+
   /// Compute approx. shortest cycle to cover all viewpoints in the path (i.e. solve TSP problem)
   std::vector<size_t> computeApproximateShortestCycle(const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data);
 
@@ -1358,7 +1417,7 @@ private:
   void improveViewpointTourWith2Opt(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data);
 
   /// Find shortest motion between two viewpoints using A-Star on the viewpoint graph.
-  ViewpointMotion findShortestMotionAStar(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index);
+  ViewpointMotion findShortestMotionAStar(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index) const;
 
   /// Optimize viewpoint motion by reducing redundant in-between viewpoints
   ViewpointMotion optimizeViewpointMotion(const ViewpointMotion& motion) const;
@@ -1381,41 +1440,12 @@ private:
   /// Create a subgraph with the nodes from a viewpoint path
   ViewpointPathGraphWrapper createViewpointPathGraph(const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data);
 
-#if WITH_OPENGL_OFFSCREEN
-
-  /// Initialize OpenGL offscreen surface for rendering mesh normals
-  void initializeOpenGL() const;
-
-  void clearOpenGL() const;
-
-  /// Upload poisson mesh to GPU for rendering
-  void uploadPoissonMesh() const;
-
-  void bindOpenGLFbo() const;
-  void releaseOpenGLFbo() const;
-
-  void beginOpenGLDrawing() const;
-  void finishOpenGLDrawing() const;
-
-  QMatrix4x4 getPvmMatrixFromViewpoint(const Viewpoint& viewpoint) const;
-  QMatrix4x4 getPvmMatrixFromPose(const Pose& pose) const;
-  QMatrix4x4 getVmMatrixFromViewpoint(const Viewpoint& viewpoint) const;
-  QMatrix4x4 getVmMatrixFromPose(const Pose& pose) const;
-
-  mutable Pose cached_poisson_mesh_normals_pose_;
-  mutable QImage cached_poisson_mesh_normals_image_;
-
-  mutable Pose cached_poisson_mesh_depth_pose_;
-  mutable QImage cached_poisson_mesh_depth_image_;
-
-#endif
-
-  mutable ait::Random<FloatType, std::int64_t> random_;
+  mutable bh::Random<FloatType, std::int64_t> random_;
 
   Options options_;
 
   BoundingBoxType pose_sample_bbox_;
-  Vector3 drone_extent_;
+  BoundingBoxType drone_bbox_;
   FloatType triangulation_max_cos_angle_;
   FloatType triangulation_min_sin_angle_square_;
   FloatType triangulation_max_sin_angle_square_;
@@ -1423,9 +1453,16 @@ private:
   FloatType incidence_angle_threshold_;
   FloatType incidence_angle_falloff_factor_;
   FloatType voxel_sensor_size_ratio_falloff_factor_;
+  FloatType sparse_matching_max_angular_distance_;
 
   std::unique_ptr<ViewpointPlannerData> data_;
   PinholeCamera virtual_camera_;
+  viewpoint_planner::ViewpointRaycast raycaster_;
+  viewpoint_planner::ViewpointScore scorer_;
+  std::unique_ptr<viewpoint_planner::ViewpointOffscreenRenderer> offscreen_renderer_;
+
+  mutable std::unique_ptr<bh::opengl::OffscreenOpenGL<FloatType>> offscreen_opengl_;
+  mutable std::unique_ptr<rendering::OcTreeDrawer> octree_drawer_;
 
   std::mutex mutex_;
 
@@ -1435,10 +1472,14 @@ private:
   size_t num_of_failed_viewpoint_entry_samples_;
   // All tentative viewpoints
   ViewpointEntryVector viewpoint_entries_;
-  // Cached visible sparse points
-  mutable std::unordered_map<ViewpointEntryIndex, std::unordered_set<reconstruction::Point3DId>> cached_visible_sparse_points_;
+  // Cached visible sparse points and normals
+  mutable std::unordered_map<ViewpointEntryIndex, std::unordered_map<reconstruction::Point3DId, Vector3>> cached_visible_sparse_points_;
   // Mutex for cached visible sparse points
   mutable std::mutex cached_visible_sparse_points_mutex_;
+  // Cached visible voxels
+  mutable std::unordered_map<ViewpointEntryIndex, std::unordered_set<size_t>> cached_visible_voxels_;
+  // Mutex for cached visible sparse points
+  mutable std::mutex cached_visible_voxels_mutex_;
   // Number of real viewpoints at the beginning of the viewpoint_entries_ vector
   // These need to be distinguished because they could be in non-free space of the map
   size_t num_real_viewpoints_;
@@ -1468,15 +1509,6 @@ private:
   std::vector<ViewpointPathComputationData> viewpoint_paths_data_;
   // Map from triangle index to viewpoints that project features into it
   FeatureViewpointMap feature_viewpoint_map_;
-
-#if WITH_OPENGL_OFFSCREEN
-  mutable std::mutex opengl_mutex_;
-  mutable std::mutex poisson_mesh_cache_mutex_;
-  mutable QOffscreenSurface* opengl_surface_;
-  mutable QOpenGLContext* opengl_context_;
-  mutable QOpenGLFramebufferObject* opengl_fbo_;
-  mutable TriangleDrawer* poisson_mesh_drawer_;
-#endif
 };
 
 BOOST_CLASS_VERSION(ViewpointPlanner::ViewpointPathEntry, 2)

@@ -13,6 +13,37 @@
 namespace bh {
 
 template <typename Derived>
+Eigen::Matrix<typename Derived::Scalar, 3, 3>
+  skewSymmetricMatrix(const Derived& vec) {
+  using Scalar = typename Derived::Scalar;
+  BH_ASSERT(vec.size() == 3);
+  Eigen::Matrix<typename Derived::Scalar, 3, 3> skew_sym_matrix;
+  Scalar v1 = vec(0);
+  Scalar v2 = vec(1);
+  Scalar v3 = vec(2);
+  // Row 1
+  skew_sym_matrix(0, 0) = 0;
+  skew_sym_matrix(0, 1) = -v3;
+  skew_sym_matrix(0, 2) = v2;
+  // Row 2
+  skew_sym_matrix(1, 0) = v3;
+  skew_sym_matrix(1, 1) = 0;
+  skew_sym_matrix(1, 2) = -v1;
+  // Row 3
+  skew_sym_matrix(2, 0) = -v2;
+  skew_sym_matrix(2, 1) = v1;
+  skew_sym_matrix(2, 2) = 0;
+
+  // Test
+//  for (int row = 0; row < skew_sym_matrix.rows(); ++row) {
+//    for (int col = 0; col < skew_sym_matrix.cols(); ++col) {
+//      BH_ASSERT(skew_sym_matrix(row, col) ==  -skew_sym_matrix(col, row));
+//    }
+//  }
+  return skew_sym_matrix;
+};
+
+template <typename Derived>
 typename Derived::PlainObject clamp(
     const Eigen::MatrixBase<Derived>& matrix,
 const typename Derived::Scalar min = 0,

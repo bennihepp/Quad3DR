@@ -13,15 +13,15 @@
 
 #include <octomap/octomap.h>
 
-#include <ait/eigen.h>
-#include <ait/options.h>
-#include <ait/eigen_options.h>
-#include <ait/math/geometry.h>
+#include <bh/eigen.h>
+#include <bh/config_options.h>
+#include <bh/eigen_options.h>
+#include <bh/math/geometry.h>
 
 #include "../octree/occupancy_map.h"
 
-#include <ait/mLib.h>
-#include <ait/mLibUtils.h>
+#include <bh/mLib/mLib.h>
+#include <bh/mLib/mLibUtils.h>
 
 using std::cout;
 using std::cerr;
@@ -32,7 +32,7 @@ using std::size_t;
 using FloatType = float;
 USE_FIXED_EIGEN_TYPES(FloatType)
 
-using BoundingBoxType = ait::BoundingBox3D<FloatType>;
+using BoundingBoxType = bh::BoundingBox3D<FloatType>;
 using MeshType = ml::MeshData<FloatType>;
 using MeshIOType = ml::MeshIO<FloatType>;
 using TriMeshType = ml::TriMesh<FloatType>;
@@ -43,12 +43,12 @@ using OccupancyMapType = OccupancyMap<OccupancyNode>;
 class OccupancyMapFromMeshCmdline {
 public:
 
-  class Options : public ait::ConfigOptions {
+  class Options : public bh::ConfigOptions {
   public:
     static const string kPrefix;
 
     Options()
-    : ait::ConfigOptions(kPrefix) {
+    : bh::ConfigOptions(kPrefix) {
       addOption<Vector3>("clip_bbox_min", &clip_bbox_min);
       addOption<Vector3>("clip_bbox_max", &clip_bbox_max);
       addOption<FloatType>("mesh_scale", &mesh_scale);
@@ -73,15 +73,15 @@ public:
     bool verbose = false;
   };
 
-  static std::map<string, std::unique_ptr<ait::ConfigOptions>> getConfigOptions() {
-    std::map<string, std::unique_ptr<ait::ConfigOptions>> config_options;
+  static std::map<string, std::unique_ptr<bh::ConfigOptions>> getConfigOptions() {
+    std::map<string, std::unique_ptr<bh::ConfigOptions>> config_options;
     config_options.emplace(std::piecewise_construct,
         std::forward_as_tuple(Options::kPrefix),
-        std::forward_as_tuple(static_cast<ait::ConfigOptions*>(new Options())));
+        std::forward_as_tuple(static_cast<bh::ConfigOptions*>(new Options())));
     return config_options;
   }
 
-  OccupancyMapFromMeshCmdline(const std::map<string, std::unique_ptr<ait::ConfigOptions>>& config_options,
+  OccupancyMapFromMeshCmdline(const std::map<string, std::unique_ptr<bh::ConfigOptions>>& config_options,
       const string& mesh_filename, const string& occupancy_map_filename)
   : options_(*dynamic_cast<Options*>(config_options.at(Options::kPrefix).get())),
     mesh_filename_(mesh_filename),
@@ -98,8 +98,8 @@ public:
     BoundingBoxType clip_bbox(
         options.clip_bbox_min,
         options.clip_bbox_max);
-    const ml::vec3<FloatType> ml_clip_bbox_min(ait::MLibUtilities::convertEigenToMlib(options.clip_bbox_min));
-    const ml::vec3<FloatType> ml_clip_bbox_max(ait::MLibUtilities::convertEigenToMlib(options.clip_bbox_max));
+    const ml::vec3<FloatType> ml_clip_bbox_min(bh::MLibUtilities::convertEigenToMlib(options.clip_bbox_min));
+    const ml::vec3<FloatType> ml_clip_bbox_max(bh::MLibUtilities::convertEigenToMlib(options.clip_bbox_max));
     const ml::BoundingBox3<FloatType> ml_clip_bbox(ml_clip_bbox_min, ml_clip_bbox_max);
     const ml::vec3<FloatType> grid_dimension = ml_clip_bbox.getExtent() * 2 / options.resolution;
 //    for (size_t i = 0; i < 3; ++i) {
@@ -111,11 +111,11 @@ public:
     for (size_t i = 0; i < 3; ++i) {
       scale_factors[i] = grid_dimension[i] / ml_clip_bbox.getExtent()[i];
     }
-    AIT_PRINT_VALUE(scale_factors);
+    BH_PRINT_VALUE(scale_factors);
     world_to_voxel = ml::Matrix4x4<FloatType>::scale(scale_factors);
-    AIT_PRINT_VALUE(world_to_voxel);
+    BH_PRINT_VALUE(world_to_voxel);
     world_to_voxel *= ml::Matrix4x4<FloatType>::translation(-ml_clip_bbox.getMin());
-    AIT_PRINT_VALUE(world_to_voxel);
+    BH_PRINT_VALUE(world_to_voxel);
     const bool solid = false;
     tri_mesh.voxelize(binary_grid, world_to_voxel, solid, verbose);
     const ml::Matrix4x4<FloatType> voxel_to_world = world_to_voxel.getInverse();
@@ -255,9 +255,9 @@ public:
               if (!options_.make_dense || occupied) {
                 tree.updateNode(point, occupied, options_.lazy_eval);
 //                OccupancyNode* node = tree.search(point, tree.getTreeDepth());
-//                AIT_PRINT_VALUE(point);
-//                AIT_PRINT_VALUE(node);
-//                AIT_PRINT_VALUE(tree.keyToCoord(tree.coordToKey(point)));
+//                BH_PRINT_VALUE(point);
+//                BH_PRINT_VALUE(node);
+//                BH_PRINT_VALUE(tree.keyToCoord(tree.coordToKey(point)));
               }
               {
                 if (occupied) {
@@ -293,7 +293,7 @@ public:
 //                cout << "surface=" << intersection.getSurfaceNormal() << endl;
 //                cout << "z_next=" << z_next << endl;
 //              }
-//              AIT_ASSERT(z_next < 45);
+//              BH_ASSERT(z_next < 45);
               // Transition from outside to inside
               if (verbose) {
                 cout << "Switching to occupied space" << endl;
@@ -368,12 +368,12 @@ public:
     }
 
     octomap::point3d point(-4.1f, 3.7f, 11.5f);
-    AIT_PRINT_VALUE(tree.keyToCoord(tree.coordToKey(point)));
+    BH_PRINT_VALUE(tree.keyToCoord(tree.coordToKey(point)));
     OccupancyNode* node = tree.search(point, tree.getTreeDepth());
-    AIT_PRINT_VALUE(static_cast<void*>(node));
+    BH_PRINT_VALUE(static_cast<void*>(node));
     if (node != nullptr) {
-      AIT_PRINT_VALUE(node->getOccupancy());
-      AIT_PRINT_VALUE(node->getObservationCount());
+      BH_PRINT_VALUE(node->getOccupancy());
+      BH_PRINT_VALUE(node->getObservationCount());
     }
 
     if (options_.make_dense) {
@@ -441,7 +441,7 @@ private:
 const string OccupancyMapFromMeshCmdline::Options::kPrefix = "occupancy_map_from_mesh";
 
 std::pair<bool, boost::program_options::variables_map> processOptions(
-    int argc, char** argv, std::map<string, std::unique_ptr<ait::ConfigOptions>>& config_options)
+    int argc, char** argv, std::map<string, std::unique_ptr<bh::ConfigOptions>>& config_options)
 {
   namespace po = boost::program_options;
 
@@ -470,7 +470,7 @@ std::pair<bool, boost::program_options::variables_map> processOptions(
     }
     std::ifstream config_in(vm["config-file"].as<string>());
     if (!config_in) {
-      throw AIT_EXCEPTION("Unable to open config file");
+      throw BH_EXCEPTION("Unable to open config file");
     }
     else {
       po::store(parse_config_file(config_in, config_file_options), vm);
@@ -494,7 +494,7 @@ std::pair<bool, boost::program_options::variables_map> processOptions(
 }
 
 int main(int argc, char** argv) {
-  std::map<std::string, std::unique_ptr<ait::ConfigOptions>> config_options =
+  std::map<std::string, std::unique_ptr<bh::ConfigOptions>> config_options =
       OccupancyMapFromMeshCmdline::getConfigOptions();
 
   // Handle command line and config file

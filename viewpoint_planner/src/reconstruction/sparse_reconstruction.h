@@ -8,10 +8,10 @@
 #pragma once
 
 #include <unordered_map>
-#include <ait/eigen.h>
-#include <ait/eigen_serialization.h>
-#include <ait/gps.h>
-#include <ait/pose.h>
+#include <bh/eigen.h>
+#include <bh/eigen_serialization.h>
+#include <bh/gps.h>
+#include <bh/pose.h>
 
 // Representations for a sparse reconstruction from Colmap.
 // File input adapted from Colmap.
@@ -33,6 +33,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+#include <bh/vision/cameras.h>
+
 namespace reconstruction {
 
 using FloatType = float;
@@ -47,13 +49,30 @@ using ImageId = size_t;
 using Point3DId = size_t;
 using FeatureId = size_t;
 
-using Pose = ait::Pose<FloatType>;
+using Pose = bh::Pose<FloatType>;
 
 class PinholeCamera {
 public:
+  static PinholeCamera createSimple(const size_t width, const size_t height, const FloatType focal_length);
+
+  static PinholeCamera createSimple(const size_t width, const size_t height,
+                                    const FloatType focal_length_x, const FloatType focal_length_y);
+
   PinholeCamera();
 
   PinholeCamera(size_t width, size_t height, const CameraMatrix& intrinsics);
+
+  using bhPinholeCamera = bh::vision::PinholeCamera<FloatType>;
+
+  operator bhPinholeCamera() const {
+    return bhPinholeCamera(width(), height(), intrinsics());
+  }
+
+  bool operator==(const PinholeCamera& other) const;
+
+  bool operator!=(const PinholeCamera& other) const;
+
+  PinholeCamera getScaledCamera(const FloatType scale_factor) const;
 
   bool isValid() const;
 
@@ -226,7 +245,7 @@ struct SfmToGpsTransformation {
   Vector3 sfm_centroid;
   Quaternion sfm_to_gps_quaternion;
 
-  using GpsCoordinate = ait::GpsCoordinateWithAltitude<GpsFloatType>;
+  using GpsCoordinate = bh::GpsCoordinateWithAltitude<GpsFloatType>;
   GpsCoordinate gps_reference;
 };
 
