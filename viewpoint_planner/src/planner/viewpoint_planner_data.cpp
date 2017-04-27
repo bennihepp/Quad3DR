@@ -217,6 +217,11 @@ bool ViewpointPlannerData::isValidObjectPosition(const Vector3& position, const 
   }
   else {
     BoundingBoxType centered_object_bbox = object_bbox + position;
+    if (centered_object_bbox.getMaximum(2) >= options_.obstacle_free_height) {
+      Vector3 cropped_maximum = object_bbox.getMaximum();
+      cropped_maximum(2) = options_.obstacle_free_height;
+      centered_object_bbox = BoundingBoxType(centered_object_bbox.getMinimum(), cropped_maximum);
+    }
     std::vector<ViewpointPlannerData::OccupiedTreeType::ConstBBoxIntersectionResult> results =
             occupied_bvh_.intersects(centered_object_bbox);
     return results.empty();
@@ -602,9 +607,50 @@ ViewpointPlannerData::generateAugmentedOctree(std::unique_ptr<RawOccupancyMapTyp
   if (!isTreeConsistent(*output_tree.get())) {
     throw BH_EXCEPTION("Augmented tree is inconsistent");
   }
+  std::stack<TreeNavigatorType> expansion_stack;
   for (auto it = output_tree->begin_tree(); it != output_tree->end_tree(); ++it) {
     BH_ASSERT(it->getWeight() >= 0);
   }
+  for (auto it = output_tree->begin_leafs(); it != output_tree->end_leafs(); ++it) {
+    const Vector3 position(it.getX(), it.getY(), it.getZ());
+    const FloatType size = it.getSize();
+    const BoundingBoxType bbox(position, size);
+    if (!bbox.intersects(bvh_bbox_)) {
+      continue;
+    }
+    if (bbox.getMinimum(2) >= options_.obstacle_free_height) {
+      it->setOccupancy(0);
+      it->setObservationCount(1);
+    }
+    else if (bbox.getMaximum(2) >= options_.obstacle_free_height
+             && it.getDepth() < output_tree->getTreeDepth()) {
+      OccupancyMapType::NodeType *node = &(*it);
+      TreeNavigatorType navigator(output_tree.get(), it.getKey(), node, it.getDepth());
+      expansion_stack.push(navigator);
+    }
+  }
+  std::cout << "Expanding " << expansion_stack.size() << " nodes" << std::endl;
+  while (!expansion_stack.empty()) {
+    TreeNavigatorType navigator = expansion_stack.top();
+    expansion_stack.pop();
+    output_tree->expandNode(navigator.getNode());
+    const FloatType size = navigator.getSize();
+    for (size_t child_idx = 0; child_idx < 8; ++child_idx) {
+      const BoundingBoxType bbox(navigator.getPosition(), size);
+      if (!bbox.intersects(bvh_bbox_)) {
+        continue;
+      }
+      if (bbox.getMinimum(2) >= options_.obstacle_free_height) {
+        navigator->setOccupancy(0);
+        navigator->setObservationCount(1);
+      }
+      else if (bbox.getMaximum(2) >= options_.obstacle_free_height
+               && navigator.getDepth() < output_tree->getTreeDepth()) {
+        expansion_stack.push(navigator.child(child_idx));
+      }
+    }
+  }
+  std::cout << "Done" << std::endl;
   timer.printTimingMs("Converting raw input tree");
 
   // TODO: Augmented tree with weights necessary?
@@ -776,14 +822,20 @@ void ViewpointPlannerData::generateBVHTree(const OccupancyMapType* octree) {
         center << center_octomap.x(), center_octomap.y(), center_octomap.z();
         const float size = it.getSize();
         object_with_bbox.bounding_box = typename OccupiedTreeType::BoundingBoxType(center, size);
+        object_with_bbox.bounding_box.constrainTo(bvh_bbox_);
+        if (object_with_bbox.bounding_box.getMaximum(2) >= options_.obstacle_free_height) {
+          const Vector3 min = object_with_bbox.bounding_box.getMinimum();
+          Vector3 max = object_with_bbox.bounding_box.getMaximum();
+          max(2) = options_.obstacle_free_height;
+          object_with_bbox.bounding_box = typename OccupiedTreeType::BoundingBoxType(min, max);
+        }
+        if (object_with_bbox.bounding_box.isEmpty()) {
+          continue;
+        }
         object_with_bbox.object = new NodeObjectType();
         object_with_bbox.object->occupancy = it->getOccupancy();
         object_with_bbox.object->observation_count = it->getObservationCount();
         object_with_bbox.object->weight = it->getWeight();
-        object_with_bbox.bounding_box.constrainTo(bvh_bbox_);
-        if (object_with_bbox.bounding_box.isEmpty()) {
-          continue;
-        }
         object_with_bbox.object->normal.setZero();
         // Find nearest neighbor faces to compute normal of voxel/node
         if (!options_.enable_opengl) {
