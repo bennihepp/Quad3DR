@@ -121,6 +121,14 @@ public:
     vec->normalize();
   }
 
+  /// Sample from a uniform discrete distribution
+  template <typename Iterator>
+  Iterator sampleDiscrete(const Iterator first, const Iterator last) {
+    const size_t index = sampleUniformIntExclusive(last - first);
+    const Iterator sample_it = first + index;
+    return sample_it;
+  }
+
   /// Sample from a discrete distribution with probabilities proportional to the given (positive) weights
   template <typename Iterator>
   Iterator sampleDiscreteWeighted(const Iterator first, const Iterator last) {
