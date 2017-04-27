@@ -17,7 +17,10 @@ ViewpointOffscreenRenderer::ViewpointOffscreenRenderer(const PinholeCamera& came
       poisson_mesh_drawer_(nullptr),
       antialiasing_(false),
       clear_color_(1, 1, 1, 1),
-      camera_(camera), poisson_mesh_(poisson_mesh) {}
+      camera_(camera),
+      near_plane_(0.5),
+      far_plane_(1e5),
+      poisson_mesh_(poisson_mesh) {}
 
 ViewpointOffscreenRenderer::ViewpointOffscreenRenderer(
         const Options& options, const PinholeCamera& camera, const MeshType* poisson_mesh)
@@ -28,7 +31,10 @@ ViewpointOffscreenRenderer::ViewpointOffscreenRenderer(
       poisson_mesh_drawer_(nullptr),
       antialiasing_(false),
       clear_color_(1, 1, 1, 1),
-      camera_(camera), poisson_mesh_(poisson_mesh) {}
+      camera_(camera),
+      near_plane_(0.5),
+      far_plane_(1e5),
+      poisson_mesh_(poisson_mesh) {}
 
 ViewpointOffscreenRenderer::~ViewpointOffscreenRenderer() {
   clearOpenGL();
@@ -59,6 +65,19 @@ void ViewpointOffscreenRenderer::setCamera(const PinholeCamera& camera) {
   }
 }
 
+qreal ViewpointOffscreenRenderer::getNearPlane() const {
+  return near_plane_;
+}
+
+qreal ViewpointOffscreenRenderer::getFarPlane() const {
+  return far_plane_;
+}
+
+void ViewpointOffscreenRenderer::setNearFarPlane(const qreal near_plane, const qreal far_plane) {
+  near_plane_ = near_plane;
+  far_plane_ = far_plane;
+}
+
 std::unique_lock<std::mutex> ViewpointOffscreenRenderer::acquireOpenGLLock() const {
   return std::unique_lock<std::mutex>(opengl_mutex_);
 }
@@ -70,7 +89,7 @@ bool ViewpointOffscreenRenderer::isInitialized() const {
 void ViewpointOffscreenRenderer::initializeOpenGL() const {
   opengl_context_ = new QOpenGLContext();
   QSurfaceFormat format;
-  format.setVersion(3, 3);
+  format.setVersion(4, 5);
   format.setProfile(QSurfaceFormat::CoreProfile);
   if (antialiasing_) {
     format.setSamples(4);
@@ -253,15 +272,21 @@ void ViewpointOffscreenRenderer::clearWithoutLock(const bh::Color4<FloatType>& c
 }
 
 QMatrix4x4 ViewpointOffscreenRenderer::getPvmMatrixFromViewpoint(const Viewpoint& viewpoint) const {
-  const double fy = viewpoint.camera().getFocalLengthY();
-  const double v_fov = 2 * std::atan(viewpoint.camera().height() / (2 * fy));
-  const qreal v_fov_degree = v_fov * 180 / (qreal)M_PI;
-  const qreal aspect_ratio = viewpoint.camera().width() / static_cast<qreal>(viewpoint.camera().height());
-  const qreal near_plane = 0.5;
-  const qreal far_plane = 1e5;
+//  const double fy = viewpoint.camera().getFocalLengthY();
+//  const double v_fov = 2 * std::atan(viewpoint.camera().height() / (2 * fy));
+//  const qreal v_fov_degree = v_fov * 180 / (qreal)M_PI;
+//  const qreal aspect_ratio = viewpoint.camera().width() / static_cast<qreal>(viewpoint.camera().height());
 //  std::cout << "Setting camera FOV to " << v_fov_degree << " degrees" << std::endl;
+//  QMatrix4x4 proj;
+//  proj.perspective(v_fov_degree, aspect_ratio, near_plane_, far_plane_);
+
   QMatrix4x4 proj;
-  proj.perspective(v_fov_degree, aspect_ratio, near_plane, far_plane);
+  proj.fill(0);
+  proj(0, 0) = viewpoint.camera().intrinsics()(0, 0) / viewpoint.camera().intrinsics()(0, 2);
+  proj(1, 1) = viewpoint.camera().intrinsics()(1, 1) / viewpoint.camera().intrinsics()(1, 2);
+  proj(2, 2) = -(far_plane_ + near_plane_) / (far_plane_ - near_plane_);
+  proj(2, 3) = -2 * far_plane_ * near_plane_ / (far_plane_ - near_plane_);
+  proj(3, 2) = -1;
 
   QMatrix4x4 pvm_matrix = proj * getVmMatrixFromViewpoint(viewpoint);
   return pvm_matrix;

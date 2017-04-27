@@ -60,6 +60,12 @@ public:
 
   void setCamera(const PinholeCamera& camera);
 
+  qreal getNearPlane() const;
+
+  qreal getFarPlane() const;
+
+  void setNearFarPlane(const qreal near_plane, const qreal far_plane);
+
   std::unique_lock<std::mutex> acquireOpenGLLock() const;
 
   void initializeOpenGL() const;
@@ -169,6 +175,9 @@ private:
   mutable QImage cached_poisson_mesh_depth_image_;
 
   PinholeCamera camera_;
+  qreal near_plane_;
+  qreal far_plane_;
+
   const MeshType* poisson_mesh_;
 };
 
