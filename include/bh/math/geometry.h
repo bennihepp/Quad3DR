@@ -391,9 +391,9 @@ private:
   Vector3 max_;
 };
 
-template <typename FloatType>
-BoundingBox3D<FloatType> operator*(FloatType scale, const BoundingBox3D<FloatType>& bbox) {
-  return BoundingBox3D<FloatType>::createFromCenterAndExtent(bbox.getCenter(), scale * bbox.getExtent());
+template <typename FloatT>
+BoundingBox3D<FloatT> operator*(FloatT scale, const BoundingBox3D<FloatT>& bbox) {
+  return BoundingBox3D<FloatT>::createFromCenterAndExtent(bbox.getCenter(), scale * bbox.getExtent());
 }
 
 using BoundingBox3Df = BoundingBox3D<float>;
