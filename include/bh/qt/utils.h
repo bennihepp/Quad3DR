@@ -12,6 +12,7 @@
 #include <QVector3D>
 #include <QMatrix4x4>
 #include <QColor>
+#include <QImage>
 
 std::ostream& operator<<(std::ostream& out, const QVector3D& vec);
 
@@ -68,6 +69,18 @@ QColor colorToQt(const bh::Color3<FloatT> &color) {
 template<typename FloatT>
 QColor colorToQt(const bh::Color4<FloatT> &color) {
   return QColor::fromRgbF(color.r(), color.g(), color.b(), color.a());
+}
+
+inline void setImageAlphaPremultiplied(QImage* image, const qreal alpha) {
+  for (int y = 0; y < image->height(); ++y) {
+    for (int x = 0; x < image->width(); ++x) {
+      QRgb pixel_rgb = qUnpremultiply(image->pixel(x, y));
+      QColor pixel_color(pixel_rgb);
+      pixel_color.setAlphaF(alpha);
+      QRgb new_pixel_color = qPremultiply(pixel_color.rgba());
+      image->setPixel(x, y, new_pixel_color);
+    }
+  }
 }
 
 }
