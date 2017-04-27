@@ -132,13 +132,33 @@ bool ViewpointPlanner::isSparseMatchable2(
 }
 
 bool ViewpointPlanner::isSparseMatchable2(
-        const ViewpointEntryIndex& viewpoint_index1,
-        const ViewpointEntryIndex& viewpoint_index2,
+        const ViewpointEntryIndex viewpoint_index1,
+        const ViewpointEntryIndex viewpoint_index2,
         const FloatType iou_threshold) const {
   const Viewpoint& viewpoint1 = viewpoint_entries_[viewpoint_index1].viewpoint;
   const Viewpoint& viewpoint2 = viewpoint_entries_[viewpoint_index2].viewpoint;
   const std::unordered_set<size_t>& visible_voxels1 = getCachedVisibleVoxels(viewpoint_index1);
   const std::unordered_set<size_t>& visible_voxels2 = getCachedVisibleVoxels(viewpoint_index2);
+  return isSparseMatchable2(viewpoint1, viewpoint2, visible_voxels1, visible_voxels2, iou_threshold);
+}
+
+bool ViewpointPlanner::isSparseMatchable2(
+        const ViewpointEntryIndex viewpoint_index1,
+        const Viewpoint& viewpoint2,
+        const FloatType iou_threshold) const {
+  const Viewpoint& viewpoint1 = viewpoint_entries_[viewpoint_index1].viewpoint;
+  const std::unordered_set<size_t>& visible_voxels1 = getCachedVisibleVoxels(viewpoint_index1);
+  const std::unordered_set<size_t> visible_voxels2 = getVisibleVoxels(viewpoint2);
+  return isSparseMatchable2(viewpoint1, viewpoint2, visible_voxels1, visible_voxels2, iou_threshold);
+}
+
+bool ViewpointPlanner::isSparseMatchable2(
+        const ViewpointEntryIndex viewpoint_index1,
+        const Viewpoint& viewpoint2,
+        const std::unordered_set<size_t>& visible_voxels2,
+        const FloatType iou_threshold) const {
+  const Viewpoint& viewpoint1 = viewpoint_entries_[viewpoint_index1].viewpoint;
+  const std::unordered_set<size_t>& visible_voxels1 = getCachedVisibleVoxels(viewpoint_index1);
   return isSparseMatchable2(viewpoint1, viewpoint2, visible_voxels1, visible_voxels2, iou_threshold);
 }
 
@@ -163,9 +183,22 @@ bool ViewpointPlanner::isSparseMatchable2(
 }
 
 bool ViewpointPlanner::isSparseMatchable2(
-        const ViewpointEntryIndex& viewpoint_index1,
-        const ViewpointEntryIndex& viewpoint_index2) const {
+        const ViewpointEntryIndex viewpoint_index1,
+        const ViewpointEntryIndex viewpoint_index2) const {
   return isSparseMatchable2(viewpoint_index1, viewpoint_index2, options_.sparse_matching_voxels_iou_threshold);
+}
+
+bool ViewpointPlanner::isSparseMatchable2(
+        const ViewpointEntryIndex viewpoint_index1,
+        const Viewpoint& viewpoint2) const {
+  return isSparseMatchable2(viewpoint_index1, viewpoint2, options_.sparse_matching_voxels_iou_threshold);
+}
+
+bool ViewpointPlanner::isSparseMatchable2(
+        const ViewpointEntryIndex viewpoint_index1,
+        const Viewpoint& viewpoint2,
+        const std::unordered_set<size_t>& visible_voxels2) const {
+  return isSparseMatchable2(viewpoint_index1, viewpoint2, visible_voxels2, options_.sparse_matching_voxels_iou_threshold);
 }
 
 bool ViewpointPlanner::isSparseMatchable2(const Viewpoint& viewpoint1, const Viewpoint& viewpoint2) const {
