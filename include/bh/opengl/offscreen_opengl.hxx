@@ -11,7 +11,8 @@ namespace opengl {
 
 template <typename FloatT>
 OffscreenOpenGL<FloatT>::DrawingHandle::DrawingHandle(OffscreenOpenGL& opengl, const bool clear_viewport)
-    : finished_(false), opengl_(opengl) {
+    : finished_(false),
+      opengl_(opengl) {
         lock_ = opengl_.acquireOpenGLLock();
         opengl_.bindOpenGLFbo();
         opengl_.beginOpenGLDrawing();
@@ -68,7 +69,9 @@ OffscreenOpenGL<FloatT>::OffscreenOpenGL(const Camera& camera)
           opengl_fbo_(nullptr),
           antialiasing_(false),
           clear_color_(1, 1, 1, 1),
-          camera_(camera) {}
+          camera_(camera),
+          near_plane_(0.5),
+          far_plane_(1e5) {}
 
 template <typename FloatT>
 OffscreenOpenGL<FloatT>::~OffscreenOpenGL() {
@@ -101,6 +104,22 @@ void OffscreenOpenGL<FloatT>::setCamera(const Camera& camera) {
       clearOpenGL();
     }
   }
+}
+
+template <typename FloatT>
+FloatT OffscreenOpenGL<FloatT>::getNearPlane() const {
+  return near_plane_;
+}
+
+template <typename FloatT>
+FloatT OffscreenOpenGL<FloatT>::getFarPlane() const {
+  return far_plane_;
+}
+
+template <typename FloatT>
+void OffscreenOpenGL<FloatT>::setNearFarPlane(const FloatT near_plane, const FloatT far_plane) {
+  near_plane_ = near_plane;
+  far_plane_ = far_plane;
 }
 
 template <typename FloatT>
@@ -279,15 +298,21 @@ void OffscreenOpenGL<FloatT>::clearWithoutLock(const Color4& color) const {
 
 template <typename FloatT>
 QMatrix4x4 OffscreenOpenGL<FloatT>::getPvmMatrixFromViewpoint(const Camera& camera, const Pose& pose) const {
-  const double fy = camera.focalLengthY();
-  const double v_fov = 2 * std::atan(camera.height() / (2 * fy));
-  const qreal v_fov_degree = v_fov * 180 / (qreal)M_PI;
-  const qreal aspect_ratio = camera.width() / static_cast<qreal>(camera.height());
-  const qreal near_plane = 0.5;
-  const qreal far_plane = 1e5;
-//  std::cout << "Setting camera FOV to " << v_fov_degree << " degrees" << std::endl;
+//  const double fy = camera.focalLengthY();
+//  const double v_fov = 2 * std::atan(camera.height() / (2 * fy));
+//  const qreal v_fov_degree = v_fov * 180 / (qreal)M_PI;
+//  const qreal aspect_ratio = camera.width() / static_cast<qreal>(camera.height());
+////  std::cout << "Setting camera FOV to " << v_fov_degree << " degrees" << std::endl;
+//  QMatrix4x4 proj;
+//  proj.perspective(v_fov_degree, aspect_ratio, near_plane_, far_plane_);
+
   QMatrix4x4 proj;
-  proj.perspective(v_fov_degree, aspect_ratio, near_plane, far_plane);
+  proj.fill(0);
+  proj(0, 0) = camera.intrinsics()(0, 0) / camera.intrinsics()(0, 2);
+  proj(1, 1) = camera.intrinsics()(1, 1) / camera.intrinsics()(1, 2);
+  proj(2, 2) = -(far_plane_ + near_plane_) / (far_plane_ - near_plane_);
+  proj(2, 3) = -2 * far_plane_ * near_plane_ / (far_plane_ - near_plane_);
+  proj(3, 2) = -1;
 
   QMatrix4x4 pvm_matrix = proj * getVmMatrixFromPose(pose);
   return pvm_matrix;

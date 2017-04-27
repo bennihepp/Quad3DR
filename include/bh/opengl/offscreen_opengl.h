@@ -29,11 +29,11 @@ template<typename FloatT>
 class OffscreenOpenGL{
 public:
   using FloatType = FloatT;
-  BH_USE_FIXED_EIGEN_TYPES(FloatType);
+  BH_USE_FIXED_EIGEN_TYPES(FloatT);
 
-  using Pose = bh::Pose<FloatType>;
-  using Color4 = bh::Color4<FloatType>;
-  using Camera = bh::vision::PinholeCamera<FloatType>;
+  using Pose = bh::Pose<FloatT>;
+  using Color4 = bh::Color4<FloatT>;
+  using Camera = bh::vision::PinholeCamera<FloatT>;
 
   class DrawingHandle {
   public:
@@ -72,6 +72,12 @@ public:
   void setAntialiasing(const bool antialiasing);
 
   void setCamera(const Camera &camera);
+
+  FloatT getNearPlane() const;
+
+  FloatT getFarPlane() const;
+
+  void setNearFarPlane(const FloatT near_plane, const FloatT far_plane);
 
   std::unique_lock<std::mutex> acquireOpenGLLock() const;
 
@@ -131,6 +137,8 @@ private:
   bool antialiasing_;
   Color4 clear_color_;
   Camera camera_;
+  FloatT near_plane_;
+  FloatT far_plane_;
 };
 
 }
