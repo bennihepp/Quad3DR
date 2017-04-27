@@ -132,10 +132,10 @@ ViewpointPlanner::FloatType ViewpointPlanner::computeNewInformation(
       auto it = viewpoint_path.observed_voxel_map.find(vi.voxel);
       if (it != viewpoint_path.observed_voxel_map.end()) {
         const WeightType voxel_weight = vi.voxel->getObject()->weight;
-        BH_ASSERT(it->second <= voxel_weight);
+//        BH_ASSERT(it->second <= voxel_weight);
         novel_information = std::min(observation_information, voxel_weight - it->second);
       }
-      BH_ASSERT(novel_information >= 0);
+//      BH_ASSERT(novel_information >= 0);
       return value + novel_information;
     });
   //    VoxelWithInformationSet difference_set = bh::computeSetDifference(new_viewpoint.voxel_set, viewpoint_path.observed_voxel_set);
