@@ -32,9 +32,6 @@ BinnedOcTreeDrawer::BinnedOcTreeDrawer()
     min_weight_(0), max_weight_(std::numeric_limits<FloatType>::max()),
     low_weight_(0), high_weight_(std::numeric_limits<FloatType>::max()),
     min_information_(0), max_information_(std::numeric_limits<FloatType>::max()) {
-  // origin and movement
-  initial_origin_ = octomap::pose6d(0, 0, 0, 0, 0, 0);
-  origin_ = initial_origin_;
   for (size_t i = 0; i < 10; ++i) {
     FloatType occupancy_bin = i / 10.0;
     occupancy_bins_.push_back(occupancy_bin);
@@ -200,20 +197,19 @@ void BinnedOcTreeDrawer::setRenderObservationThreshold(size_t render_observation
   render_observation_threshold_ = render_observation_threshold;
 }
 
-void BinnedOcTreeDrawer::setOctree(const viewpoint_planner::OccupancyMapType* octree, const pose6d& origin)
-{
+void BinnedOcTreeDrawer::setOctree(
+        const viewpoint_planner::OccupancyMapType* octree,
+        const FloatType min_z_limit /*= std::numeric_limits<FloatType>::lowest()*/,
+        const FloatType max_z_limit /*= std::numeric_limits<FloatType>::max()*/) {
     octree_ = octree;
-    // save origin used during cube generation
-    initial_origin_ = octomap::pose6d(octomap::point3d(0, 0, 0), origin.rot());
-    // origin is in global coords
-    origin_ = origin;
-    updateVoxelsFromOctree();
+    updateVoxelsFromOctree(min_z_limit, max_z_limit);
 }
 
-void BinnedOcTreeDrawer::updateVoxelsFromOctree()
-{
+void BinnedOcTreeDrawer::updateVoxelsFromOctree(
+        const FloatType min_z_limit /*= std::numeric_limits<FloatType>::lowest()*/,
+        const FloatType max_z_limit /*= std::numeric_limits<FloatType>::max()*/) {
   bh::Timer timer;
-  updateVoxelData();
+  updateVoxelData(min_z_limit, max_z_limit);
   timer.printTiming("Updating voxel arrays");
 }
 
@@ -553,7 +549,9 @@ void BinnedOcTreeDrawer::updateRaycastVoxels(
   std::cout << "Weight range: [" << low_weight << ", " << high_weight << "]" << std::endl;
 }
 
-void BinnedOcTreeDrawer::updateVoxelData() {
+void BinnedOcTreeDrawer::updateVoxelData(
+        const FloatType min_z_limit /*= std::numeric_limits<FloatType>::lowest()*/,
+        const FloatType max_z_limit /*= std::numeric_limits<FloatType>::max()*/) {
   BH_ASSERT_STR(octree_ != nullptr, "Octree was not initialized");
 
   std::unordered_map<FloatType, std::vector<OGLVoxelData>> voxel_data;
@@ -571,8 +569,8 @@ void BinnedOcTreeDrawer::updateVoxelData() {
   low_observation_count_ = std::numeric_limits<uint32_t>::max();
   high_observation_count_ = std::numeric_limits<uint32_t>::lowest();
   // Range of z coordinate height color map
-  FloatType min_z = std::numeric_limits<FloatType>::infinity();
-  FloatType max_z = -std::numeric_limits<FloatType>::infinity();
+  FloatType min_z = std::numeric_limits<FloatType>::max();
+  FloatType max_z = std::numeric_limits<FloatType>::lowest();
 
   for(viewpoint_planner::OccupancyMapType::tree_iterator it = octree_->begin_tree(render_tree_depth_), end=octree_->end_tree(); it!= end; ++it) {
     if (it.isLeaf() && it->getObservationCount() >= render_observation_threshold_) {
@@ -601,6 +599,8 @@ void BinnedOcTreeDrawer::updateVoxelData() {
       high_observation_count_ = std::max(it->getObservationCount(), high_observation_count_);
     }
   }
+  min_z = std::max(min_z, min_z_limit);
+  max_z = std::min(max_z, max_z_limit);
   // Compute and output observation and weight ranges for each bin
   for (FloatType occupancy_bin : occupancy_bins_) {
     for (const OGLVoxelData& voxel : voxel_data.at(occupancy_bin)) {
@@ -742,17 +742,6 @@ void BinnedOcTreeDrawer::drawVoxelsAboveThreshold(const QMatrix4x4& pvm_matrix, 
       }
     }
   }
-}
-
-void BinnedOcTreeDrawer::setOrigin(octomap::pose6d t) {
-    origin_ = t;
-    std::cout << "OcTreeDrawer: setting new global origin: " << t << std::endl;
-
-    octomap::pose6d relative_transform = origin_ * initial_origin_.inv();
-
-    std::cout << "origin        : " << origin_ << std::endl;
-    std::cout << "inv init orig : " << initial_origin_.inv() << std::endl;
-    std::cout << "relative trans: " << relative_transform << std::endl;
 }
 
 void BinnedOcTreeDrawer::forEachVoxelDrawer(const std::function<void(VoxelDrawer&)> func) {

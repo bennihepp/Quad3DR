@@ -33,22 +33,21 @@ public:
   // initialization of drawer  -------------------------
 
   /// sets a new OcTree that should be drawn by this drawer
-  void setOctree(const viewpoint_planner::OccupancyMapType *octree) {
-    octomap::pose6d o; // initialized to (0,0,0) , (0,0,0,1) by default
-    setOctree(octree, o);
-  }
+  void setOctree(const viewpoint_planner::OccupancyMapType *octree,
+                 const FloatType min_z_limit = std::numeric_limits<FloatType>::lowest(),
+                 const FloatType max_z_limit = std::numeric_limits<FloatType>::max());
 
   const std::vector<FloatType> &getOccupancyBins() const;
 
-  /// sets a new OcTree that should be drawn by this drawer
-  /// origin specifies a global transformation that should be applied
-  virtual void setOctree(const viewpoint_planner::OccupancyMapType *octree, const octomap::pose6d &origin);
-
   FloatType findOccupancyBin(FloatType occupancy) const;
 
-  void updateVoxelsFromOctree();
+  void updateVoxelsFromOctree(
+          const FloatType min_z_limit = std::numeric_limits<FloatType>::lowest(),
+          const FloatType max_z_limit = std::numeric_limits<FloatType>::max());
 
-  void updateVoxelData();
+  void updateVoxelData(
+          const FloatType min_z_limit = std::numeric_limits<FloatType>::lowest(),
+          const FloatType max_z_limit = std::numeric_limits<FloatType>::max());
 
   void updateVoxelColorHeightmap();
 
@@ -120,9 +119,6 @@ public:
 
   void setRenderObservationThreshold(size_t min_observations);
 
-  // set new origin (move object)
-  void setOrigin(octomap::pose6d t);
-
 private:
   void
   drawVoxelsAboveThreshold(const QMatrix4x4 &pvm_matrix, const QMatrix4x4 &vm_matrix,
@@ -135,8 +131,6 @@ private:
   void forEachVoxelDrawer(const std::function<void(VoxelDrawer &)> func);
 
   const viewpoint_planner::OccupancyMapType *octree_;
-  octomap::pose6d origin_;
-  octomap::pose6d initial_origin_;
 
   std::vector<FloatType> occupancy_bins_;
   std::unordered_map<FloatType, VoxelDrawer> voxel_drawer_map_;
