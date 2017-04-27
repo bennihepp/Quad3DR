@@ -12,6 +12,8 @@
 #include <QOpenGLVertexArrayObject>
 #include <QOpenGLBuffer>
 #include <QOpenGLShaderProgram>
+#include <QOpenGLFunctions>
+#include <QOpenGLFunctions_4_5_Core>
 #include <bh/common.h>
 #include <bh/color.h>
 #include "point_drawer.h"
@@ -57,7 +59,7 @@ inline std::ostream &operator<<(std::ostream &out, const OGLTriangleWithNormalDa
   return out;
 }
 
-class TriangleDrawer {
+class TriangleDrawer : QOpenGLFunctions_4_5_Core {
 public:
   TriangleDrawer()
           : draw_triangles_(true), num_triangles_(0), has_normals_(false) {
@@ -111,6 +113,8 @@ public:
   }
 
   void init() {
+    QOpenGLFunctions_4_5_Core::initializeOpenGLFunctions();
+
     clear();
 
     if (program_.isLinked()) {
@@ -192,7 +196,15 @@ public:
     vbo_.bind();
 
     vbo_.setUsagePattern(QOpenGLBuffer::StaticDraw);
-    vbo_.allocate(triangle_data.data(), triangle_data.size() * sizeof(OGLTriangleData));
+//    vbo_.allocate(triangle_data.data(), triangle_data.size() * sizeof(OGLTriangleData));
+    glNamedBufferData(vbo_.bufferId(), triangle_data.size() * sizeof(OGLTriangleData), triangle_data.data(), GL_STATIC_DRAW);
+    GLenum gl_err = glGetError();
+    if (gl_err != GL_NO_ERROR) {
+      if (gl_err == GL_OUT_OF_MEMORY) {
+        throw bh::Error("Not enough memory for allocating vertex buffer");
+      }
+      throw bh::Error("Unknown error when allocating vertex buffer");
+    }
 
     program_.enableAttributeArray(0);
     program_.setAttributeBuffer(0, GL_FLOAT, 0, 3, sizeof(OGLVertexDataRGBA));
@@ -253,7 +265,15 @@ public:
     vbo_.bind();
 
     vbo_.setUsagePattern(QOpenGLBuffer::StaticDraw);
-    vbo_.allocate(triangle_normal_data.data(), triangle_normal_data.size() * sizeof(OGLTriangleWithNormalData));
+//    vbo_.allocate(triangle_normal_data.data(), triangle_normal_data.size() * sizeof(OGLTriangleWithNormalData));
+    glNamedBufferData(vbo_.bufferId(), triangle_normal_data.size() * sizeof(OGLTriangleWithNormalData), triangle_normal_data.data(), GL_STATIC_DRAW);
+    GLenum gl_err = glGetError();
+    if (gl_err != GL_NO_ERROR) {
+      if (gl_err == GL_OUT_OF_MEMORY) {
+        throw bh::Error("Not enough memory for allocating vertex buffer");
+      }
+      throw bh::Error("Unknown error when allocating vertex buffer");
+    }
 
     // Vertex
     program_.enableAttributeArray(0);
@@ -279,7 +299,15 @@ public:
     normals_vbo_.bind();
 
     normals_vbo_.setUsagePattern(QOpenGLBuffer::StaticDraw);
-    normals_vbo_.allocate(triangle_normal_data.data(), triangle_normal_data.size() * sizeof(OGLTriangleWithNormalData));
+//    normals_vbo_.allocate(triangle_normal_data.data(), triangle_normal_data.size() * sizeof(OGLTriangleWithNormalData));
+    glNamedBufferData(normals_vbo_.bufferId(), triangle_normal_data.size() * sizeof(OGLTriangleWithNormalData), triangle_normal_data.data(), GL_STATIC_DRAW);
+    gl_err = glGetError();
+    if (gl_err != GL_NO_ERROR) {
+      if (gl_err == GL_OUT_OF_MEMORY) {
+        throw bh::Error("Not enough memory for allocating vertex buffer");
+      }
+      throw bh::Error("Unknown error when allocating vertex buffer");
+    }
 
     // Vertex
     normals_program_.enableAttributeArray(0);
