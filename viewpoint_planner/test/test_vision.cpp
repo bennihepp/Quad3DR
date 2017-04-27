@@ -14,8 +14,6 @@
 #pragma GCC optimize("O0")
 #include <bh/vision/geometry.h>
 
-#pragma GCC optimize("O0")
-
 namespace {
 using FloatType = float;
 using size_t = std::size_t;

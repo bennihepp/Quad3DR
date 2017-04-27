@@ -45,3 +45,14 @@ target_link_libraries(test_se3_transform
         gtest
         gtest_main
         )
+
+add_executable(test_qt_image
+        # Executable
+        test_qt_image.cpp
+        )
+target_link_libraries(test_qt_image
+        #${GTEST_LIBRARIES}
+        gtest
+        gtest_main
+        )
+target_link_libraries(test_qt_image Qt5::Core Qt5::Gui)

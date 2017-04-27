@@ -15,8 +15,6 @@
 #include <bh/vision/geometry.h>
 #include <bh/vision/drawing_qt.h>
 
-#pragma GCC optimize("O0")
-
 namespace {
 using FloatType = double;
 using size_t = std::size_t;
