@@ -654,9 +654,32 @@ CudaTree<FloatT>::raycastWithScreenCoordinatesRecursive(
   }
   else {
     cudaError err = cudaDeviceSynchronize();
-    if (cudaSuccess != err) { \
+    if (cudaSuccess != err) {
       fprintf(stderr, "CUDA error in file '%s' in line %i: %s\n",
           __FILE__, __LINE__, cudaGetErrorString(err));
+      fprintf(stderr, "grid_size=%d, block_size=%d\n", grid_size, block_size);
+      for (size_t row = 0; row < intrinsics.Rows; ++row) {
+        fprintf(stderr, "intrinsics(%d)=", row);
+        for (size_t col = 0; col < intrinsics.Cols; ++col) {
+          if (col > 0) {
+            fprintf(stderr, ", ");
+          }
+          fprintf(stderr, "%f", intrinsics(row, col));
+        }
+        fprintf(stderr, "\n");
+      }
+      for (size_t row = 0; row < extrinsics.Rows; ++row) {
+        fprintf(stderr, "extrinsics(%d)=", row);
+        for (size_t col = 0; col < extrinsics.Cols; ++col) {
+          if (col > 0) {
+            fprintf(stderr, ", ");
+          }
+          fprintf(stderr, "%f", extrinsics(row, col));
+        }
+        fprintf(stderr, "\n");
+      }
+      fprintf(stderr, "x_start=%l, x_end=%l, y_start=%l, y_end=%l\n", x_start, x_end, y_start, y_end);
+      fprintf(stderr, "min_range=%f, fail_on_error=%d\n", min_range, fail_on_error);
       throw bh::CudaError(err);
     }
   }

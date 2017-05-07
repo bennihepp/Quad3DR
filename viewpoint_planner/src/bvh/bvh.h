@@ -839,7 +839,6 @@ private:
     }
   }
 
-
   bool intersectsRecursive(const IntersectionData& data, NodeType* cur_node, std::size_t cur_depth, IntersectionResult* result) const {
     // Early break because of node semantics (i.e. free nodes)
 //    if (CollisionPredicate::earlyBreak(this, cur_node)) {
