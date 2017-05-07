@@ -68,12 +68,9 @@ template <typename Derived1, typename Derived2>
 Eigen::Matrix<typename Derived1::Scalar, 3, 3> getZLookAtMatrix(const Derived1& look_at_direction, const Derived2& up_direction) {
   const typename Derived1::PlainObject norm_look_at_direction = look_at_direction.normalized();
   const typename Derived1::PlainObject norm_up_direction = up_direction.normalized();
-  typename Derived1::PlainObject right_direction = Derived1::PlainObject::Zero();
-  if (norm_look_at_direction.dot(norm_up_direction) == 0) {
-    right_direction(0) = 1;
-  }
-  else {
-    right_direction = norm_look_at_direction.cross(norm_up_direction).normalized();
+  typename Derived1::PlainObject right_direction = norm_look_at_direction.cross(norm_up_direction).normalized();
+  if (right_direction.norm() <= Eigen::NumTraits<typename Derived1::Scalar>::dummy_precision()) {
+    right_direction = Derived1::PlainObject::UnitX();
   }
   typename Derived1::PlainObject orientation_up_direction = -right_direction.cross(norm_look_at_direction);
   Eigen::Matrix<typename Derived1::Scalar, 3, 3> orientation = Eigen::Matrix<typename Derived1::Scalar, 3, 3>::Identity();
