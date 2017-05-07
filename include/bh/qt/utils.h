@@ -9,14 +9,22 @@
 #pragma once
 
 #include <bh/color.h>
+#include <QSize>
 #include <QVector3D>
 #include <QMatrix4x4>
 #include <QColor>
 #include <QImage>
 
+std::ostream& operator<<(std::ostream& out, const QSize& size);
+
 std::ostream& operator<<(std::ostream& out, const QVector3D& vec);
 
 std::ostream& operator<<(std::ostream& out, const QMatrix4x4& mat);
+
+inline std::ostream& operator<<(std::ostream& out, const QSize& size) {
+  out << "(" << size.width() << ", " << size.height() << ")";
+  return out;
+}
 
 inline std::ostream& operator<<(std::ostream& out, const QVector3D& vec) {
   out << "(" << vec.x() << ", " << vec.y() << ", " << vec.z() << ")";
