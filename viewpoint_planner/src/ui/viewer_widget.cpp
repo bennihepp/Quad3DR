@@ -2059,8 +2059,7 @@ void ViewerWidget::draw() {
     QMatrix4x4 mv_matrix;
     camera()->getModelViewMatrix(mv_matrix.data());
     mv_matrix.setColumn(3, QVector4D(0, 0, -5, 1));
-    camera()->getProjectionMatrix(pvm_matrix.data());
-    pvm_matrix.setToIdentity();
+    QMatrix4x4 pvm_matrix;
     pvm_matrix.ortho(-1.5f, 1.5f, -1.5f, 1.5f, 0.1f, 10.0f);
     pvm_matrix *= mv_matrix;
     axes_drawer_.draw(pvm_matrix, axes_viewport_size, axes_viewport_size, 8.0f);
