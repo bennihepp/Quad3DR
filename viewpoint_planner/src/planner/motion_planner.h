@@ -43,6 +43,8 @@ public:
   struct Options : bh::ConfigOptions {
     Options()
     : bh::ConfigOptions("motion_planner", "MotionPlanner options") {
+      addOption<bool>("enable_straight", &enable_straight);
+      addOption<bool>("enable_rrt", &enable_rrt);
       addOption<FloatType>("max_motion_range", &max_motion_range);
       addOption<FloatType>("max_time_per_solve", &max_time_per_solve);
       addOption<std::size_t>("max_iterations_per_solve", &max_iterations_per_solve);
@@ -50,6 +52,10 @@ public:
 
     ~Options() override {}
 
+    // Whether to enable straight motion planning
+    bool enable_straight = true;
+    // Whether to enable RRT motion planning
+    bool enable_rrt = true;
     // Maximum length of a motion segment
     FloatType max_motion_range = 5;
     // Maximum time that a solve is allowed to take (-1 for not limit)
@@ -58,20 +64,99 @@ public:
     std::size_t max_iterations_per_solve = 1000;
   };
 
-  struct Motion {
+  class Motion {
+  public:
     using PoseVector = EIGEN_ALIGNED_VECTOR(Pose);
 
     Motion()
-    : distance(0), cost(0) {}
+        : distance_(0),
+          cost_(0),
+          se3_distance_(0) {}
 
-    bool isValid() const {
-      return !poses.empty();
+    Motion(const Pose& from, const Pose& to)
+        : poses_({from, to}) {
+      updateDistanceValues();
     }
 
-    void append(const Motion& other) {
-      distance += other.distance;
-      cost += other.cost;
-      std::copy(other.poses.begin(), other.poses.end(), std::back_inserter(poses));
+    template <typename PoseListT>
+    Motion(const PoseListT& pose_list)
+        : distance_(0),
+          cost_(0),
+          se3_distance_(0) {
+      for (const Pose& pose : pose_list) {
+        poses_.push_back(pose);
+      }
+      updateDistanceValues();
+    }
+
+    Motion(const Motion& other) = default;
+
+    Motion& operator=(const Motion& other) = default;
+
+    Motion(Motion&& other) {
+      *this = other;
+    }
+
+    Motion& operator=(Motion&& other) {
+      if (this != &other) {
+        distance_ = other.distance_;
+        cost_ = other.cost_;
+        se3_distance_ = other.se3_distance_;
+        poses_ = std::move(other.poses_);
+        other.distance_ = 0;
+        other.cost_ = 0;
+        other.se3_distance_ = 0;
+      }
+      return *this;
+    }
+
+    bool isValid() const {
+      return !poses_.empty();
+    }
+
+    FloatType cost() const {
+      return cost_;
+    }
+
+    FloatType distance() const {
+      return distance_;
+    }
+
+    FloatType se3Distance() const {
+      return se3_distance_;
+    }
+
+    Motion& operator+=(const Motion& other) {
+      std::copy(other.poses_.begin(), other.poses_.end(), std::back_inserter(poses_));
+      updateDistanceValues();
+      return *this;
+    }
+
+    Motion operator+(const Motion& other) {
+      Motion copy = *this;
+      copy += other;
+      return copy;
+    }
+
+    const PoseVector& poses() const {
+      return poses_;
+    }
+
+    void reverse() {
+      std::reverse(poses_.begin(), poses_.end());
+    }
+
+    Motion getReverse() const {
+      Motion copy = *this;
+      copy.reverse();
+      return copy;
+    }
+
+  private:
+    void updateDistanceValues() {
+      distance_ = computeDistance();
+      cost_ = computeCost();
+      se3_distance_ = computeSE3Distance();
     }
 
     FloatType computeDistance() const {
@@ -79,7 +164,7 @@ public:
         return std::numeric_limits<FloatType>::quiet_NaN();
       }
       FloatType accumulated_distance = 0;
-      for (auto it = poses.begin() + 1; it != poses.end(); ++it) {
+      for (auto it = poses_.begin() + 1; it != poses_.end(); ++it) {
         auto prev_it = it - 1;
         const FloatType local_distance = prev_it->getPositionDistanceTo(*it);
         accumulated_distance += local_distance;
@@ -87,12 +172,17 @@ public:
       return accumulated_distance;
     }
 
+    FloatType computeCost() const {
+      const FloatType cost = computeDistance();
+      return cost;
+    }
+
     FloatType computeSE3Distance() const {
       if (!isValid()) {
         return std::numeric_limits<FloatType>::quiet_NaN();
       }
       FloatType accumulated_distance = 0;
-      for (auto it = poses.begin() + 1; it != poses.end(); ++it) {
+      for (auto it = poses_.begin() + 1; it != poses_.end(); ++it) {
         auto prev_it = it - 1;
         const FloatType local_distance = prev_it->getDistanceTo(*it);
         accumulated_distance += local_distance;
@@ -100,26 +190,28 @@ public:
       return accumulated_distance;
     }
 
-    FloatType distance;
-    FloatType cost;
-    FloatType se3_distance;
-    PoseVector poses;
+    FloatType distance_;
+    FloatType cost_;
+    FloatType se3_distance_;
+    PoseVector poses_;
 
-private:
     // Boost serialization
     friend class boost::serialization::access;
 
     template <typename Archive>
     void serialize(Archive& ar, const unsigned int version) {
-      ar & distance;
-      ar & cost;
-      if (version >= 1) {
-        ar & se3_distance;
+      if (version >= 2) {
+        ar & poses_;
       }
-      ar & poses;
-      if (version < 1) {
-        se3_distance = computeSE3Distance();
+      else {
+        ar & distance_;
+        ar & cost_;
+        if (version >= 1) {
+          ar & se3_distance_;
+        }
+        ar & poses_;
       }
+      updateDistanceValues();
     }
   };
 
@@ -187,6 +279,76 @@ private:
   };
 
   std::pair<Motion, bool> findMotion(const Pose& from, const Pose& to) const {
+    const bool enable_straight = options_.enable_straight || (!options_.enable_rrt);
+    if (enable_straight) {
+      const std::pair<Motion, bool> straight_result = findMotionStraight(from, to);
+      if (straight_result.second) {
+        return straight_result;
+      }
+    }
+    if (options_.enable_rrt) {
+      const std::pair<Motion, bool> rrt_result = findMotionRRT(from, to);
+      return rrt_result;
+    }
+    return std::make_pair(Motion(), false);
+  }
+
+  bool isValidMotion(const Motion& motion) const {
+    const bool ignore_no_fly_zones = true;
+    const FloatT step_distance = object_bbox_.getMinExtent() / FloatT(2.0);
+    for (auto it = motion.poses().begin(); it != motion.poses().end(); ++it) {
+      auto next_it = it + 1;
+      if (next_it == motion.poses().end()) {
+        break;
+      }
+      const FloatT distance = it->getPositionDistanceTo(*next_it);
+      const Vector3 direction = (next_it->getWorldPosition() - it->getWorldPosition()).normalized();
+      FloatT accumulated_distance = 0;
+      while (accumulated_distance < distance) {
+        const Vector3 position = it->getWorldPosition() + accumulated_distance * direction;
+        if (!data_->isValidObjectPosition(position, object_bbox_, ignore_no_fly_zones)) {
+          return false;
+        }
+        accumulated_distance += step_distance;
+        if (accumulated_distance > distance) {
+          accumulated_distance = distance;
+        }
+      }
+    }
+    return true;
+  }
+
+  std::pair<Motion, bool> findMotionStraight(const Pose& from, const Pose& to) const {
+    const bool ignore_no_fly_zones = true;
+    const FloatT distance = from.getPositionDistanceTo(to);
+    const FloatT step_distance = object_bbox_.getMinExtent() / FloatT(2.0);
+    const Vector3 direction = (to.getWorldPosition() - from.getWorldPosition()).normalized();
+    FloatT accumulated_distance = 0;
+    while (accumulated_distance < distance) {
+      const Vector3 position = from.getWorldPosition() + accumulated_distance * direction;
+      if (!data_->isValidObjectPosition(position, object_bbox_, ignore_no_fly_zones)) {
+        return std::make_pair(Motion(), false);
+      }
+      accumulated_distance += step_distance;
+      if (accumulated_distance > distance) {
+        accumulated_distance = distance;
+      }
+    }
+    Motion motion(from, to);
+    BH_ASSERT(motion.se3Distance()>= motion.distance());
+#if !BH_RELEASE
+    // Sanity check
+    BH_ASSERT(isValidMotion(motion));
+#endif
+    return std::make_pair(motion, true);
+  };
+
+  std::pair<Motion, bool> findMotionRRT(const Pose& from, const Pose& to) const {
+    const std::pair<Motion, bool> straight_result = findMotionStraight(from, to);
+    if (straight_result.second) {
+      return straight_result;
+    }
+
     if (!initialized_) {
       initialize();
     }
@@ -200,12 +362,12 @@ private:
 
     if (!isStateValid(start.get())) {
       std::cerr << "ERROR: start state not valid: from=" << from << std::endl;
+      return std::make_pair(Motion(), false);
     }
     if (!isStateValid(goal.get())) {
       std::cerr << "ERROR: goal state not valid: to=" << to << std::endl;
+      return std::make_pair(Motion(), false);
     }
-    BH_ASSERT(isStateValid(start.get()));
-    BH_ASSERT(isStateValid(goal.get()));
 
     planner_data->problem_def->clearSolutionNonExistenceProof();
     planner_data->problem_def->clearSolutionPaths();
@@ -245,6 +407,7 @@ private:
       // Sanity check
       FloatType distance_square = (from.getWorldPosition() - to.getWorldPosition()).squaredNorm();
       FloatType distance_ompl = planner_data->problem_def->getOptimizationObjective()->motionCost(start.get(), goal.get()).value();
+#if !BH_RELEASE
       if (bh::isApproxSmaller(distance_ompl * distance_ompl, distance_square, FloatType(1e-2))) {
         std::cout << "WARNING: distance_ompl * distance_ompl < distance_square" << std::endl;
         BH_PRINT_VALUE(distance_square);
@@ -259,21 +422,20 @@ private:
         BH_PRINT_VALUE(distance_square);
         BH_DEBUG_BREAK;
       }
+#endif
 
-      Motion motion;
-      motion.distance = motion_distance;
-      motion.cost = motion_distance;
+      typename Motion::PoseVector motion_poses;
       FloatType accumulated_motion_distance = 0;
       FloatType accumulated_motion_distance2 = 0;
       for (std::size_t i = 0; i < geo_path->getStateCount(); ++i) {
         const StateSpaceType::StateType* state = static_cast<const StateSpaceType::StateType*>(geo_path->getState(i));
         Vector3 position(state->getX(), state->getY(), state->getZ());
         Quaternion quat;
-        if (i > 0 && motion.distance > 0) {
+        if (i > 0 && motion_distance > 0) {
           const StateSpaceType::StateType* prev_state = static_cast<const StateSpaceType::StateType*>(geo_path->getState(i - 1));
           accumulated_motion_distance += planner_data->problem_def->getOptimizationObjective()->motionCost(prev_state, state).value();
-          accumulated_motion_distance2 += (motion.poses.back().getWorldPosition() - position).norm();
-          const FloatType fraction = accumulated_motion_distance / motion.distance;
+          accumulated_motion_distance2 += (motion_poses.back().getWorldPosition() - position).norm();
+          const FloatType fraction = accumulated_motion_distance / motion_distance;
           if (i < geo_path->getStateCount() - 1) {
             quat = from.quaternion().slerp(fraction, to.quaternion());
           }
@@ -288,16 +450,36 @@ private:
           quat = from.quaternion();
         }
         Pose pose = Pose::createFromImageToWorldTransformation(position, quat);
+#if !BH_RELEASE
         BH_ASSERT(pose.quaternion().coeffs().array().isFinite().all());
-        motion.poses.push_back(pose);
+#endif
+        motion_poses.push_back(pose);
       }
-      motion.distance = motion.computeDistance();
-      motion.cost = motion.distance;
-      motion.se3_distance = motion.computeSE3Distance();;
+      Motion motion(motion_poses);
+#if !BH_RELEASE
+      BH_ASSERT(motion.se3Distance() >= motion.distance());
       BH_ASSERT(bh::isApproxEqual(accumulated_motion_distance, motion_distance, FloatType(1e-2)));
       BH_ASSERT(bh::isApproxEqual(accumulated_motion_distance2, motion_distance, FloatType(1e-2)));
-      BH_ASSERT(motion.poses.front() == from);
-      BH_ASSERT(motion.poses.back() == to);
+      BH_ASSERT(motion.poses().front() == from);
+      BH_ASSERT(motion.poses().back() == to);
+#endif
+#if !BH_RELEASE
+      // Sanity check
+//      BH_ASSERT(isValidMotion(motion));
+//      bool valid = true;
+//      for (auto it = motion.poses().begin(); it != motion.poses().end(); ++it) {
+//        auto next_it = it + 1;
+//        if (next_it == motion.poses().end()) {
+//          break;
+//        }
+//        const ob::ScopedState<StateSpaceType> state1 = createStateFromPose(*it, planner_data->space_info);
+//        const ob::ScopedState<StateSpaceType> state2 = createStateFromPose(*next_it, planner_data->space_info);
+//        if (!planner_data->space_info->getMotionValidator()->checkMotion(state1.get(), state2.get())) {
+//          valid = false;
+//          break;
+//        }
+//      }
+#endif
       return std::make_pair(motion, true);
     }
     else {
@@ -308,9 +490,10 @@ private:
 
 private:
   bool isStateValid(const ob::State *state) const {
+    const bool ignore_no_fly_zones = true;
     const StateSpaceType::StateType* state_tmp = static_cast<const StateSpaceType::StateType*>(state);
     Vector3 position(state_tmp->getX(), state_tmp->getY(), state_tmp->getZ());
-    return data_->isValidObjectPosition(position, object_bbox_);
+    return data_->isValidObjectPosition(position, object_bbox_, ignore_no_fly_zones);
   }
 
   ob::ScopedState<StateSpaceType> createStateFromPose(const Pose& pose, const std::shared_ptr<ob::SpaceInformation>& space_info) const {
@@ -415,6 +598,11 @@ private:
     return LockedPlannerData::request(this);
   }
 
+  FloatT getLongestValidSegmentFraction() const {
+    const FloatType fraction = object_bbox_.getMinExtent() / (2 * space_bbox_.getMaxExtent());
+    return fraction;
+  }
+
   PlannerData createPlannerData() const {
     PlannerData planner_data;
     planner_data.in_use = false;
@@ -426,8 +614,7 @@ private:
     }
 //    std::cout << "Bounding box=" << space_bbox_ << std::endl;
     planner_data.space->setBounds(bounds);
-    FloatType fraction = object_bbox_.getMaxExtent() / (2 * space_bbox_.getMaxExtent());
-    planner_data.space->setLongestValidSegmentFraction(fraction);
+    planner_data.space->setLongestValidSegmentFraction(getLongestValidSegmentFraction());
 
     planner_data.space_info = std::make_shared<ob::SpaceInformation>(planner_data.space);
     planner_data.space_info->setStateValidityChecker(std::bind(&MotionPlanner::isStateValid, this, std::placeholders::_1));
@@ -460,5 +647,5 @@ private:
   mutable std::vector<PlannerData> planner_data_pool_;
 };
 
-BOOST_CLASS_VERSION(typename MotionPlanner<double>::Motion, 1);
-BOOST_CLASS_VERSION(typename MotionPlanner<float>::Motion, 1);
+BOOST_CLASS_VERSION(typename MotionPlanner<double>::Motion, 2);
+BOOST_CLASS_VERSION(typename MotionPlanner<float>::Motion, 2);
