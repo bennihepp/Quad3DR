@@ -201,7 +201,8 @@ public:
     GLenum gl_err = glGetError();
     if (gl_err != GL_NO_ERROR) {
       if (gl_err == GL_OUT_OF_MEMORY) {
-        throw bh::Error("Not enough memory for allocating vertex buffer");
+        const size_t bytes = triangle_data.size() * sizeof(OGLTriangleData);
+        throw bh::Error(std::string("Not enough memory for allocating vertex buffer. Need ") + std::to_string(bytes) + " bytes");
       }
       throw bh::Error("Unknown error when allocating vertex buffer");
     }
@@ -270,7 +271,8 @@ public:
     GLenum gl_err = glGetError();
     if (gl_err != GL_NO_ERROR) {
       if (gl_err == GL_OUT_OF_MEMORY) {
-        throw bh::Error("Not enough memory for allocating vertex buffer");
+        const size_t bytes = triangle_normal_data.size() * sizeof(OGLTriangleWithNormalData);
+        throw bh::Error(std::string("Not enough memory for allocating vertex buffer. Need ") + std::to_string(bytes) + " bytes");
       }
       throw bh::Error("Unknown error when allocating vertex buffer");
     }
@@ -304,7 +306,8 @@ public:
     gl_err = glGetError();
     if (gl_err != GL_NO_ERROR) {
       if (gl_err == GL_OUT_OF_MEMORY) {
-        throw bh::Error("Not enough memory for allocating vertex buffer");
+        const size_t bytes = triangle_normal_data.size() * sizeof(OGLTriangleWithNormalData);
+        throw bh::Error(std::string("Not enough memory for allocating vertex buffer. Need ") + std::to_string(bytes) + " bytes");
       }
       throw bh::Error("Unknown error when allocating vertex buffer");
     }
