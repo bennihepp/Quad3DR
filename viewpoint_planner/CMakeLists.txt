@@ -174,19 +174,9 @@ add_executable(clip_mesh WIN32
     src/mLib/mLib.cpp
 )
 target_link_libraries(clip_mesh
-    ${Boost_LIBRARIES}
+    viewpoint_planner_common_objects
 )
-
-add_executable(clip_point_cloud WIN32
-    # Executable
-    src/exe/clip_point_cloud.cpp
-    # BH
-    ../src/bh/utilities.cpp
-    # mLib
-    src/mLib/mLib.h
-    src/mLib/mLib.cpp
-)
-target_link_libraries(clip_point_cloud
+target_link_libraries(clip_mesh
     ${Boost_LIBRARIES}
 )
 
@@ -228,6 +218,19 @@ target_link_libraries(create_colmap_mvs_files
 target_link_libraries(create_colmap_mvs_files
     ${Boost_LIBRARIES}
     ${OpenCV_LIBRARIES}
+)
+
+add_executable(merge_viewpoint_paths WIN32
+    # Executable
+    src/exe/merge_viewpoint_paths.cpp
+    # BH
+    ../src/bh/utilities.cpp
+)
+target_link_libraries(merge_viewpoint_paths
+    viewpoint_planner_common_objects
+)
+target_link_libraries(merge_viewpoint_paths
+    ${Boost_LIBRARIES}
 )
 
 add_executable(image_matcher WIN32
@@ -371,6 +374,22 @@ if(WITH_OPENGL_OFFSCREEN)
       ${Boost_LIBRARIES}
     )
 endif()
+
+cuda_add_executable(clip_point_cloud WIN32
+    # Executable
+    src/exe/clip_point_cloud.cpp
+    # BH
+    ../src/bh/utilities.cpp
+    # mLib
+    src/mLib/mLib.h
+    src/mLib/mLib.cpp
+)
+target_link_libraries(clip_point_cloud
+    viewpoint_planner_common_objects
+)
+target_link_libraries(clip_point_cloud
+    ${Boost_LIBRARIES}
+)
 
 cuda_add_executable(compute_ground_truth_mesh WIN32
     # Executable

@@ -11,6 +11,7 @@
 #include <csignal>
 
 #include <bh/boost.h>
+#include <boost/property_tree/json_parser.hpp>
 #include <boost/program_options.hpp>
 #include <boost/filesystem.hpp>
 
@@ -18,9 +19,13 @@
 #include <bh/eigen.h>
 #include <bh/utilities.h>
 #include <bh/config_options.h>
+#include <bh/eigen_options.h>
 #include <bh/math/geometry.h>
+#include <bh/gps.h>
 
 #include <bh/mLib/mLib.h>
+
+#include "../reconstruction/dense_reconstruction.h"
 
 using std::cout;
 using std::cerr;
@@ -43,15 +48,24 @@ public:
 
     Options()
     : bh::ConfigOptions(kPrefix) {
-      addOption<FloatType>("clip_bbox_min_x");
-      addOption<FloatType>("clip_bbox_min_y");
-      addOption<FloatType>("clip_bbox_min_z");
-      addOption<FloatType>("clip_bbox_max_x");
-      addOption<FloatType>("clip_bbox_max_y");
-      addOption<FloatType>("clip_bbox_max_z");
+      addOption<Vector3>("offset_vector", &offset_vector);
+      addOption<FloatType>("clip_distance", &clip_distance);
+      addOption<Vector3>("clip_bbox_min", &clip_bbox_min);
+      addOption<Vector3>("clip_bbox_max", &clip_bbox_max);
+      addOption<bool>("use_region_file", &use_region_file);
+      addOption<string>("regions_json_filename", &regions_json_filename);
+      addOption<string>("dense_reconstruction_path", &dense_reconstruction_path);
     }
 
     ~Options() override {}
+
+    Vector3 offset_vector = Vector3(0, 0, 0);
+    FloatType clip_distance = 0;
+    Vector3 clip_bbox_min;
+    Vector3 clip_bbox_max;
+    bool use_region_file = false;
+    string regions_json_filename;
+    string dense_reconstruction_path;
   };
 
   static std::map<string, std::unique_ptr<bh::ConfigOptions>> getConfigOptions() {
@@ -71,23 +85,63 @@ public:
   ~ClipPointCloudCmdline() {
   }
 
-  bool run() {
-    BoundingBoxType clip_bbox(
-        Vector3(options_.getValue<FloatType>("clip_bbox_min_x"),
-            options_.getValue<FloatType>("clip_bbox_min_y"),
-            options_.getValue<FloatType>("clip_bbox_min_z")),
-        Vector3(options_.getValue<FloatType>("clip_bbox_max_x"),
-            options_.getValue<FloatType>("clip_bbox_max_y"),
-            options_.getValue<FloatType>("clip_bbox_max_z")));
+  using GpsCoordinateType = reconstruction::SfmToGpsTransformation::GpsCoordinate;
+  using GpsFloatType = typename GpsCoordinateType::FloatType;
+  using GpsConverter = bh::GpsConverter<GpsFloatType>;
+  using RegionType = bh::PolygonWithLowerAndUpperPlane<FloatType>;
 
-    PointCloudType point_cloud;
-    PointCloudIOType::loadFromFile(in_point_cloud_filename_, point_cloud);
-    cout << "Number of vertices in point cloud: " << point_cloud.m_points.size() << endl;
+  // TODO: Move into viewpoint_planner_common
+  RegionType convertGpsRegionToEnuRegion(
+          const GpsConverter& gps_converter,
+          const boost::property_tree::ptree& pt) const {
+    const bool verbose = true;
+    const FloatType lower_altitude = pt.get<FloatType>("lower_altitude");
+    const FloatType upper_altitude = pt.get<FloatType>("upper_altitude");
+    std::vector<GpsCoordinateType> gps_coordinates;
+    for (const boost::property_tree::ptree::value_type& v : pt.get_child("latlong_vertices")) {
+      gps_coordinates.push_back(GpsCoordinateType(v.second.get<FloatType>("latitude"), v.second.get<FloatType>("longitude"), 0));
+    }
+    std::vector<RegionType::Vector2> vertices;
+    for (const GpsCoordinateType& gps : gps_coordinates) {
+      const Vector3 enu = gps_converter.convertGpsToEnu(gps).cast<FloatType>();
+      if (verbose) {
+        std::cout << "GPS: " << gps << ", ENU: " << enu.transpose() << std::endl;
+      }
+      vertices.emplace_back(enu(0), enu(1));
+
+      // Test code for GPS conversion
+//    GpsCoordinateType gps2 = gps;
+//    BH_PRINT_VALUE(gps2);
+//    BH_PRINT_VALUE(gps_converter.convertGpsToEcef(gps2));
+//    BH_PRINT_VALUE(gps_converter.convertGpsToEnu(gps2));
+//    gps2 = GpsCoordinateType(gps2.latitude(), gps2.longitude(), gps2.altitude() + 360);
+//    BH_PRINT_VALUE(gps2);
+//    BH_PRINT_VALUE(gps_converter.convertGpsToEcef(gps2));
+//    BH_PRINT_VALUE(gps_converter.convertGpsToEnu(gps2));
+//    Vector3 enu2 = enu;
+//    BH_PRINT_VALUE(enu2);
+//    BH_PRINT_VALUE(gps_converter.convertEnuToGps(enu2.cast<GpsFloatType>()));
+//    enu2(2) = 360;
+//    BH_PRINT_VALUE(enu2);
+//    BH_PRINT_VALUE(gps_converter.convertEnuToGps(enu2.cast<GpsFloatType>()));
+//    enu2(2) = 0;
+//    BH_PRINT_VALUE(enu2);
+//    BH_PRINT_VALUE(gps_converter.convertEnuToGps(enu2.cast<GpsFloatType>()));
+    }
+    if (verbose) {
+      std::cout << "Lower altitude: " << lower_altitude << ", upper_altitude: " << upper_altitude << std::endl;
+    }
+    const RegionType region(vertices, lower_altitude, upper_altitude);
+    return region;
+  }
+
+  template <typename Predicate>
+  PointCloudType clipPointCloud(const PointCloudType& point_cloud, Predicate&& predicate) {
     PointCloudType clipped_point_cloud;
     for (std::size_t i = 0; i < point_cloud.m_points.size(); ++i) {
       const ml::vec3<FloatType>& ml_point_coord = point_cloud.m_points[i];
       const Vector3 point_coord(ml_point_coord.x, ml_point_coord.y, ml_point_coord.z);
-      if (clip_bbox.isInside(point_coord)) {
+      if (std::forward<Predicate>(predicate)(point_coord)) {
         clipped_point_cloud.m_points.push_back(point_cloud.m_points[i]);
         if (point_cloud.hasColors()) {
           clipped_point_cloud.m_colors.push_back(point_cloud.m_colors[i]);
@@ -100,6 +154,60 @@ public:
         }
       }
     }
+    return clipped_point_cloud;
+  }
+
+  bool run() {
+    PointCloudType point_cloud;
+    PointCloudIOType::loadFromFile(in_point_cloud_filename_, point_cloud);
+    cout << "Number of vertices in point cloud: " << point_cloud.m_points.size() << endl;
+    PointCloudType clipped_point_cloud;
+
+    if (options_.use_region_file) {
+      BH_ASSERT(options_.isSet("regions_json_filename"));
+      BH_ASSERT(options_.isSet("dense_reconstruction_path"));
+      reconstruction::DenseReconstruction dense_reconstruction;
+      const bool read_sfm_gps_transformation = true;
+      dense_reconstruction.read(options_.dense_reconstruction_path, read_sfm_gps_transformation);
+      const GpsCoordinateType gps_reference = dense_reconstruction.sfmGpsTransformation().gps_reference;
+      std::cout << "GPS reference: " << gps_reference << std::endl;
+      const GpsConverter gps_converter = GpsConverter::createWGS84(gps_reference);
+
+      // Get ROI for clipping point cloud
+      boost::property_tree::ptree pt;
+      boost::property_tree::read_json(options_.regions_json_filename, pt);
+      std::cout << "Region of interest" << std::endl;
+      const RegionType roi = convertGpsRegionToEnuRegion(gps_converter, pt.get_child("regionOfInterest"));
+      std::vector<RegionType> no_fly_zones;
+      std::cout << "ROI bounding box: " << roi.getBoundingBox() << std::endl;
+      for (const boost::property_tree::ptree::value_type& v : pt.get_child("noFlyZones")) {
+        std::cout << "No-Fly-Zones" << std::endl;
+        no_fly_zones.push_back(convertGpsRegionToEnuRegion(gps_converter, v.second));
+      }
+      clipped_point_cloud = clipPointCloud(point_cloud, [&](const Vector3& point) -> bool {
+        const Vector3 point_with_offset = point + options_.offset_vector;
+        for (const RegionType& no_fly_zone : no_fly_zones) {
+          if (no_fly_zone.isPointInside(point_with_offset)) {
+            return false;
+          }
+        }
+        if (roi.isPointOutside(point_with_offset)) {
+          return roi.distanceToPoint(point_with_offset) < options_.clip_distance;
+        }
+        return true;
+      });
+    }
+    else {
+      BoundingBoxType clip_bbox(options_.clip_bbox_min, options_.clip_bbox_max);
+      clipped_point_cloud = clipPointCloud(point_cloud, [&](const Vector3& point) -> bool {
+        const Vector3 point_with_offset = point + options_.offset_vector;
+        if (clip_bbox.isOutside(point_with_offset)) {
+          return clip_bbox.distanceTo(point_with_offset) < options_.clip_distance;
+        }
+        return true;
+      });
+    }
+
     cout << "Number of vertices in clipped point cloud: " << clipped_point_cloud.m_points.size() << endl;
     PointCloudIOType::saveToFile(out_point_cloud_filename_, clipped_point_cloud);
 
