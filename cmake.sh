@@ -20,7 +20,7 @@ WITH_ZED=False
 CMAKE_SOURCE_DIR=..
 
 #CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0 -fno-strict-aliasing -march=native -msse2 -mavx"
-CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0 -O2 -g3"
+CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0 -O2 -g3 -Werror=return-type"
 #CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0 -O0 -g -pg"
 C_FLAGS="$CXX_FLAGS"
 
