@@ -173,7 +173,7 @@ public:
   }
 
   bool isEmpty() const {
-    return (min_.array() >= max_.array()).all();
+    return (min_.array() >= max_.array()).any();
   }
 
   BoundingBox3D operator+(const Vector3& offset) const {
@@ -210,6 +210,14 @@ public:
 
   const FloatType getMaxExtent(std::size_t* index) const {
     return (max_ - min_).maxCoeff(index);
+  }
+
+  const FloatType getMinExtent() const {
+    return (max_ - min_).minCoeff();
+  }
+
+  const FloatType getMinExtent(std::size_t* index) const {
+    return (max_ - min_).minCoeff(index);
   }
 
   const Vector3 getCenter() const {
