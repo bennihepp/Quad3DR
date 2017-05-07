@@ -19,7 +19,12 @@
 namespace rendering {
 
 SparseReconstructionDrawer::SparseReconstructionDrawer()
-: sparse_recon_(nullptr), camera_size_(0.5f), point_size_(1.0f), draw_cameras_(true), draw_sparse_points_(true) {}
+  : sparse_recon_(nullptr),
+    camera_size_(0.5f),
+    overwrite_camera_width_(-1),
+    point_size_(1.0f),
+    draw_cameras_(true),
+    draw_sparse_points_(true) {}
 
 SparseReconstructionDrawer::~SparseReconstructionDrawer() {
   clear();
@@ -37,6 +42,14 @@ void SparseReconstructionDrawer::changeCameraSize(const float delta) {
   camera_size_ *= (1.0f + delta / 100.0f * CAMERA_SIZE_SPEED);
   camera_size_ = bh::clamp(camera_size_, MIN_CAMERA_SIZE, MAX_CAMERA_SIZE);
   uploadCameraData();
+}
+
+void SparseReconstructionDrawer::resetCameraWidth() {
+  overwrite_camera_width_ = -1;
+}
+
+void SparseReconstructionDrawer::overwriteCameraWidth(const float overwrite_camera_width) {
+  overwrite_camera_width_ = overwrite_camera_width;
 }
 
 void SparseReconstructionDrawer::changePointSize(const float delta) {
@@ -157,7 +170,13 @@ void SparseReconstructionDrawer::generateImageModel(const PinholeCameraColmap& c
         const float camera_size, const float r, const float g, const float b, const float a,
         std::array<OGLLineData, 8>& lines, std::array<OGLTriangleData, 2>& triangles) {
   // Generate camera frustum in OpenGL coordinates
-  const float image_width = camera_size * camera.width() / 1024.0f;
+  float image_width;
+  if (overwrite_camera_width_ > 0) {
+    image_width = camera_size * overwrite_camera_width_ / 1024.0f;
+  }
+  else {
+    image_width = camera_size * camera.width() / 1024.0f;
+  }
   const float image_height =
       image_width * static_cast<float>(camera.height()) / camera.width();
   const float image_extent = std::max(image_width, image_height);

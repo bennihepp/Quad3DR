@@ -35,6 +35,10 @@ public:
 
   void setSparseReconstruction(const SparseReconstruction *sparse_recon);
 
+  void resetCameraWidth();
+
+  void overwriteCameraWidth(const float overwrite_camera_width);
+
   void changeCameraSize(const float delta);
 
   void changePointSize(const float delta);
@@ -71,6 +75,7 @@ private:
 
   const SparseReconstruction *sparse_recon_;
   float camera_size_;
+  float overwrite_camera_width_;
   float point_size_;
   bool draw_cameras_;
   bool draw_sparse_points_;
