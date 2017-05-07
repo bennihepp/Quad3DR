@@ -11,8 +11,33 @@
 #include <cctype>
 #include <boost/algorithm/string/find_iterator.hpp>
 #include <boost/algorithm/string/finder.hpp>
+#include <boost/lexical_cast.hpp>
+#include <boost/algorithm/string.hpp>
+#include <bh/common.h>
 
 namespace bh {
+
+template<typename T1, typename T2>
+T1 lexical_cast(const T2& arg) {
+  return static_cast<T1>(arg);
+};
+
+template<>
+inline bool lexical_cast<bool, std::string>(const std::string& arg) {
+  std::string arg_copy = arg;
+  boost::algorithm::to_lower(arg_copy);
+  std::istringstream ss(arg_copy);
+  bool b;
+  ss >> std::boolalpha >> b;
+  return b;
+}
+
+template<>
+inline std::string lexical_cast<std::string, bool>(const bool& b) {
+  std::ostringstream ss;
+  ss << std::boolalpha << b;
+  return ss.str();
+}
 
 template <typename T>
 std::vector<T> splitString(const std::string& str, const std::string& delimiter) {
