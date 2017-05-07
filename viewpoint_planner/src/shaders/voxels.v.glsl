@@ -4,7 +4,7 @@
 uniform mat4 u_vm_matrix;
 uniform mat4 u_pvm_matrix;
 
-uniform float u_voxel_size_factor;
+uniform float u_voxel_size_dilation;
 uniform uint u_color_mode;
 uniform float u_weight_color_scale;
 uniform float u_weight_color_offset;
@@ -64,7 +64,7 @@ vec4 computeVoxelOffsetVertex(int voxel_index, int offset_index, out float voxel
   vec4 texel = texelFetch(u_pos_texture, voxel_index);
 
   vec3 voxel_position = texel.xyz;
-  voxel_size = texel.a * u_voxel_size_factor;
+  voxel_size = texel.a + u_voxel_size_dilation;
 
   vec3 vertex_offset = texelFetch(u_offset_normal_texture, offset_index).xyz;
 

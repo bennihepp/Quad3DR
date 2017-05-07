@@ -20,7 +20,7 @@ class BinnedOcTreeDrawer {
 public:
   using FloatType = float;;
 
-  const FloatType kRaycastVoxelSizeFactor = (FloatType) 1.05;
+  const FloatType kRaycastVoxelSizeDilation = (FloatType)0.01;
 
   BinnedOcTreeDrawer();
 

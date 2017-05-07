@@ -9,6 +9,7 @@
 #include "binned_octree_drawer.h"
 #include <qglviewer.h>
 #include <bh/common.h>
+#include <bh/math/utilities.h>
 #include <bh/utilities.h>
 
 using pose6d = octomap::pose6d;
@@ -331,7 +332,7 @@ void BinnedOcTreeDrawer::updateRaycastVoxels(
   }
   raycast_drawer_->init();
   configVoxelDrawer(*raycast_drawer_);
-  raycast_drawer_->setVoxelSizeFactor(kRaycastVoxelSizeFactor);
+  raycast_drawer_->setVoxelSizeDilation(kRaycastVoxelSizeDilation);
   raycast_drawer_->setInformationRange(low_information, high_information);
   raycast_drawer_->upload(voxel_data, color_data, info_data);
   std::cout << "Information range: [" << low_information << ", " << high_information << "]" << std::endl;
@@ -351,7 +352,7 @@ void BinnedOcTreeDrawer::updateSingleRaycastVoxel(
   }
   raycast_drawer_->init();
   configVoxelDrawer(*raycast_drawer_);
-  raycast_drawer_->setVoxelSizeFactor(kRaycastVoxelSizeFactor);
+  raycast_drawer_->setVoxelSizeDilation(kRaycastVoxelSizeDilation);
   raycast_drawer_->upload(voxel_data, color_data, info_data);
 }
 
@@ -412,7 +413,7 @@ void BinnedOcTreeDrawer::updateRaycastVoxels(
   }
   raycast_drawer_->init();
   configVoxelDrawer(*raycast_drawer_);
-  raycast_drawer_->setVoxelSizeFactor(kRaycastVoxelSizeFactor);
+  raycast_drawer_->setVoxelSizeDilation(kRaycastVoxelSizeDilation);
   raycast_drawer_->setInformationRange(low_information, high_information);
   raycast_drawer_->upload(voxel_data, color_data, info_data);
   std::cout << "Information range: [" << low_information << ", " << high_information << "]" << std::endl;
@@ -477,7 +478,7 @@ void BinnedOcTreeDrawer::updateRaycastVoxels(
   }
   raycast_drawer_->init();
   configVoxelDrawer(*raycast_drawer_);
-  raycast_drawer_->setVoxelSizeFactor(kRaycastVoxelSizeFactor);
+  raycast_drawer_->setVoxelSizeDilation(kRaycastVoxelSizeDilation);
   raycast_drawer_->setInformationRange(low_information, high_information);
   raycast_drawer_->upload(voxel_data, color_data, info_data);
   std::cout << "Information range: [" << low_information << ", " << high_information << "]" << std::endl;
@@ -508,9 +509,9 @@ void BinnedOcTreeDrawer::updateRaycastVoxels(
 //    std::cout << "observation sum: " << nav->getObservationCountSum() << std::endl;
 //    std::cout << "weight: " << nav->getWeight() << std::endl;
     const Eigen::Vector3f voxel_position = voxel->getBoundingBox().getCenter();
-    FloatType voxel_size = voxel->getBoundingBox().getMaxExtent();
+    const FloatType voxel_size = voxel->getBoundingBox().getMinExtent();
 
-    OGLVertexData vertex(voxel_position(0), voxel_position(1), voxel_position(2));
+    const OGLVertexData vertex(voxel_position(0), voxel_position(1), voxel_position(2));
     voxel_data.emplace_back(vertex, voxel_size);
     if (octree_->isNodeKnown(voxel->getObject()->observation_count)) {
       color_data.emplace_back(1, 1, 0, 1);
@@ -527,7 +528,7 @@ void BinnedOcTreeDrawer::updateRaycastVoxels(
 
 //    FloatType occupancy = nav->getOccupancy();
 //    FloatType weight = nav->getWeight();
-    FloatType weight = voxel->getObject()->weight;
+    const FloatType weight = voxel->getObject()->weight;
 //    const FloatType information = entry.second;
     info_data.emplace_back(voxel->getObject()->occupancy, voxel->getObject()->observation_count, weight, information);
 
@@ -542,13 +543,14 @@ void BinnedOcTreeDrawer::updateRaycastVoxels(
   }
   raycast_drawer_->init();
   configVoxelDrawer(*raycast_drawer_);
-  raycast_drawer_->setVoxelSizeFactor(kRaycastVoxelSizeFactor);
+  raycast_drawer_->setVoxelSizeDilation(kRaycastVoxelSizeDilation);
   raycast_drawer_->setInformationRange(low_information, high_information);
   raycast_drawer_->upload(voxel_data, color_data, info_data);
   std::cout << "Information range: [" << low_information << ", " << high_information << "]" << std::endl;
   std::cout << "Weight range: [" << low_weight << ", " << high_weight << "]" << std::endl;
 }
 
+#pragma optimize("O0")
 void BinnedOcTreeDrawer::updateVoxelData(
         const FloatType min_z_limit /*= std::numeric_limits<FloatType>::lowest()*/,
         const FloatType max_z_limit /*= std::numeric_limits<FloatType>::max()*/) {

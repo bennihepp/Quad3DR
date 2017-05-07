@@ -80,7 +80,7 @@ public:
 
   void draw(const QMatrix4x4 &pvm_matrix, const QMatrix4x4 &view_matrix, const QMatrix4x4 &model_matrix);
 
-  void setVoxelSizeFactor(const float voxel_size_factor);
+  void setVoxelSizeDilation(const float voxel_size_dilation);
 
   static std::vector<std::pair<std::string, ColorFlags>> getAvailableColorFlags();
 
@@ -137,7 +137,7 @@ private:
   QOpenGLTexture voxel_info_tex_;
   QOpenGLShaderProgram program_;
 
-  float voxel_size_factor_;
+  float voxel_size_dilation_;
   ColorFlags color_flags_;
   float weight_color_scale_;
   float weight_color_offset_;
