@@ -976,7 +976,7 @@ public:
           const std::unordered_set<size_t>& visible_voxels2,
           const FloatType iou_threshold) const;
 
-  void augmentedViewpointPathWithSparseMatchingViewpoints(ViewpointPath* viewpoint_path);
+  void augmentViewpointPathWithSparseMatchingViewpoints(ViewpointPath* viewpoint_path);
 
   void makeViewpointMotionsSparseMatchable(ViewpointPath* viewpoint_path);
 

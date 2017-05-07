@@ -2052,8 +2052,8 @@ void ViewerWidget::draw() {
   // Draw coordinate axes
   if (axes_drawer_.getDrawLines()) {
     glDisable(GL_DEPTH_TEST);
-    const std::size_t axes_viewport_width = width() / 8;
-    const std::size_t axes_viewport_height = height() / 8;
+    const std::size_t axes_viewport_width = width() / 6;
+    const std::size_t axes_viewport_height = height() / 6;
     const std::size_t axes_viewport_size = std::min(axes_viewport_width, axes_viewport_height);
     glViewport(0, 0, axes_viewport_size, axes_viewport_size);
     QMatrix4x4 mv_matrix;
@@ -2063,7 +2063,7 @@ void ViewerWidget::draw() {
     pvm_matrix.setToIdentity();
     pvm_matrix.ortho(-1.5f, 1.5f, -1.5f, 1.5f, 0.1f, 10.0f);
     pvm_matrix *= mv_matrix;
-    axes_drawer_.draw(pvm_matrix, axes_viewport_size, axes_viewport_size, 5.0f);
+    axes_drawer_.draw(pvm_matrix, axes_viewport_size, axes_viewport_size, 8.0f);
     glViewport(0, 0, width(), height());
     glEnable(GL_DEPTH_TEST);
   }
@@ -2375,7 +2375,7 @@ void ViewerWidget::keyPressEvent(QKeyEvent* event) {
   }
   else if (event->key() == Qt::Key_G) {
     // Augment viewpoint path
-    planner_->augmentedViewpointPathWithSparseMatchingViewpoints(&planner_->getBestViewpointPath());
+    planner_->augmentViewpointPathWithSparseMatchingViewpoints(&planner_->getBestViewpointPath());
     showViewpointGraph();
     showViewpointPath();
     update();

@@ -618,7 +618,7 @@ void ViewpointPlanner::improveViewpointTourWith2Opt(
   }
 }
 
-void ViewpointPlanner::augmentedViewpointPathWithSparseMatchingViewpoints(ViewpointPath* viewpoint_path) {
+void ViewpointPlanner::augmentViewpointPathWithSparseMatchingViewpoints(ViewpointPath* viewpoint_path) {
   ViewpointPath new_viewpoint_path(*viewpoint_path);
   if (viewpoint_path->order.size() > 1) {
     new_viewpoint_path.order.clear();
@@ -661,6 +661,10 @@ void ViewpointPlanner::augmentedViewpointPathWithSparseMatchingViewpoints(Viewpo
           new_path_entry.mvs_viewpoint = false;
           new_path_entry.viewpoint_index = new_idx;
           new_path_entry.viewpoint = new_viewpoint_entry.viewpoint;
+          new_path_entry.local_information = 0;
+          new_path_entry.local_objective = 0;
+          new_path_entry.acc_information = new_viewpoint_path.entries.back().acc_information;
+          new_path_entry.acc_objective = new_viewpoint_path.entries.back().acc_objective;
           new_viewpoint_path.entries.push_back(new_path_entry);
         }
         const SE3Motion& se3_motion = motion.se3Motions()[it2 - 1 - motion.begin()];

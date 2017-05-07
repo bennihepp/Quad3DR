@@ -636,7 +636,7 @@ ViewpointPlanner::NextViewpointPathEntryStatus ViewpointPlanner::findNextViewpoi
         }
         else {
           if (options_.viewpoint_path_conservative_sparse_matching_incremental) {
-            augmentedViewpointPathWithSparseMatchingViewpoints(&viewpoint_path);
+            augmentViewpointPathWithSparseMatchingViewpoints(&viewpoint_path);
           }
           const bool ignore_observed_voxels = false;
           if (result.has_stereo_entry) {
@@ -699,19 +699,21 @@ std::pair<ViewpointPlanner::ViewpointEntryIndex, ViewpointPlanner::FloatType> Vi
 ViewpointPlanner::FloatType ViewpointPlanner::computeViewpointPathInformationUpperBound(
     const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data, const std::size_t max_num_viewpoints) const {
   FloatType information_upper_bound = viewpoint_path.acc_information;
-  // Sanity check
-  FloatType acc_information_tmp = std::accumulate(viewpoint_path.entries.begin(), viewpoint_path.entries.end(),
+  // Sanity check. TODO: Should be removed
+  const FloatType acc_information_tmp = std::accumulate(viewpoint_path.entries.begin(), viewpoint_path.entries.end(),
                                                   FloatType(0),
                                                   [&](const FloatType value, const ViewpointPathEntry& path_entry) {
                                                     if (path_entry.mvs_viewpoint) {
                                                       return value + path_entry.local_information;
                                                     }
+                                                    return value;
                                                   });
   if (!viewpoint_path.entries.empty()) {
     if (!bh::isApproxEqual(viewpoint_path.entries.back().acc_information, acc_information_tmp, FloatType(1e-2))) {
       BH_PRINT_VALUE(viewpoint_path.acc_information);
       BH_PRINT_VALUE(acc_information_tmp);
       BH_PRINT_VALUE(viewpoint_path.acc_information - acc_information_tmp);
+      BH_PRINT_VALUE(viewpoint_path.entries.back().acc_information - acc_information_tmp);
       std::cout << "WARNING: Accumulated viewpoint path information of last entry does not match individual path entries" << std::endl;
     }
   }
@@ -719,6 +721,9 @@ ViewpointPlanner::FloatType ViewpointPlanner::computeViewpointPathInformationUpp
     BH_PRINT_VALUE(viewpoint_path.acc_information);
     BH_PRINT_VALUE(acc_information_tmp);
     BH_PRINT_VALUE(viewpoint_path.acc_information - acc_information_tmp);
+    for (auto it = viewpoint_path.entries.begin(); it != viewpoint_path.entries.end(); ++it) {
+      BH_PRINT_VALUE(it->local_information);
+    }
     std::cout << "WARNING: Accumulated viewpoint path information does not match individual path entries" << std::endl;
   }
   const std::size_t num_viewpoints = std::min(max_num_viewpoints, comp_data.sorted_new_informations.size());

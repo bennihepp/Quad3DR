@@ -188,7 +188,7 @@ public:
       if (augment_viewpoint_paths) {
         std::cout << "Augmenting viewpoint path with sparse matching viewpoints" << std::endl;
         for (ViewpointPlanner::ViewpointPath& viewpoint_path : getPlanner().getViewpointPaths()) {
-          getPlanner().augmentedViewpointPathWithSparseMatchingViewpoints(&viewpoint_path);
+          getPlanner().augmentViewpointPathWithSparseMatchingViewpoints(&viewpoint_path);
         }
       }
 
@@ -208,7 +208,7 @@ public:
         for (ViewpointPlanner::ViewpointPath& viewpoint_path : getPlanner().getViewpointPaths()) {
           getPlanner().makeViewpointMotionsSparseMatchable(&viewpoint_path);
           if (augment_viewpoint_paths) {
-            getPlanner().augmentedViewpointPathWithSparseMatchingViewpoints(&viewpoint_path);
+            getPlanner().augmentViewpointPathWithSparseMatchingViewpoints(&viewpoint_path);
           }
         }
 
