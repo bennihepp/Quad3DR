@@ -27,7 +27,8 @@ ViewpointPlanner::ViewpointPlanner(
   }),
   motion_planner_(motion_options, data_.get(), options->motion_planner_log_filename),
   viewpoint_sampling_distribution_update_size_(0),
-  viewpoint_graph_components_valid_(false), viewpoint_paths_initialized_(false) {
+  viewpoint_graph_components_valid_(false), viewpoint_paths_initialized_(false),
+  viewpoint_path_time_constraint_(options_.viewpoint_path_time_constraint) {
 #if WITH_CUDA
   raycaster_.setEnableCuda(options_.enable_cuda);
 #endif
@@ -37,13 +38,13 @@ ViewpointPlanner::ViewpointPlanner(
   }
   random_.setSeed(random_seed);
   if (options_.virtual_camera_width > 0) {
-    AIT_ASSERT(options_.virtual_camera_height > 0);
-    AIT_ASSERT(options_.virtual_camera_focal_length > 0);
+    BH_ASSERT(options_.virtual_camera_height > 0);
+    BH_ASSERT(options_.virtual_camera_focal_length > 0);
     setVirtualCamera(options_.virtual_camera_width, options_.virtual_camera_height, options_.virtual_camera_focal_length);
   }
   else {
-    AIT_ASSERT(static_cast<bool>(hasReconstruction()));
-    AIT_ASSERT(data_->reconstruction_->getCameras().size() > 0);
+    BH_ASSERT(static_cast<bool>(hasReconstruction()));
+    BH_ASSERT(data_->reconstruction_->getCameras().size() > 0);
     setScaledVirtualCamera(data_->reconstruction_->getCameras().cbegin()->first, options_.virtual_camera_scale);
   }
   offscreen_renderer_.reset(new viewpoint_planner::ViewpointOffscreenRenderer(
@@ -58,7 +59,7 @@ ViewpointPlanner::ViewpointPlanner(
   roi_bbox_extent(1) = roi_bbox_extent(0);
   roi_bbox_extent(2) = data_->roi_.getUpperPlaneZ() - data_->roi_.getLowerPlaneZ();
   if (options_.isSet("sampling_bbox_min")) {
-    AIT_ASSERT(options_.isSet("sampling_bbox_max"));
+    BH_ASSERT(options_.isSet("sampling_bbox_max"));
     pose_sample_bbox_ = BoundingBoxType(
         options_.getValue<Vector3>("sampling_bbox_min"),
         options_.getValue<Vector3>("sampling_bbox_max"));
@@ -69,6 +70,17 @@ ViewpointPlanner::ViewpointPlanner(
   }
   BH_PRINT_VALUE(pose_sample_bbox_);
 
+  if (options_.isSet("exploration_bbox_min")) {
+    BH_ASSERT(options_.isSet("exploration_bbox_max"));
+    exploration_bbox_ = BoundingBoxType(
+            options_.getValue<Vector3>("exploration_bbox_min"),
+            options_.getValue<Vector3>("exploration_bbox_max"));
+  }
+  else {
+    exploration_bbox_ = getRoiBbox();
+  }
+  BH_PRINT_VALUE(exploration_bbox_);
+
   const std::size_t count_grid_dim = options_.viewpoint_count_grid_dimension;
   viewpoint_count_grid_= ContinuousGridType(
       pose_sample_bbox_, count_grid_dim, count_grid_dim, count_grid_dim);
@@ -76,9 +88,10 @@ ViewpointPlanner::ViewpointPlanner(
   std::cout << "Viewpoint count grid dimension: " << viewpoint_count_grid_.getDimensions().transpose() << std::endl;
   std::cout << "Viewpoint count grid increment: " << viewpoint_count_grid_.getGridIncrement().transpose() << std::endl;
 
-  const FloatType motion_sampling_roi_factor = 2 * options_.sampling_roi_factor;
-  const BoundingBoxType motion_sampling_bbox = BoundingBoxType::createFromCenterAndExtent(
-      data_->roi_.getCentroid(), roi_bbox_extent * motion_sampling_roi_factor);
+//  const FloatType motion_sampling_roi_factor = 2 * options_.sampling_roi_factor;
+//  const BoundingBoxType motion_sampling_bbox = BoundingBoxType::createFromCenterAndExtent(
+//      data_->roi_.getCentroid(), roi_bbox_extent * motion_sampling_roi_factor);
+  const BoundingBoxType motion_sampling_bbox = getBvhBbox();
   motion_planner_.setSpaceBoundingBox(motion_sampling_bbox);
   motion_planner_.setObjectBoundingBox(drone_bbox_);
   std::cout << "Pose sampling bounding box: " << pose_sample_bbox_ << std::endl;
@@ -109,8 +122,10 @@ void ViewpointPlanner::reset() {
   std::unique_lock<std::mutex> lock(mutex_);
   num_of_failed_viewpoint_entry_samples_ = 0;
   viewpoint_entries_.clear();
+  stereo_viewpoint_indices_.clear();
   viewpoint_ann_.clear();
   viewpoint_graph_.clear();
+  viewpoint_exploration_front_.clear();
   viewpoint_graph_components_.first.clear();
   viewpoint_graph_components_valid_ = false;
   viewpoint_graph_motions_.clear();
@@ -171,8 +186,16 @@ void ViewpointPlanner::resetViewpointPaths() {
   lock.unlock();
 }
 
+auto ViewpointPlanner::getViewpointPathTimeConstraint() const -> FloatType {
+  return viewpoint_path_time_constraint_;
+}
+
+void ViewpointPlanner::setViewpointPathTimeConstraint(const FloatType time_constraint) {
+  viewpoint_path_time_constraint_ = time_constraint;
+}
+
 const ViewpointPlanner::ViewpointPath& ViewpointPlanner::getBestViewpointPath() const {
-  AIT_ASSERT(!viewpoint_paths_.empty());
+  BH_ASSERT(!viewpoint_paths_.empty());
   const ViewpointPath* best_path = &viewpoint_paths_.front();
   if (viewpoint_paths_.size() > 1) {
     for (auto it = viewpoint_paths_.cbegin() + 1; it != viewpoint_paths_.cend(); ++it) {
@@ -188,7 +211,7 @@ const ViewpointPlanner::ViewpointPath& ViewpointPlanner::getBestViewpointPath() 
 }
 
 ViewpointPlanner::ViewpointPath& ViewpointPlanner::getBestViewpointPath() {
-  AIT_ASSERT(!viewpoint_paths_.empty());
+  BH_ASSERT(!viewpoint_paths_.empty());
   ViewpointPath* best_path = &viewpoint_paths_.front();
   if (viewpoint_paths_.size() > 1) {
     for (auto it = viewpoint_paths_.begin() + 1; it != viewpoint_paths_.end(); ++it) {
@@ -208,8 +231,9 @@ std::unique_lock<std::mutex> ViewpointPlanner::acquireLock() {
   return std::unique_lock<std::mutex>(mutex_);
 }
 
-bool ViewpointPlanner::isValidObjectPosition(const Vector3& position, const BoundingBoxType& object_bbox) const {
-  return data_->isValidObjectPosition(position, object_bbox);
+bool ViewpointPlanner::isValidObjectPosition(const Vector3& position, const BoundingBoxType& object_bbox,
+                                             const bool ignore_no_fly_zones) const {
+  return data_->isValidObjectPosition(position, object_bbox, ignore_no_fly_zones);
 }
 
 auto ViewpointPlanner::findViewpointEntryWithPose(const Pose& pose) const -> std::pair<bool, ViewpointEntryIndex> {

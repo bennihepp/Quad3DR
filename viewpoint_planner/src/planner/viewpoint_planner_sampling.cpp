@@ -92,19 +92,20 @@ ViewpointPlanner::Pose::Quaternion ViewpointPlanner::sampleOrientation() const {
 ViewpointPlanner::Pose::Quaternion ViewpointPlanner::sampleBiasedOrientation(const Vector3& pos, const BoundingBoxType& bias_bbox) const {
   const FloatType dist = (pos - bias_bbox.getCenter()).norm();
   const FloatType bbox_fov_angle = std::atan(bias_bbox.getMaxExtent() / (2 * dist));
-  FloatType angle_stddev = 2 * bh::clamp<FloatType>(bbox_fov_angle, 0, M_PI / 2);
-  const FloatType angle1 = std::abs(random_.sampleNormal(0, angle_stddev));
+  const FloatType angle_stddev = bh::clamp<FloatType>(bbox_fov_angle, 0, M_PI / 2);
+  FloatType angle1 = random_.sampleNormal(0, angle_stddev);
   FloatType angle2 = random_.sampleNormal(0, angle_stddev);
   Vector3 bbox_direction = (bias_bbox.getCenter() - pos).normalized();
-  // TODO: This should be configurable
-  // Multicopter camera can only cover pitch in the range of [-90, 0] degrees
-  if (bbox_direction(2) > 0) {
-    bbox_direction(2) = 0;
-  }
-  angle2 = bh::clamp<FloatType>(angle2, 0, M_PI / 2);
+  angle1 = bh::wrapRadiansToMinusPiAndPi(angle1);
+  angle2 = bh::wrapRadiansToMinusPiAndPi(angle2);
+//  angle2 = bh::clamp<FloatType>(angle2, 0, M_PI / 2);
   // Compute viewing direction (i.e. pose z axis)
   Pose::Vector3 viewing_direction = AngleAxis(angle1, Vector3::UnitZ()) * bbox_direction;
-  viewing_direction = AngleAxis(-angle2, viewing_direction.cross(Vector3::UnitZ())) * viewing_direction;
+  viewing_direction = AngleAxis(angle2, viewing_direction.cross(Vector3::UnitZ())) * viewing_direction;
+  // Multicopter camera can only cover pitch in the range of [-90, 0] degrees
+  if (viewing_direction(2) > 0) {
+    viewing_direction(2) = 0;
+  }
 
   // TODO: Remove old code
 //  FloatType angle_deviation = std::abs(random_.sampleNormal(0, angle_stddev));

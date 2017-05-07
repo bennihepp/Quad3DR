@@ -206,16 +206,19 @@ ViewpointPlannerData::RegionType ViewpointPlannerData::convertGpsRegionToEnuRegi
   return region;
 }
 
-bool ViewpointPlannerData::isValidObjectPosition(const Vector3& position, const BoundingBoxType& object_bbox) const {
-  for (const RegionType& no_fly_zone : no_fly_zones_) {
-    if (no_fly_zone.isPointInside(position)) {
-      return false;
+bool ViewpointPlannerData::isValidObjectPosition(const Vector3& position, const BoundingBoxType& object_bbox,
+                                                 const bool ignore_no_fly_zones) const {
+  if (!ignore_no_fly_zones) {
+    for (const RegionType &no_fly_zone : no_fly_zones_) {
+      if (no_fly_zone.isPointInside(position)) {
+        return false;
+      }
     }
   }
   if (position(2) >= options_.obstacle_free_height) {
     return bvh_bbox_.isInside(position);
   }
-  else {
+  if (occupied_bvh_.getRoot()->getBoundingBox().isInside(position)) {
     BoundingBoxType centered_object_bbox = object_bbox + position;
     if (centered_object_bbox.getMaximum(2) >= options_.obstacle_free_height) {
       Vector3 cropped_maximum = object_bbox.getMaximum();
@@ -225,6 +228,9 @@ bool ViewpointPlannerData::isValidObjectPosition(const Vector3& position, const 
     std::vector<ViewpointPlannerData::OccupiedTreeType::ConstBBoxIntersectionResult> results =
             occupied_bvh_.intersects(centered_object_bbox);
     return results.empty();
+  }
+  else {
+    return false;
   }
 }
 
@@ -636,6 +642,9 @@ ViewpointPlannerData::generateAugmentedOctree(std::unique_ptr<RawOccupancyMapTyp
     output_tree->expandNode(navigator.getNode());
     const FloatType size = navigator.getSize();
     for (size_t child_idx = 0; child_idx < 8; ++child_idx) {
+      TreeNavigatorType child_navigator = navigator.child(child_idx);
+      child_navigator->setOccupancy(navigator->getOccupancy());
+      child_navigator->setObservationCount(navigator->getObservationCount());
       const BoundingBoxType bbox(navigator.getPosition(), size);
       if (!bbox.intersects(bvh_bbox_)) {
         continue;
@@ -646,12 +655,16 @@ ViewpointPlannerData::generateAugmentedOctree(std::unique_ptr<RawOccupancyMapTyp
       }
       else if (bbox.getMaximum(2) >= options_.obstacle_free_height
                && navigator.getDepth() < output_tree->getTreeDepth()) {
-        expansion_stack.push(navigator.child(child_idx));
+        expansion_stack.push(child_navigator);
       }
     }
   }
+  output_tree->updateInnerOccupancy();
   std::cout << "Done" << std::endl;
   timer.printTimingMs("Converting raw input tree");
+  if (!isTreeConsistent(*output_tree.get())) {
+    throw BH_EXCEPTION("Augmented tree is inconsistent");
+  }
 
   // TODO: Augmented tree with weights necessary?
 //  timer = bh::Timer();
@@ -746,6 +759,7 @@ template <typename TreeT>
 bool ViewpointPlannerData::isTreeConsistent(const TreeT& tree) {
   bool consistent = true;
   for (auto it = tree.begin_tree(); it != tree.end_tree(); ++it) {
+    using NodeType = typename TreeT::NodeType;
     if (it->hasChildren()) {
       for (size_t i = 0; i < 8; ++i) {
         if (it->hasChild(i)) {
@@ -822,16 +836,28 @@ void ViewpointPlannerData::generateBVHTree(const OccupancyMapType* octree) {
         center << center_octomap.x(), center_octomap.y(), center_octomap.z();
         const float size = it.getSize();
         object_with_bbox.bounding_box = typename OccupiedTreeType::BoundingBoxType(center, size);
+//        BH_ASSERT(object_with_bbox.bounding_box.isValid());
+        const BoundingBoxType old_bbox = object_with_bbox.bounding_box;
         object_with_bbox.bounding_box.constrainTo(bvh_bbox_);
+        if (object_with_bbox.bounding_box.isEmpty()) {
+          continue;
+        }
+
+        const BoundingBoxType old_bbox2 = object_with_bbox.bounding_box;
         if (object_with_bbox.bounding_box.getMaximum(2) >= options_.obstacle_free_height) {
-          const Vector3 min = object_with_bbox.bounding_box.getMinimum();
+          const BoundingBoxType old_bbox = object_with_bbox.bounding_box;
+          Vector3 min = object_with_bbox.bounding_box.getMinimum();
+          min(2) = std::min(options_.obstacle_free_height, min(2));
           Vector3 max = object_with_bbox.bounding_box.getMaximum();
           max(2) = options_.obstacle_free_height;
           object_with_bbox.bounding_box = typename OccupiedTreeType::BoundingBoxType(min, max);
+//          BH_ASSERT(object_with_bbox.bounding_box.isValid());
         }
         if (object_with_bbox.bounding_box.isEmpty()) {
           continue;
         }
+
+//        BH_ASSERT(object_with_bbox.bounding_box.isValid());
         object_with_bbox.object = new NodeObjectType();
         object_with_bbox.object->occupancy = it->getOccupancy();
         object_with_bbox.object->observation_count = it->getObservationCount();

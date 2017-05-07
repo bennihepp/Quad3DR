@@ -88,8 +88,6 @@ public:
     return operation_;
   }
 
-  void updateViewpoints();
-
   void requestRaycast(const Viewpoint& viewpoint,
                       const std::size_t x_start, const std::size_t x_end,
                       const std::size_t y_start, const std::size_t y_end);
@@ -123,8 +121,6 @@ public:
 
 protected:
   Result runIteration() override;
-
-  void updateViewpointsInternal();
 
 private:
   std::mutex mutex_;
@@ -204,17 +200,23 @@ public:
   struct Options : bh::ConfigOptions {
     Options()
     : bh::ConfigOptions("viewpoint_planner.gui", "ViewpointPlanner GUI options") {
+      addOption<float>("ground_height", &ground_height);
       addOption<bool>("websocket_enable", &websocket_enable);
       addOption<uint16_t>("websocket_port", &websocket_port);
       addOption<bool>("show_poisson_mesh_normals", &show_poisson_mesh_normals);
+      addOption<double>("overlay_alpha", &overlay_alpha);
+      addOption<std::string>("images_path", &images_path);
     }
 
     ~Options() override {}
 
+    float ground_height = 0.0;
     // Websocket server options
     bool websocket_enable = true;
     uint16_t websocket_port = 54321;
     bool show_poisson_mesh_normals = false;
+    double overlay_alpha = 0.5;
+    std::string images_path = "images";
   };
 
   using FloatType = float;
@@ -225,8 +227,8 @@ public:
   static ViewerWidget* create(const Options& options, ViewpointPlanner* planner, ViewerSettingsPanel* settings_panel,
       ViewerPlannerPanel* planner_panel, QWidget *parent = nullptr) {
     QGLFormat format;
-    format.setVersion(3, 3);
-//    format.setProfile(QGLFormat::CoreProfile);
+    format.setVersion(4, 5);
+    format.setProfile(QGLFormat::CoreProfile);
 
     format.setProfile(QGLFormat::CompatibilityProfile);
     format.setSampleBuffers(true);
@@ -457,7 +459,7 @@ private:
   FloatType aspect_ratio_;
   rendering::LineDrawer axes_drawer_;
   rendering::BinnedOcTreeDrawer octree_drawer_;
-  rendering::SparseReconstructionDrawer sparce_recon_drawer_;
+  rendering::SparseReconstructionDrawer sparse_recon_drawer_;
   rendering::PointDrawer dense_points_drawer_;
   rendering::TriangleDrawer poisson_mesh_drawer_;
   rendering::LineDrawer poisson_mesh_normal_drawer_;

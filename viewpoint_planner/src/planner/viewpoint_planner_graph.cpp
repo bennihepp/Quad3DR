@@ -9,6 +9,79 @@
 #include "viewpoint_planner.h"
 #include <boost/graph/connected_components.hpp>
 
+ViewpointPlanner::ViewpointEntryIndex ViewpointPlanner::addViewpointEntry(
+        const Pose& pose, const bool no_raycast) {
+  const bool verbose = true;
+
+  const Viewpoint viewpoint = getVirtualViewpoint(pose);
+  // Compute observed voxels and information and discard if too few voxels or too little information.
+  // Also discard if too close to too many voxels.
+  try {
+    if (!no_raycast && !options_.viewpoint_no_raycast) {
+      const bool ignore_voxels_with_zero_information = true;
+      std::pair<VoxelWithInformationSet, FloatType> raycast_result =
+              getRaycastHitVoxelsWithInformationScore(viewpoint, ignore_voxels_with_zero_information);
+      VoxelWithInformationSet &voxel_set = raycast_result.first;
+      FloatType total_information = raycast_result.second;
+      //    if (verbose) {
+      //      std::cout << "voxel_set.size()=" << voxel_set.size() << std::endl;
+      //    }
+      if (voxel_set.size() < options_.viewpoint_min_voxel_count) {
+        if (verbose) {
+          std::cout << "voxel_set.size() < options_.viewpoint_min_voxel_count" << std::endl;
+        }
+        return (ViewpointEntryIndex)-1;
+      }
+      //  if (verbose) {
+      //    std::cout << "total_information=" << total_information << std::endl;
+      //  }
+      if (total_information < options_.viewpoint_min_information) {
+        if (verbose) {
+          std::cout << "total_information < options_.viewpoint_min_information" << std::endl;
+        }
+        return (ViewpointEntryIndex)-1;
+      }
+
+      size_t too_close_voxel_count = 0;
+      for (const VoxelWithInformation &vi : voxel_set) {
+        const FloatType squared_distance = (viewpoint.pose().getWorldPosition() -
+                                            vi.voxel->getBoundingBox().getCenter()).squaredNorm();
+        if (squared_distance < options_.viewpoint_voxel_distance_threshold) {
+          ++too_close_voxel_count;
+        }
+      }
+      const FloatType too_close_voxel_ratio = too_close_voxel_count / voxel_set.size();
+      if (too_close_voxel_ratio >= options_.viewpoint_max_too_close_voxel_ratio) {
+        if (verbose) {
+          std::cout << "too_close_voxel_ratio < options_.viewpoint_max_too_close_voxel_ratio" << std::endl;
+        }
+      }
+
+      const bool ignore_viewpoint_count_grid = true;
+      const ViewpointEntryIndex new_viewpoint_index = addViewpointEntry(
+              ViewpointEntry(Viewpoint(&virtual_camera_, pose), total_information, std::move(voxel_set)),
+              ignore_viewpoint_count_grid);
+      viewpoint_exploration_front_.push_back(new_viewpoint_index);
+      return new_viewpoint_index;
+    }
+    else {
+      VoxelWithInformationSet voxel_set;
+      const FloatType total_information = 0;
+      const bool ignore_viewpoint_count_grid = true;
+      const ViewpointEntryIndex new_viewpoint_index = addViewpointEntry(
+              ViewpointEntry(Viewpoint(&virtual_camera_, pose), total_information, std::move(voxel_set)),
+              ignore_viewpoint_count_grid);
+      viewpoint_exploration_front_.push_back(new_viewpoint_index);
+      return new_viewpoint_index;
+    }
+  }
+    // TODO: Should be an exception for raycast
+  catch (const OccupiedTreeType::Error& err) {
+    std::cout << "Raycast failed: " << err.what() << std::endl;
+  }
+  return (ViewpointEntryIndex)-1;
+}
+
 ViewpointPlanner::ViewpointEntryIndex ViewpointPlanner::addViewpointEntryWithoutLock(
         ViewpointEntry&& viewpoint_entry, const bool ignore_viewpoint_count_grid) {
   const ViewpointEntryIndex viewpoint_index = viewpoint_entries_.size();
@@ -22,6 +95,8 @@ ViewpointPlanner::ViewpointEntryIndex ViewpointPlanner::addViewpointEntryWithout
     viewpoint_entries_.reserve(new_viewpoint_entries_capacity);
   }
   viewpoint_entries_.emplace_back(std::move(viewpoint_entry));
+  stereo_viewpoint_indices_.emplace_back((ViewpointEntryIndex)-1);
+  stereo_viewpoint_computed_flags_.push_back(false);
 //  std::cout << "Adding node to viewpoint graph" << std::endl;
   viewpoint_graph_.addNode(viewpoint_index);
   viewpoint_graph_components_valid_ = false;
@@ -31,7 +106,7 @@ ViewpointPlanner::ViewpointEntryIndex ViewpointPlanner::addViewpointEntryWithout
 //    BH_ASSERT(viewpoint_count_grid_.isInsideGrid(viewpoint_position));
 //  }
 //#endif
-  if (!ignore_viewpoint_count_grid) {
+  if (!ignore_viewpoint_count_grid && options_.viewpoint_count_grid_enable) {
     if (viewpoint_count_grid_.isInsideGrid(viewpoint_position)) {
       if (viewpoint_entries_.size() > num_real_viewpoints_) {
         viewpoint_count_grid_(viewpoint_position) += 1;
@@ -131,7 +206,6 @@ const std::pair<std::vector<std::size_t>, std::size_t>& ViewpointPlanner::getCon
   return viewpoint_graph_components_;
 }
 
-#pragma GCC optimize("O0")
 bool ViewpointPlanner::generateNextViewpointEntry() {
   const bool verbose = true;
 
@@ -444,7 +518,7 @@ bool ViewpointPlanner::generateNextViewpointEntry() {
   //    std::cout << "pose=" << pose << ", voxel_set=" << voxel_set.size() << ", total_information=" << total_information << std::endl;
   //  }
 
-    const ViewpointEntryIndex new_viewpoint_index = addViewpointEntry(
+    addViewpointEntry(
         ViewpointEntry(Viewpoint(&virtual_camera_, sampled_pose), total_information, std::move(voxel_set)));
 
 //    if (found_motion) {
@@ -463,4 +537,209 @@ bool ViewpointPlanner::generateNextViewpointEntry() {
     std::cout << "Raycast failed: " << err.what() << std::endl;
     return false;
   }
+}
+
+bool ViewpointPlanner::tryToAddViewpointEntry(const Pose& pose, const bool no_raycast) {
+  const bool verbose = true;
+  const bool valid = isValidObjectPosition(pose.getWorldPosition(), drone_bbox_);
+  if (!valid) {
+    return false;
+  }
+  FloatType exploration_step = computeExplorationStep(pose.getWorldPosition());
+  // Check distance to other viewpoints and discard if too close
+  const std::size_t dist_knn = options_.viewpoint_discard_dist_knn;
+//  const FloatType dist_thres_square = options_.viewpoint_discard_dist_thres_square;
+//  const std::size_t dist_count_thres = options_.viewpoint_discard_dist_count_thres;
+//  const FloatType dist_real_thres_square = options_.viewpoint_discard_dist_real_thres_square;
+  static std::vector<ViewpointANN::IndexType> knn_indices;
+  static std::vector<ViewpointANN::DistanceType> knn_distances;
+  knn_indices.resize(dist_knn);
+  knn_distances.resize(dist_knn);
+  viewpoint_ann_.knnSearch(pose.getWorldPosition(), dist_knn, &knn_indices, &knn_distances);
+  //  for (ViewpointANN::IndexType viewpoint_index : knn_indices) {
+  //    const ViewpointEntry& other_viewpoint = viewpoint_entries_[viewpoint_index];
+  //    FloatType dist_square = (pose.getWorldPosition() - other_viewpoint.viewpoint.pose().getWorldPosition()).squaredNorm();
+  bool discard = false;
+  for (std::size_t i = 0; i < knn_distances.size(); ++i) {
+    const ViewpointANN::DistanceType dist_square = knn_distances[i];
+    const ViewpointEntryIndex viewpoint_index = knn_indices[i];
+    const ViewpointEntry& viewpoint_entry = viewpoint_entries_[viewpoint_index];
+    exploration_step = std::min(exploration_step, computeExplorationStep(viewpoint_entry.viewpoint.pose().getWorldPosition()));
+    const FloatType exploration_step_square_threshold
+            = FloatType(0.6) * exploration_step * exploration_step;
+    const FloatType angular_dist = pose.getAngularDistanceTo(viewpoint_entries_[viewpoint_index].viewpoint.pose());
+    const FloatType exploration_angular_dist_threshold
+            = options_.viewpoint_exploration_angular_dist_threshold_degrees * FloatType(M_PI) / FloatType(180.0);
+    if (dist_square < exploration_step_square_threshold && angular_dist < exploration_angular_dist_threshold) {
+      if (verbose) {
+        std::cout << "dist_square=" << dist_square << ", angular_dist=" << angular_dist << std::endl;
+      }
+      discard = true;
+      break;
+    }
+  }
+  if (discard) {
+    return false;
+  }
+
+  const Viewpoint viewpoint = getVirtualViewpoint(pose);
+
+  // Compute observed voxels and information and discard if too few voxels or too little information.
+  // Also discard if too close to too many voxels.
+  try {
+    if (!no_raycast && !options_.viewpoint_no_raycast) {
+      const bool ignore_voxels_with_zero_information = true;
+      std::pair<VoxelWithInformationSet, FloatType> raycast_result =
+              getRaycastHitVoxelsWithInformationScore(viewpoint, ignore_voxels_with_zero_information);
+      VoxelWithInformationSet &voxel_set = raycast_result.first;
+      FloatType total_information = raycast_result.second;
+      //    if (verbose) {
+      //      std::cout << "voxel_set.size()=" << voxel_set.size() << std::endl;
+      //    }
+      if (voxel_set.size() < options_.viewpoint_min_voxel_count) {
+        if (verbose) {
+          std::cout << "voxel_set.size() < options_.viewpoint_min_voxel_count" << std::endl;
+        }
+        return false;
+      }
+      //  if (verbose) {
+      //    std::cout << "total_information=" << total_information << std::endl;
+      //  }
+      if (total_information < options_.viewpoint_min_information) {
+        if (verbose) {
+          std::cout << "total_information < options_.viewpoint_min_information" << std::endl;
+        }
+        return false;
+      }
+
+      size_t too_close_voxel_count = 0;
+      for (const VoxelWithInformation &vi : voxel_set) {
+        const FloatType squared_distance = (viewpoint.pose().getWorldPosition() -
+                                            vi.voxel->getBoundingBox().getCenter()).squaredNorm();
+        if (squared_distance < options_.viewpoint_voxel_distance_threshold) {
+          ++too_close_voxel_count;
+        }
+      }
+      const FloatType too_close_voxel_ratio = too_close_voxel_count / voxel_set.size();
+      if (too_close_voxel_ratio >= options_.viewpoint_max_too_close_voxel_ratio) {
+        if (verbose) {
+          std::cout << "too_close_voxel_ratio < options_.viewpoint_max_too_close_voxel_ratio" << std::endl;
+        }
+      }
+
+      const bool ignore_viewpoint_count_grid = true;
+      const ViewpointEntryIndex new_viewpoint_index = addViewpointEntry(
+              ViewpointEntry(Viewpoint(&virtual_camera_, pose), total_information, std::move(voxel_set)),
+              ignore_viewpoint_count_grid);
+      viewpoint_exploration_front_.push_back(new_viewpoint_index);
+    }
+    else {
+      VoxelWithInformationSet voxel_set;
+      const FloatType total_information = 0;
+      const bool ignore_viewpoint_count_grid = true;
+      const ViewpointEntryIndex new_viewpoint_index = addViewpointEntry(
+              ViewpointEntry(Viewpoint(&virtual_camera_, pose), total_information, std::move(voxel_set)),
+              ignore_viewpoint_count_grid);
+      viewpoint_exploration_front_.push_back(new_viewpoint_index);
+    }
+
+    return true;
+  }
+
+    // TODO: Should be a exception for raycast
+  catch (const OccupiedTreeType::Error& err) {
+    std::cout << "Raycast failed: " << err.what() << std::endl;
+    return false;
+  }
+  return true;
+}
+
+bool ViewpointPlanner::tryToAddViewpointEntries(const Vector3& position, const bool no_raycast) {
+  const bool valid = isValidObjectPosition(position, drone_bbox_);
+  if (!valid) {
+    return false;
+  }
+  bool success = false;
+  for (size_t i = 0; i < options_.viewpoint_exploration_num_orientations; ++i) {
+    Pose::Quaternion sampled_orientation = sampleBiasedOrientation(position, data_->roi_bbox_);
+    const Pose sampled_pose = Pose::createFromImageToWorldTransformation(position, sampled_orientation);
+    const bool local_success = tryToAddViewpointEntry(sampled_pose, no_raycast);
+    success = success || local_success;
+  }
+  return success;
+}
+
+ViewpointPlanner::FloatType ViewpointPlanner::computeExplorationStep(const Vector3& position) const {
+  FloatType exploration_step = options_.viewpoint_exploration_step;
+  if (getExplorationBbox().isOutside(position)) {
+    const FloatType distance_to_bbox = getExplorationBbox().distanceTo(position);
+    const FloatType dilation_distance = distance_to_bbox - options_.viewpoint_exploration_dilation_start_bbox_distance;
+    if (dilation_distance > 0) {
+      if (options_.viewpoint_exploration_dilation_squared) {
+        exploration_step += options_.viewpoint_exploration_dilation_speed * dilation_distance * dilation_distance;
+      }
+      else {
+        exploration_step += options_.viewpoint_exploration_dilation_speed * dilation_distance;
+      }
+    }
+  }
+  if (exploration_step > options_.viewpoint_exploration_step_max) {
+    exploration_step = options_.viewpoint_exploration_step_max;
+  }
+  return exploration_step;
+}
+
+bool ViewpointPlanner::generateNextViewpointEntry2() {
+  const bool verbose = true;
+
+  // Sample viewpoint and add it to the viewpoint graph
+
+  bool found_sample;
+  Pose sampled_pose;
+
+  if (viewpoint_entries_.size() <= num_real_viewpoints_ && viewpoint_exploration_front_.empty()) {
+    for (size_t i = 0; i < viewpoint_entries_.size(); ++i) {
+      viewpoint_exploration_front_.push_back(i);
+    }
+  }
+
+  const bool sample_without_reference = random_.sampleBernoulli(options_.viewpoint_sample_without_reference_probability);
+  if (sample_without_reference || viewpoint_exploration_front_.empty()) {
+    std::cout << "Sampling uniformly in pose sample bounding box" << std::endl;
+    std::tie(found_sample, sampled_pose) = samplePose(pose_sample_bbox_, drone_bbox_);
+  }
+  else {
+    std::cout << "Sampling around existing viewpoint" << std::endl;
+    std::cout << "Size of exploration front: " << viewpoint_exploration_front_.size() << std::endl;
+    const auto exploration_it = random_.sampleDiscrete(viewpoint_exploration_front_.begin(), viewpoint_exploration_front_.end());
+    const ViewpointEntryIndex exploration_index = *exploration_it;
+    // Swap exploration_it with last element and afterwards remove last element
+    using std::swap;
+    swap(*exploration_it, viewpoint_exploration_front_.back());
+    viewpoint_exploration_front_.pop_back();
+//    const size_t front_index = random_.sampleUniformIntExclusive(0, viewpoint_exploration_front_.size());
+//    const ViewpointEntryIndex exploration_index = viewpoint_exploration_front_[front_index];
+//    viewpoint_exploration_front_.erase(viewpoint_exploration_front_)
+//    const ViewpointEntryIndex exploration_index = viewpoint_exploration_front_.front();
+//    viewpoint_exploration_front_.pop_front();
+    const Vector3 exploration_position = viewpoint_entries_[exploration_index].viewpoint.pose().getWorldPosition();
+    const FloatType exploration_step = computeExplorationStep(exploration_position);
+    const bool success1 = tryToAddViewpointEntries(exploration_position - exploration_step * Vector3::UnitX());
+    const bool success2 = tryToAddViewpointEntries(exploration_position + exploration_step * Vector3::UnitX());
+    const bool success3 = tryToAddViewpointEntries(exploration_position - exploration_step * Vector3::UnitY());
+    const bool success4 = tryToAddViewpointEntries(exploration_position + exploration_step * Vector3::UnitY());
+    const bool success5 = tryToAddViewpointEntries(exploration_position - exploration_step * Vector3::UnitZ());
+    const bool success6 = tryToAddViewpointEntries(exploration_position + exploration_step * Vector3::UnitZ());
+    const bool success = success1 || success2 || success3 || success4 || success5 || success6;
+    return success;
+  }
+  if (!found_sample) {
+//    if (verbose) {
+//      std::cout << "Failed to sample pose." << i << std::endl;
+//    }
+    return false;
+  }
+
+  const bool success = tryToAddViewpointEntry(sampled_pose);
+  return success;
 }

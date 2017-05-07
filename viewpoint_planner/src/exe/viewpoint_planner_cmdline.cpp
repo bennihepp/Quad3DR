@@ -86,16 +86,21 @@ public:
 
     if (vm.count("out-viewpoint-graph-file") > 0) {
       enableCtrlCHandler(signalIntHandler);
-      const std::size_t num_candidates = vm["num-candidates"].as<std::size_t>();
-      BH_ASSERT(num_candidates > 0);
+      const std::size_t max_num_candidates = vm["num-candidates"].as<std::size_t>();
+      BH_ASSERT(max_num_candidates > 0);
       std::cout << "Sampling viewpoint candidates" << std::endl;
       bool graph_modified = false;
-      while (!ctrl_c_pressed && getPlanner().getViewpointGraph().numVertices() < num_candidates) {
-        const bool result = getPlanner().generateNextViewpointEntry();
+      while (!ctrl_c_pressed && getPlanner().getViewpointGraph().numVertices() < max_num_candidates) {
+        const bool result = getPlanner().generateNextViewpointEntry2();
         graph_modified = true;
         std::cout << "Generate next viewpoint result -> " << result << std::endl;
         std::cout << "Sampled " << getPlanner().getViewpointGraph().numVertices()
             << " of " << vm["num-candidates"].as<std::size_t>() << " viewpoints" << std::endl;
+        if (getPlanner().getViewpointExplorationFront().empty()
+            && getPlanner().getViewpointEntries().size() > getPlanner().getNumOfRealViewpoints()) {
+          std::cout << "Exploration front is empty." << std::endl;
+          break;
+        }
       }
       std::cout << "Done" << std::endl;
       disableCtrlCHandler();
@@ -110,15 +115,33 @@ public:
         std::cout << "Done" << std::endl;
         getPlanner().saveViewpointGraph(vm["out-viewpoint-graph-file"].as<std::string>());
       }
+
+      if (vm["stereo-viewpoint-computation"].as<bool>()) {
+        std::cout << "Computing stereo viewpoints" << std::endl;
+        getPlanner().computeMatchingStereoViewpoints();
+        std::cout << "Done" << std::endl;
+        getPlanner().saveViewpointGraph(vm["out-viewpoint-graph-file"].as<std::string>());
+      }
     }
 
+    const bool use_manual_drone_start_position = true;
     if (vm.count("out-viewpoint-path-file") > 0) {
-      const bool use_manual_drone_start_position = vm.count("drone-start-viewpoint-ids") == 0;
+//      const bool use_manual_drone_start_position = vm.count("drone-start-viewpoint-ids") == 0;
 
-      if (!use_manual_drone_start_position) {
+      if (vm.count("drone-start-viewpoint-ids") > 0) {
+        const bool drone_start_viewpoint_mvs = vm["drone-start-viewpoint-mvs"].as<bool>();
         const std::string drone_start_viewpoint_ids_str = vm["drone-start-viewpoint-ids"].as<std::string>();
-        const std::vector<std::size_t> drone_start_viewpoint_ids
-                = bh::splitString<std::size_t>(drone_start_viewpoint_ids_str, ",");
+        std::vector<std::size_t> drone_start_viewpoint_ids;
+        if (std::find(drone_start_viewpoint_ids_str.begin(), drone_start_viewpoint_ids_str.end(), ':') != drone_start_viewpoint_ids_str.end()) {
+          std::vector<std::size_t> range_ids = bh::splitString<std::size_t>(drone_start_viewpoint_ids_str, ":");
+          BH_ASSERT(range_ids.size() == 2);
+          for (size_t i = range_ids.front(); i < range_ids.back(); ++i) {
+            drone_start_viewpoint_ids.push_back(i);
+          }
+        }
+        else {
+          drone_start_viewpoint_ids = bh::splitString<std::size_t>(drone_start_viewpoint_ids_str, ",");
+        }
         for (std::size_t path_index = 0; path_index < getPlanner().getViewpointPaths().size(); ++path_index) {
           for (std::size_t drone_start_viewpoint_id : drone_start_viewpoint_ids) {
             std::cout << "Adding initial viewpoint " << drone_start_viewpoint_id
@@ -126,7 +149,7 @@ public:
             ViewpointPlanner::ViewpointPathEntry path_entry;
             path_entry.viewpoint_index = drone_start_viewpoint_id;
             path_entry.viewpoint = getPlanner().getViewpointEntries()[drone_start_viewpoint_id].viewpoint;
-            path_entry.mvs_viewpoint = false;
+            path_entry.mvs_viewpoint = drone_start_viewpoint_mvs;
             const bool ignore_observed_voxels = true;
             getPlanner().addViewpointPathEntry(path_index, path_entry, ignore_observed_voxels);
           }
@@ -137,11 +160,23 @@ public:
       const std::size_t num_viewpoints = vm["num-viewpoints"].as<std::size_t>();
       BH_ASSERT(num_viewpoints > 0);
       std::cout << "Computing viewpoint paths" << std::endl;
-      while (!ctrl_c_pressed && getPlanner().getBestViewpointPath().entries.size() < num_viewpoints) {
-        bool result = getPlanner().findNextViewpointPathEntries();
+      while (!ctrl_c_pressed && getPlanner().getNumMVSViewpoints(getPlanner().getBestViewpointPath()) < num_viewpoints) {
+        ViewpointPlanner::NextViewpointPathEntryStatus result = getPlanner().findNextViewpointPathEntries();
         std::cout << "Find next viewpoint path entries result -> " << result << std::endl;
         std::cout << "Computed " << getPlanner().getBestViewpointPath().entries.size()
             << " of " << num_viewpoints << " viewpoint path entries" << std::endl;
+        if (result == ViewpointPlanner::NO_IMPROVEMENT_IN_OBJECTIVE) {
+          std::cout << "No more improvement in objective" << std::endl;
+          break;
+        }
+        else if (result == ViewpointPlanner::NO_VIEWPOINTS_LEFT) {
+          std::cout << "No more viewpoints left" << std::endl;
+          break;
+        }
+        else if (result == ViewpointPlanner::TIME_CONSTRAINT_EXCEEDED) {
+          std::cout << "Reached viewpoint path time constraint" << std::endl;
+          break;
+        }
       }
 
       if (!vm["no-tour-computation"].as<bool>()) {
@@ -149,7 +184,8 @@ public:
         getPlanner().computeViewpointTour(use_manual_drone_start_position);
       }
 
-      if (!vm["no-viewpoint-path-augmentation"].as<bool>()) {
+      const bool augment_viewpoint_paths = !vm["no-viewpoint-path-augmentation"].as<bool>();
+      if (augment_viewpoint_paths) {
         std::cout << "Augmenting viewpoint path with sparse matching viewpoints" << std::endl;
         for (ViewpointPlanner::ViewpointPath& viewpoint_path : getPlanner().getViewpointPaths()) {
           getPlanner().augmentedViewpointPathWithSparseMatchingViewpoints(&viewpoint_path);
@@ -171,7 +207,11 @@ public:
         std::cout << "Making viewpoint paths conservatively sparse matchable" << std::endl;
         for (ViewpointPlanner::ViewpointPath& viewpoint_path : getPlanner().getViewpointPaths()) {
           getPlanner().makeViewpointMotionsSparseMatchable(&viewpoint_path);
+          if (augment_viewpoint_paths) {
+            getPlanner().augmentedViewpointPathWithSparseMatchingViewpoints(&viewpoint_path);
+          }
         }
+
         const std::string conservative_out_viewpoint_path_file = out_viewpoint_path_file + "_conservative";
         getPlanner().saveViewpointPath(conservative_out_viewpoint_path_file + ".bs");
         getPlanner().exportViewpointPathAsText(conservative_out_viewpoint_path_file + ".txt",
@@ -204,10 +244,12 @@ std::pair<bool, boost::program_options::variables_map> processOptions(
         ("out-viewpoint-graph-file", po::value<std::string>(), "File to save the viewpoint graph to after processing.")
         ("out-viewpoint-path-file", po::value<std::string>(), "File to save the viewpoint path to after processing.")
         ("no-motion-computation", po::bool_switch()->default_value(false), "Whether to prevent motion computation")
+        ("stereo-viewpoint-computation", po::bool_switch()->default_value(false), "Whether to compute stereo viewpoints")
         ("no-tour-computation", po::bool_switch()->default_value(false), "Whether to prevent tour computation")
         ("no-viewpoint-path-augmentation", po::bool_switch()->default_value(false), "Whether to prevent augmenting viewpoint path with sparse matching viewpoints")
         ("save-conservative-path", po::bool_switch()->default_value(true), "Whether to also save a conservative path")
         ("drone-start-viewpoint-ids", po::value<std::string>(), "Starting viewpoints for viewpoint path")
+        ("drone-start-viewpoint-mvs", po::bool_switch()->default_value(false), "Whether to make starting viewpoints multi-view-stereo viewpoints")
         ;
 
     po::options_description options;

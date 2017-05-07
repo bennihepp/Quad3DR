@@ -171,7 +171,8 @@ public:
   }
 
   /// Check if an object can be placed at a position (i.e. is it free space)
-  bool isValidObjectPosition(const Vector3& position, const BoundingBoxType& object_bbox) const;
+  bool isValidObjectPosition(
+          const Vector3& position, const BoundingBoxType& object_bbox, const bool ignore_no_fly_zones = false) const;
 
   const reconstruction::DenseReconstruction& getReconstruction() const;
 

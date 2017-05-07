@@ -224,6 +224,14 @@ public:
     return ui.betaParameter->value();
   }
 
+  void setAlphaParameter(double alpha_parameter) const {
+    ui.alphaParameter->setValue(alpha_parameter);
+  }
+
+  void setBetaParameter(double beta_parameter) const {
+    ui.betaParameter->setValue(beta_parameter);
+  }
+
   double getMinInformationFilter() const {
     return ui.minInformationFilter->value();
   }

@@ -96,7 +96,8 @@ ViewpointPlanner::getRaycastHitVoxelsWithInformationScore(
   const std::size_t x_start = 0;
   const std::size_t x_end = virtual_camera_.width();
   return getRaycastHitVoxelsWithInformationScore(
-          viewpoint, x_start, x_end, y_start, y_end, ignore_voxels_with_zero_information, remove_duplicates);
+          viewpoint, x_start, x_end, y_start, y_end, ignore_voxels_with_zero_information,
+          remove_duplicates);
 }
 
 std::pair<ViewpointPlanner::VoxelWithInformationSet, ViewpointPlanner::FloatType>
@@ -119,9 +120,10 @@ ViewpointPlanner::getRaycastHitVoxelsWithInformationScore(
       const std::size_t y_start, const std::size_t y_end,
       const bool ignore_voxels_with_zero_information,
       const bool remove_duplicates) const {
+  const bool fail_on_error = false;
   std::vector<ViewpointPlannerData::OccupiedTreeType::IntersectionResultWithScreenCoordinates> raycast_results;
   raycast_results = raycaster_.getRaycastHitVoxelsWithScreenCoordinates(
-          viewpoint, x_start, x_end, y_start, y_end, remove_duplicates);
+          viewpoint, x_start, x_end, y_start, y_end, remove_duplicates, fail_on_error);
   VoxelWithInformationSet voxel_set;
   FloatType total_information = 0;
 //  std::vector<FloatType> informations;

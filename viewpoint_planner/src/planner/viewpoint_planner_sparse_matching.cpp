@@ -37,21 +37,24 @@ bool ViewpointPlanner::isSparseMatchable2(
 
   const std::unordered_set<size_t> intersection_set
           = bh::computeSetIntersection(visible_voxels1, visible_voxels2);
-  const std::unordered_set<size_t> union_set
-          = bh::computeSetUnion(visible_voxels1, visible_voxels2);
+//  const std::unordered_set<size_t> union_set
+//          = bh::computeSetUnion(visible_voxels1, visible_voxels2);
   if (intersection_set.size() == 0) {
     return false;
   }
-  const FloatType iou = intersection_set.size() / (FloatType)union_set.size();
+//  const FloatType iou = intersection_set.size() / (FloatType)union_set.size();
+  const size_t average_set_size = (visible_voxels1.size() + visible_voxels2.size()) / 2;
+  const FloatType iou = intersection_set.size() / (FloatType)average_set_size;
 
   if (verbose) {
     BH_PRINT_VALUE(visible_voxels1.size());
     BH_PRINT_VALUE(visible_voxels2.size());
-    BH_PRINT_VALUE(union_set.size());
+//    BH_PRINT_VALUE(union_set.size());
+    BH_PRINT_VALUE(average_set_size);
     BH_PRINT_VALUE(intersection_set.size());
     BH_PRINT_VALUE(iou);
-    BH_ASSERT(union_set.size() >= visible_voxels1.size());
-    BH_ASSERT(union_set.size() >= visible_voxels2.size());
+//    BH_ASSERT(union_set.size() >= visible_voxels1.size());
+//    BH_ASSERT(union_set.size() >= visible_voxels2.size());
     BH_ASSERT(intersection_set.size() <= visible_voxels1.size());
     BH_ASSERT(intersection_set.size() <= visible_voxels2.size());
   }

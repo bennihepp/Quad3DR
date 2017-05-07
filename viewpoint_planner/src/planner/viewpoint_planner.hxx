@@ -57,3 +57,42 @@ ViewpointPlanner::FloatType ViewpointPlanner::computeInformationScore(const View
   });
   return total_information;
 }
+
+template <typename Iterator>
+size_t ViewpointPlanner::connectViewpointToOtherViewpoints(
+        const ViewpointEntryIndex from_viewpoint_index,
+        const Iterator to_first,
+        const Iterator to_last,
+        const bool ignore_existing_connections) {
+  size_t num_connections_found = 0;
+  for (auto to_it = to_first; to_it != to_last; ++to_it) {
+    const ViewpointEntryIndex to_viewpoint_index = *to_it;
+    if (from_viewpoint_index == to_viewpoint_index) {
+      continue;
+    }
+    if (connectViewpoints(from_viewpoint_index, to_viewpoint_index, ignore_existing_connections)) {
+      ++num_connections_found;
+    }
+  }
+  return num_connections_found;
+}
+
+template <typename Iterator>
+size_t ViewpointPlanner::connectPathEntryToOtherPathEntries(
+        const ViewpointPathEntry& from_path_entry,
+        const Iterator to_first,
+        const Iterator to_last,
+        const bool ignore_existing_connections) {
+  const ViewpointEntryIndex from_viewpoint_index = from_path_entry.viewpoint_index;
+  size_t num_connections_found = 0;
+  for (auto to_it = to_first; to_it != to_last; ++to_it) {
+    const ViewpointEntryIndex to_viewpoint_index = to_it->viewpoint_index;
+    if (from_viewpoint_index == to_viewpoint_index) {
+      continue;
+    }
+    if (connectViewpoints(from_viewpoint_index, to_viewpoint_index, ignore_existing_connections)) {
+      ++num_connections_found;
+    }
+  }
+  return num_connections_found;
+}

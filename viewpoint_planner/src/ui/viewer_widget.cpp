@@ -40,11 +40,13 @@
 #include <rapidjson/prettywriter.h>
 #include <rapidjson/stringbuffer.h>
 #include <manipulatedCameraFrame.h>
+#include <QInputDialog>
 #include <bh/qt/utils.h>
 #include <bh/utilities.h>
 #include <bh/eigen_utils.h>
 #include <bh/pose.h>
 #include <bh/color.h>
+#include <bh/filesystem.h>
 
 using namespace std;
 
@@ -174,6 +176,7 @@ ViewerWidget::ViewerWidget(const Options& options, const QGLFormat& format,
     BH_ASSERT(!color_mode_size_t.empty());
     planner_panel_->initializeViewpointColorMode(color_mode_size_t);
     planner_panel_->selectViewpointColorMode(color_mode_size_t[0].second);
+    planner_panel_->setAlphaParameter((double)planner_->getViewpointPathTimeConstraint());
 
     planner_thread_.setAlpha(planner_panel_->getAlphaParameter());
     planner_thread_.setBeta(planner_panel_->getBetaParameter());
@@ -217,10 +220,11 @@ void ViewerWidget::init() {
   setManipulatedFrame(camera()->frame());
   // invert mousewheel (more like Blender)
   camera()->frame()->setWheelSensitivity(-0.5);
+  camera()->frame()->setSpinningSensitivity(std::numeric_limits<qreal>::max());
 
   // TODO
   camera()->setSceneCenter(qglviewer::Vec(0, 0, 0));
-  camera()->setSceneRadius(50);
+  camera()->setSceneRadius(10);
 
   camera()->setPosition(qglviewer::Vec(0, 0, 100));
   camera()->lookAt(qglviewer::Vec(0, 0, 0));
@@ -237,7 +241,7 @@ void ViewerWidget::init() {
   // TODO: Hack, make this dependent on the scene
 //  camera()->setZNearCoefficient(z_near_coefficient_);
 //  camera()->setZClippingCoefficient(1);
-  sparce_recon_drawer_.init();
+  sparse_recon_drawer_.init();
   dense_points_drawer_.init();
   dense_points_drawer_.setDrawPoints(false);
   poisson_mesh_drawer_.init();
@@ -362,7 +366,9 @@ void ViewerWidget::showOctree(const ViewpointPlanner::OccupancyMapType* octree) 
 
     refreshTree();
 
-    setSceneBoundingBox(qglviewer::Vec(minX, minY, minZ), qglviewer::Vec(maxX, maxY, maxZ));
+//    setSceneBoundingBox(qglviewer::Vec(minX, minY, minZ), qglviewer::Vec(maxX, maxY, maxZ));
+    const ViewpointPlanner::BoundingBoxType bbox = planner_->getBvhBbox() * 2;
+    setSceneBoundingBox(eigenToQglviewer(bbox.getMinimum()), eigenToQglviewer(bbox.getMaximum()));
 }
 
 void ViewerWidget::showDensePoints(const ViewpointPlanner::PointCloudType* dense_points) {
@@ -878,6 +884,11 @@ void ViewerWidget::uploadViewpointPathDrawerViewpointsWithoutLock(
       const FloatType value = bh::normalize<FloatType>(comp, 0, num_components);
       color = cmap.map(value, 0.6f);
     }
+    else if (viewpoint_color_mode_ == Indexed) {
+      const std::size_t entry_index = it - viewpoint_path.entries.begin();
+      const FloatType value = bh::normalize<FloatType>(entry_index, 0, viewpoint_path.entries.size() - 1);
+      color = cmap.map(value, 0.6f);
+    }
     else {
       const FloatType value = min_max.normalize(total_information);
       color = cmap.map(value, 0.6f);
@@ -885,39 +896,43 @@ void ViewerWidget::uploadViewpointPathDrawerViewpointsWithoutLock(
     poses.push_back(pose);
     colors.push_back(color);
   }
-  for (auto order_it = viewpoint_path.order.begin(); order_it != viewpoint_path.order.end(); ++order_it) {
-    if (inspect_graph_motions && valid_selection && *order_it != selected_index) {
-      continue;
-    }
-    // Show sparse matching viewpoints
-    BH_ASSERT(viewpoint_path.order.size() >= 2);
-    auto next_order_it = order_it + 1;
-    if (next_order_it == viewpoint_path.order.end()) {
-      next_order_it = viewpoint_path.order.begin();
-    }
-    const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = viewpoint_path.entries[*order_it].viewpoint_index;
-    const ViewpointPlanner::ViewpointEntryIndex next_viewpoint_index = viewpoint_path.entries[*next_order_it].viewpoint_index;
-    if (planner_->hasViewpointMotion(viewpoint_index, next_viewpoint_index)) {
-      const ViewpointPlanner::ViewpointMotion& motion = planner_->getViewpointMotion(viewpoint_index, next_viewpoint_index);
-
-      for (auto it = motion.viewpointIndices().begin() + 1; it != motion.viewpointIndices().end() - 1; ++it) {
-        Color4 color(0.0f, 0.8f, 0.1f, 0.6f);
-        const Pose& pose = planner_->getViewpointEntries()[*it].viewpoint.pose();
-        poses.push_back(pose);
-        colors.push_back(color);
+  if (viewpoint_path.order.size() > 1) {
+    for (auto order_it = viewpoint_path.order.begin(); order_it != viewpoint_path.order.end(); ++order_it) {
+      if (inspect_graph_motions && valid_selection && *order_it != selected_index) {
+        continue;
       }
-      if (inspect_graph_motions && valid_selection) {
-        // Print matchability matrix along motion
-        std::cout << "Matchability matrix:" << std::endl;
-        for (auto it = motion.viewpointIndices().begin(); it != motion.viewpointIndices().end(); ++it) {
-          for (auto it2 = it + 1; it2 != motion.viewpointIndices().end(); ++it2) {
-//            const bool matchable = planner_->isSparseMatchable(*it, *it2);
-//            const bool matchable = planner_->isSparseMatchable2(*it, *it2);
-            const bool matchable = false;
-            const size_t motion_index1 = it - motion.viewpointIndices().begin();
-            const size_t motion_index2 = it2 - motion.viewpointIndices().begin();
-            std::cout << "  " << motion_index1 << "[" << *it << "] <-> " << motion_index2 << " [" << *it2
-                      << "] matchable: " << matchable << std::endl;
+      // Show sparse matching viewpoints
+      auto next_order_it = order_it + 1;
+      if (next_order_it == viewpoint_path.order.end()) {
+        next_order_it = viewpoint_path.order.begin();
+      }
+      const size_t path_entry_index = *order_it;
+      const size_t next_path_entry_index = *next_order_it;
+      const ViewpointPlanner::ViewpointEntryIndex viewpoint_index = viewpoint_path.entries[path_entry_index].viewpoint_index;
+      const ViewpointPlanner::ViewpointEntryIndex next_viewpoint_index = viewpoint_path.entries[next_path_entry_index].viewpoint_index;
+      if (planner_->hasViewpointMotion(viewpoint_index, next_viewpoint_index)) {
+        const ViewpointPlanner::ViewpointMotion &motion = planner_->getViewpointMotion(viewpoint_index,
+                                                                                       next_viewpoint_index);
+
+        for (auto it = motion.viewpointIndices().begin() + 1; it != motion.viewpointIndices().end() - 1; ++it) {
+          Color4 color(0.0f, 0.8f, 0.1f, 0.6f);
+          const Pose &pose = planner_->getViewpointEntries()[*it].viewpoint.pose();
+          poses.push_back(pose);
+          colors.push_back(color);
+        }
+        if (inspect_graph_motions && valid_selection) {
+          // Print matchability matrix along motion
+          std::cout << "Matchability matrix:" << std::endl;
+          for (auto it = motion.viewpointIndices().begin(); it != motion.viewpointIndices().end(); ++it) {
+            for (auto it2 = it + 1; it2 != motion.viewpointIndices().end(); ++it2) {
+              //            const bool matchable = planner_->isSparseMatchable(*it, *it2);
+              //            const bool matchable = planner_->isSparseMatchable2(*it, *it2);
+              const bool matchable = false;
+              const size_t motion_index1 = it - motion.viewpointIndices().begin();
+              const size_t motion_index2 = it2 - motion.viewpointIndices().begin();
+              std::cout << "  " << motion_index1 << "[" << *it << "] <-> " << motion_index2 << " [" << *it2
+                        << "] matchable: " << matchable << std::endl;
+            }
           }
         }
       }
@@ -990,8 +1005,8 @@ void ViewerWidget::showViewpointGraphMotions(const std::size_t selected_index) {
     FloatType total_distance = motion.distance();
     FloatType acc_dist = 0;
     for (auto se3_motion_it = motion.se3Motions().begin(); se3_motion_it != motion.se3Motions().end(); ++se3_motion_it) {
-      BH_ASSERT(!se3_motion_it->poses.empty());
-      for (auto pose_it = se3_motion_it->poses.begin() + 1; pose_it != se3_motion_it->poses.end(); ++pose_it) {
+      BH_ASSERT(!se3_motion_it->poses().empty());
+      for (auto pose_it = se3_motion_it->poses().begin() + 1; pose_it != se3_motion_it->poses().end(); ++pose_it) {
         const Vector3 from_pos = (pose_it - 1)->getWorldPosition();
         const Vector3 to_pos = pose_it->getWorldPosition();
         const OGLVertexData vertex1(from_pos(0), from_pos(1), from_pos(2));
@@ -1077,8 +1092,8 @@ void ViewerWidget::showViewpointPathMotions(const std::size_t selected_index /*=
       FloatType total_distance = motion.distance();
       FloatType acc_dist = 0;
       for (auto se3_motion_it = motion.se3Motions().begin(); se3_motion_it != motion.se3Motions().end(); ++se3_motion_it) {
-        BH_ASSERT(!se3_motion_it->poses.empty());
-        for (auto pose_it = se3_motion_it->poses.begin() + 1; pose_it != se3_motion_it->poses.end(); ++pose_it) {
+        BH_ASSERT(!se3_motion_it->poses().empty());
+        for (auto pose_it = se3_motion_it->poses().begin() + 1; pose_it != se3_motion_it->poses().end(); ++pose_it) {
           const Vector3 from_pos = (pose_it - 1)->getWorldPosition();
           const Vector3 to_pos = pose_it->getWorldPosition();
           const OGLVertexData vertex1(from_pos(0), from_pos(1), from_pos(2));
@@ -1125,8 +1140,8 @@ void ViewerWidget::showViewpointPathMotions(const std::size_t selected_index /*=
       }
       const ViewpointPlanner::ViewpointMotion& motion = planner_->getViewpointMotion(from_index, to_index);
       for (auto se3_motion_it = motion.se3Motions().begin(); se3_motion_it != motion.se3Motions().end(); ++se3_motion_it) {
-        BH_ASSERT(!se3_motion_it->poses.empty());
-        for (auto pose_it = se3_motion_it->poses.begin() + 1; pose_it != se3_motion_it->poses.end(); ++pose_it) {
+        BH_ASSERT(!se3_motion_it->poses().empty());
+        for (auto pose_it = se3_motion_it->poses().begin() + 1; pose_it != se3_motion_it->poses().end(); ++pose_it) {
           const Vector3 from_pos = (pose_it - 1)->getWorldPosition();
           const Vector3 to_pos = pose_it->getWorldPosition();
           const OGLVertexData vertex1(from_pos(0), from_pos(1), from_pos(2));
@@ -1178,7 +1193,8 @@ void ViewerWidget::showSparseReconstruction(const SparseReconstruction* sparse_r
     }
     settings_panel_->initializeImagePoses(pose_entries);
 
-    sparce_recon_drawer_.setSparseReconstruction(sparse_recon_);
+    sparse_recon_drawer_.overwriteCameraWidth(planner_->getVirtualCamera().width());
+    sparse_recon_drawer_.setSparseReconstruction(sparse_recon_);
 
     update();
 }
@@ -1186,7 +1202,10 @@ void ViewerWidget::showSparseReconstruction(const SparseReconstruction* sparse_r
 void ViewerWidget::refreshTree()
 {
     if (octree_ != nullptr) {
-        octree_drawer_.setOctree(octree_);
+        octree_drawer_.setOctree(
+                octree_,
+                std::max(planner_->getBvhBbox().getMinimum(2), options_.ground_height),
+                std::min(planner_->getBvhBbox().getMaximum(2), planner_->getPlannerData().getOptions().obstacle_free_height));
     }
     update();
 }
@@ -1305,6 +1324,7 @@ void ViewerWidget::onRaycastFinished() {
       const Vector3 position = it->voxel->getBoundingBox().getCenter();
       std::cout << " node: " << it->voxel << std::endl;
       std::cout << "  position=" << position.transpose() << std::endl;
+      std::cout << "  distance=" << (position - viewpoint.pose().getWorldPosition()).norm() << std::endl;
       if (planner_->hasGpsTransformation()) {
         std::cout << "  GPS = " << getGpsFromPosition(position) << std::endl;
       }
@@ -1312,6 +1332,7 @@ void ViewerWidget::onRaycastFinished() {
       std::cout << "  normal field=" << it->voxel->getObject()->normal.transpose() << std::endl;
       std::cout << "  normal=" << poisson_mesh_normals.at(it->voxel).transpose() << std::endl;
       std::cout << "  depth=" << poisson_mesh_depth.at(it->voxel) << std::endl;
+      std::cout << "  size=" << it->voxel->getBoundingBox().getMaxExtent() << std::endl;
       std::cout << "  occupancy=" << it->voxel->getObject()->occupancy << std::endl;
       std::cout << "  observation count=" << it->voxel->getObject()->observation_count << std::endl;
       std::cout << "  weight=" << it->voxel->getObject()->weight << std::endl;
@@ -1435,7 +1456,6 @@ void ViewerWidget::onRaycastFinished() {
 }
 
 void ViewerWidget::onMakeViewpointMotionsSparseMatchableFinished() {
-  planner_thread_.updateViewpoints();
   showViewpointGraph();
   showViewpointPath();
   update();
@@ -1567,8 +1587,8 @@ void ViewerWidget::setDrawOctree(bool draw_octree) {
 }
 
 void ViewerWidget::setDrawCameras(bool draw_cameras) {
-    sparce_recon_drawer_.setDrawCameras(draw_cameras);
-    update();
+  sparse_recon_drawer_.setDrawCameras(draw_cameras);
+  update();
 }
 
 void ViewerWidget::setDrawViewpointGraph(bool draw_viewpoint_graph) {
@@ -1587,7 +1607,7 @@ void ViewerWidget::setDrawViewpointPath(bool draw_viewpoint_path) {
 }
 
 void ViewerWidget::setDrawSparsePoints(bool draw_sparse_points) {
-  sparce_recon_drawer_.setDrawSparsePoints(draw_sparse_points);
+  sparse_recon_drawer_.setDrawSparsePoints(draw_sparse_points);
   update();
 }
 
@@ -1729,7 +1749,6 @@ void ViewerWidget::setViewpointPathBranchSelectionIndex(std::size_t index) {
               << ", entry=" << viewpoint_path.entries[viewpoint_path.order[i]].viewpoint_index << std::endl;
   }
   lock.unlock();
-  planner_thread_.updateViewpoints();
   // Remember selected entry before updating combo box
   const std::size_t path_selection_index = planner_panel_->getViewpointPathSelection();
   showViewpointPath();
@@ -1857,16 +1876,21 @@ void ViewerWidget::setViewpointPathSelectionIndex(std::size_t index) {
         next_order_it = viewpoint_path.order.begin();
       }
       std::cout << "Pose of path entry " << index << " = " << viewpoint_entry.viewpoint.pose() << std::endl;
-      std::cout << "Pose of path entry " << *next_order_it << " = " << viewpoint_path.entries[*next_order_it].viewpoint.pose() << std::endl;
-      std::cout << "Motion from path entry " << index << " to " << *next_order_it << std::endl;
-      const ViewpointPlanner::ViewpointMotion& motion = planner_->getViewpointMotion(viewpoint_index, viewpoint_path.entries[*next_order_it].viewpoint_index);
-      for (const ViewpointPlanner::ViewpointEntryIndex viewpoint_index : motion.viewpointIndices()) {
-        std::cout << "  viewpoint index=" << viewpoint_index << std::endl;
-      }
-      for (auto se3_motion_it = motion.se3Motions().begin(); se3_motion_it != motion.se3Motions().end(); ++se3_motion_it) {
-        std::cout << "  sub motion: " << (se3_motion_it - motion.se3Motions().begin()) << std::endl;
-        for (auto pose_it = se3_motion_it->poses.begin(); pose_it != se3_motion_it->poses.end(); ++pose_it) {
-          std::cout << "  pose = " << *pose_it << std::endl;
+      if (order_it != next_order_it) {
+        std::cout << "Pose of next path entry " << *next_order_it << " = "
+                  << viewpoint_path.entries[*next_order_it].viewpoint.pose() << std::endl;
+        std::cout << "Motion from path entry " << index << " to " << *next_order_it << std::endl;
+        const ViewpointPlanner::ViewpointMotion &motion = planner_->getViewpointMotion(viewpoint_index,
+                                                                                       viewpoint_path.entries[*next_order_it].viewpoint_index);
+        for (const ViewpointPlanner::ViewpointEntryIndex viewpoint_index : motion.viewpointIndices()) {
+          std::cout << "  viewpoint index=" << viewpoint_index << std::endl;
+        }
+        for (auto se3_motion_it = motion.se3Motions().begin();
+             se3_motion_it != motion.se3Motions().end(); ++se3_motion_it) {
+          std::cout << "  sub motion: " << (se3_motion_it - motion.se3Motions().begin()) << std::endl;
+          for (auto pose_it = se3_motion_it->poses().begin(); pose_it != se3_motion_it->poses().end(); ++pose_it) {
+            std::cout << "  pose = " << *pose_it << std::endl;
+          }
         }
       }
     }
@@ -2022,7 +2046,7 @@ void ViewerWidget::draw() {
   // Draw path before graph so that the graph is hidden
   viewpoint_path_drawer_.draw(pvm_matrix, width(), height());
   // Draw viewpoints at the end to enable their transparent viewports
-  sparce_recon_drawer_.draw(pvm_matrix, width(), height());
+  sparse_recon_drawer_.draw(pvm_matrix, width(), height());
   viewpoint_graph_drawer_.draw(pvm_matrix, width(), height());
 
   // Draw coordinate axes
@@ -2170,11 +2194,18 @@ void ViewerWidget::wheelEvent(QWheelEvent* event) {
     updateGL();
   }
   else if (event->modifiers() & Qt::ControlModifier) {
-    sparce_recon_drawer_.changePointSize(event->delta());
+    if (event->delta() != 0) {
+      sparse_recon_drawer_.changePointSize(event->delta());
+      const float POINT_SIZE_SPEED = 0.1f;
+      const float MIN_POINT_SIZE = 0.1f;
+      const float MAX_POINT_SIZE = 100.0f;
+      dense_points_size_ *= (1.0f + event->delta() / 100.0f * POINT_SIZE_SPEED);
+      dense_points_size_ = bh::clamp(dense_points_size_, MIN_POINT_SIZE, MAX_POINT_SIZE);
+    }
     event->accept();
     updateGL();
   } else if (event->modifiers() & Qt::AltModifier) {
-    sparce_recon_drawer_.changeCameraSize(event->delta());
+    sparse_recon_drawer_.changeCameraSize(event->delta());
     viewpoint_graph_drawer_.changeCameraSize(event->delta());
     viewpoint_path_drawer_.changeCameraSize(event->delta());
     event->accept();
@@ -2185,8 +2216,30 @@ void ViewerWidget::wheelEvent(QWheelEvent* event) {
   }
 }
 
+#pragma GCC optimize("O0")
 void ViewerWidget::keyPressEvent(QKeyEvent* event) {
-  if (event->key() == Qt::Key_P) {
+  if (event->key() == Qt::Key_0) {
+    // Set camera roll to 0
+    Pose pose = getCameraPose();
+    const Vector3 viewing_direction = pose.quaternion().toRotationMatrix().col(2);
+    const Vector3 up_direction = Vector3::UnitZ();
+    pose.quaternion() = bh::getZLookAtQuaternion(viewing_direction, up_direction);
+    setCameraPose(pose);
+    event->accept();
+  }
+  else if (event->key() == Qt::Key_1) {
+    // Set camera pitch and roll to 0
+    Pose pose = getCameraPose();
+    Vector3 viewing_direction = pose.quaternion().toRotationMatrix().col(2);
+    viewing_direction(2) = 0;
+    if (viewing_direction.norm() > 0) {
+      const Vector3 up_direction = Vector3::UnitZ();
+      pose.quaternion() = bh::getZLookAtQuaternion(viewing_direction, up_direction);
+      setCameraPose(pose);
+    }
+    event->accept();
+  }
+  else if (event->key() == Qt::Key_P) {
     // Take screenshot
     const std::string screenshot_dir = "screenshots/";
     const QDir currentDir(".");
@@ -2232,6 +2285,13 @@ void ViewerWidget::keyPressEvent(QKeyEvent* event) {
     std::cout << "Yaw = " << yaw << ", pitch = " << pitch << std::endl;
     // Check if valid position
     std::cout << "Valid drone position: " << planner_->isValidObjectPosition(pose.getWorldPosition(), planner_->getDroneBoundingBox()) << std::endl;
+    std::cout << "Exploration step: " << planner_->computeExplorationStep(pose.getWorldPosition()) << std::endl;
+    if (planner_->getRoiBbox().isOutside(pose.getWorldPosition())) {
+      std::cout << "ROI distance: " << planner_->getRoiBbox().distanceTo(pose.getWorldPosition()) << std::endl;
+    }
+    else {
+      std::cout << "Inside ROI" << std::endl;
+    }
     event->accept();
   }
   else if (event->key() == Qt::Key_T) {
@@ -2316,7 +2376,6 @@ void ViewerWidget::keyPressEvent(QKeyEvent* event) {
   else if (event->key() == Qt::Key_G) {
     // Augment viewpoint path
     planner_->augmentedViewpointPathWithSparseMatchingViewpoints(&planner_->getBestViewpointPath());
-    planner_thread_.updateViewpoints();
     showViewpointGraph();
     showViewpointPath();
     update();
@@ -2325,6 +2384,175 @@ void ViewerWidget::keyPressEvent(QKeyEvent* event) {
   else if (event->key() == Qt::Key_H) {
     // Augment viewpoint path
     planner_thread_.requestMakeViewpointPathsSparseMatchable();
+    event->accept();
+  }
+  else if (event->key() == Qt::Key_J) {
+    runInPlannerThreadAndWait(
+            [&]() {
+              if (!boost::filesystem::is_directory("dump")) {
+                boost::filesystem::create_directories("dump");
+              }
+              for (const auto& image_entry : planner_->getReconstruction()->getImages()) {
+                std::cout << "Drawing overlayed image: " << image_entry.second.name() << std::endl;
+                const Pose& pose = image_entry.second.pose();
+                const reconstruction::PinholeCameraColmap& camera = planner_->getReconstruction()->getCameras().at(image_entry.second.camera_id());
+                const Viewpoint viewpoint(&camera, pose);
+                planner_->getOffscreenRenderer().setCamera(camera);
+                const QImage render_image = planner_->getOffscreenRenderer().drawPoissonMesh(viewpoint);
+                const std::string render_output_filename = "dump/render_" + image_entry.second.name() + ".png";
+                render_image.save(QString::fromStdString(render_output_filename));
+                QImage real_image;
+                const std::string real_image_filename = bh::joinPaths(options_.images_path, image_entry.second.name());
+                if (!real_image.load(QString::fromStdString(real_image_filename))) {
+                  std::cout << "Could not load real image: " << real_image_filename << std::endl;
+                  continue;
+                }
+                if (real_image.size() != render_image.size()) {
+                  std::cout << "Sizes of real and rendered image do not match: "
+                            << real_image.size() << " != " << render_image.size() << std::endl;
+                  continue;
+                }
+                const std::string real_output_filename = "dump/real_" + image_entry.second.name() + ".png";
+                real_image.save(QString::fromStdString(real_output_filename));
+                QImage overlay_image = render_image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+                bh::qt::setImageAlphaPremultiplied(&overlay_image, options_.overlay_alpha);
+                QPainter painter(&overlay_image);
+                painter.setCompositionMode(QPainter::CompositionMode_DestinationOver);
+                painter.drawImage(overlay_image.rect(), real_image, real_image.rect());
+                painter.end();
+                const std::string overlay_output_filename = "dump/overlay_" + image_entry.second.name() + ".png";
+                overlay_image.save(QString::fromStdString(overlay_output_filename));
+              }
+              planner_->getOffscreenRenderer().setCamera(planner_->getVirtualCamera());
+            }
+    );
+    event->accept();
+  }
+  else if (event->key() == Qt::Key_K) {
+    if (event->modifiers() == Qt::ShiftModifier) {
+      const ViewpointPlanner::ViewpointEntryIndex path_entry_index = selected_viewpoint_path_entry_index_;
+      if (path_entry_index != (ViewpointPlanner::ViewpointEntryIndex) -1) {
+        std::cout << "Selected viewpoint path entry: " << path_entry_index << std::endl;
+        runInPlannerThreadAndWait([&]() {
+                                    if (event->modifiers() == Qt::ControlModifier) {
+                                      const ViewpointPlanner::ViewpointEntryIndex viewpoint_index
+                                              = planner_->getBestViewpointPath().entries[path_entry_index].viewpoint_index;
+                                      std::cout << "Clearing motions for path entry " << path_entry_index
+                                                << ", viewpoint index " << viewpoint_index << std::endl;
+                                      ViewpointPlanner::ViewpointGraph::OutEdgesWrapper out_edges = planner_->getViewpointGraph().getEdges(
+                                              viewpoint_index);
+                                      const size_t num_edges = out_edges.size();
+                                      out_edges.clear();
+                                      std::cout << "Removed " << num_edges << " motions" << std::endl;
+                                    }
+                                    else {
+                                      const bool ignore_existing_connections = true;
+                                      const bool verbose = true;
+                                      const bool connected = planner_->connectViewpointPathEntry(
+                                              path_entry_index,
+                                              &planner_->getBestViewpointPath(),
+                                              ignore_existing_connections,
+                                              verbose);
+                                      std::cout << "Path entry connected: " << connected << std::endl;
+                                    }
+                                  },
+                                  [&]() {
+                                    showViewpointPath(selected_viewpoint_path_entry_index_);
+                                  }
+        );
+      }
+      else {
+        std::cout << "No viewpoint path entry selected" << std::endl;
+      }
+    }
+    else {
+      const ViewpointPlanner::ViewpointEntryIndex from_index = selected_viewpoint_graph_entry_index_;
+      if (from_index != (ViewpointPlanner::ViewpointEntryIndex) -1) {
+        std::cout << "Selected viewpoint: " << from_index << std::endl;
+        runInPlannerThreadAndWait([&]() {
+                                    if (event->modifiers() == Qt::ControlModifier) {
+                                      std::cout << "Clearing motions for viewpoint index " << from_index << std::endl;
+                                      ViewpointPlanner::ViewpointGraph::OutEdgesWrapper out_edges = planner_->getViewpointGraph().getEdges(
+                                              from_index);
+                                      const size_t num_edges = out_edges.size();
+                                      out_edges.clear();
+                                      std::cout << "Removed " << num_edges << " motions" << std::endl;
+                                    }
+                                    else {
+                                      const bool verbose = true;
+                                      const size_t num_motions = planner_->computeViewpointMotions(from_index, verbose);
+                                      std::cout << "Computed " << num_motions << " viewpoint motions from viewpoint " << from_index
+                                                << std::endl;
+                                    }
+                                  }, [&]() {
+                                    showViewpointGraph(selected_viewpoint_graph_entry_index_);
+                                  }
+        );
+      }
+      else {
+        std::cout << "No viewpoint graph entry selected" << std::endl;
+      }
+    }
+    event->accept();
+  }
+  else if (event->key() == Qt::Key_L) {
+    bool ok;
+    ViewpointPlanner::ViewpointEntryIndex initial_from_index = selected_viewpoint_graph_entry_index_;
+    if (initial_from_index == (ViewpointPlanner::ViewpointEntryIndex)-1) {
+      initial_from_index = 0;
+    }
+    const ViewpointPlanner::ViewpointEntryIndex from_index
+            = QInputDialog::getInt(this, tr("Enter to viewpoint index"), tr("Viewpoint index from"),
+                                   initial_from_index, 0, planner_->getViewpointEntries().size(), 1, &ok);
+    if (!ok) {
+      event->accept();
+      return;
+    }
+    ViewpointPlanner::ViewpointEntryIndex initial_to_index = initial_from_index + 1;
+    if (initial_to_index >= planner_->getViewpointEntries().size()) {
+      initial_to_index = initial_from_index - 1;
+    }
+    const ViewpointPlanner::ViewpointEntryIndex to_index
+            = QInputDialog::getInt(this, tr("Enter from viewpoint index"), tr("Viewpoint index to"),
+                                   initial_to_index, 0, planner_->getViewpointEntries().size(), 1, &ok);
+    if (!ok || from_index == to_index) {
+      event->accept();
+      return;
+    }
+    const Pose& from_pose = planner_->getViewpointEntries()[from_index].viewpoint.pose();
+    const Pose& to_pose = planner_->getViewpointEntries()[to_index].viewpoint.pose();
+    ViewpointPlanner::SE3Motion straight_motion;
+    bool straight_motion_found;
+    std::tie(straight_motion, straight_motion_found) = planner_->getMotionPlanner().findMotionStraight(from_pose, to_pose);
+    if (straight_motion_found) {
+      std::cout << "Found straight motion from " << from_index << " to " << to_index
+                << ": distance=" << straight_motion.distance() << ", poses.size()=" << straight_motion.poses().size() << std::endl;
+      ViewpointPlanner::ViewpointMotion viewpoint_motion(
+              { from_index, to_index },
+              { straight_motion });
+      planner_->addViewpointMotion(std::move(viewpoint_motion));
+      showViewpointGraph(selected_viewpoint_graph_entry_index_);
+    }
+    else {
+      std::cout << "No straight motion from " << from_index << " to " << to_index << std::endl;
+    }
+    ViewpointPlanner::SE3Motion motion;
+    bool motion_found;
+    std::tie(motion, motion_found) = planner_->getMotionPlanner().findMotion(from_pose, to_pose);
+    if (motion_found) {
+      std::cout << "Found motion from " << from_index << " to " << to_index
+                << ": distance=" << motion.distance() << ", poses.size()=" << motion.poses().size() << std::endl;
+      if (!straight_motion_found) {
+        ViewpointPlanner::ViewpointMotion viewpoint_motion(
+                {from_index, to_index},
+                {motion});
+        planner_->addViewpointMotion(std::move(viewpoint_motion));
+        showViewpointGraph(selected_viewpoint_graph_entry_index_);
+      }
+    }
+    else {
+      std::cout << "No motion from " << from_index << " to " << to_index << std::endl;
+    };
     event->accept();
   }
   else if (event->key() == Qt::Key_N) {
@@ -2384,6 +2612,22 @@ void ViewerWidget::keyPressEvent(QKeyEvent* event) {
     std::cout << "Projecting 3D points = " << num_points << std::endl;
     event->accept();
   }
+  else if (event->key() == Qt::Key_B) {
+    // Add manual viewpoint entry to graph
+    Pose pose = getCameraPose();
+    bool no_raycast = false;
+    if (event->modifiers() == Qt::ShiftModifier) {
+      no_raycast = true;
+    }
+    if (event->modifiers() == Qt::ControlModifier) {
+      pose.quaternion() = planner_->sampleBiasedOrientation(pose.getWorldPosition(), planner_->getRoiBbox());
+    }
+    const ViewpointPlanner::ViewpointEntryIndex new_viewpoint_index
+            = planner_->addViewpointEntry(pose, no_raycast);
+    std::cout << "Added viewpoint " << new_viewpoint_index << " to graph" << std::endl;
+    updateViewpoints();
+    event->accept();
+  }
   else if (event->key() == Qt::Key_Z) {
     // Add manual viewpoint path entry
     const size_t viewpoint_path_index =
@@ -2400,7 +2644,6 @@ void ViewerWidget::keyPressEvent(QKeyEvent* event) {
     catch (const bh::Error& err) {
       std::cout << "Raycast failed: " << err.what() << std::endl;
     }
-    planner_thread_.updateViewpoints();
     updateViewpoints();
     event->accept();
   }
@@ -2421,7 +2664,6 @@ void ViewerWidget::keyPressEvent(QKeyEvent* event) {
       catch (const bh::Error &err) {
         std::cout << "Raycast failed: " << err.what() << std::endl;
       }
-      planner_thread_.updateViewpoints();
       updateViewpoints();
     }
     event->accept();
@@ -2448,7 +2690,7 @@ void ViewerWidget::mousePressEvent(QMouseEvent* event) {
       }
       else if (selection_type == VIEWPOINT_PATH_ENTRY) {
         const size_t path_entry_index = boost::any_cast<size_t>(selection_value);
-        std::cout << "Selected graph entry: " << boost::any_cast<size_t>(path_entry_index) << std::endl;
+        std::cout << "Selected path entry: " << boost::any_cast<size_t>(path_entry_index) << std::endl;
         selected_viewpoint_path_entry_index_ = path_entry_index;
       }
       update();
@@ -2575,7 +2817,6 @@ void ViewerWidget::pauseContinueOperation(ViewpointPlannerThread::Operation oper
 void ViewerWidget::resetViewpoints() {
   // TODO: Call asynchronously?
   planner_->reset();
-  planner_thread_.updateViewpoints();
   showViewpointGraph();
   showViewpointPath();
 }
@@ -2588,7 +2829,6 @@ void ViewerWidget::resetViewpointMotions() {
 void ViewerWidget::resetViewpointPath() {
   // TODO: Call asynchronously?
   planner_->resetViewpointPaths();
-  planner_thread_.updateViewpoints();
   showViewpointGraph();
   showViewpointPath();
 }
@@ -2604,7 +2844,6 @@ void ViewerWidget::onLoadViewpointGraph(const std::string& filename) {
                        planner_->loadViewpointGraph(filename);
                      },
                      [&]() {
-                       planner_thread_.updateViewpoints();
                        showViewpointGraph();
                        showViewpointPath();
                      });
@@ -2621,7 +2860,6 @@ void ViewerWidget::onLoadViewpointPath(const std::string& filename) {
                               planner_->loadViewpointPath(filename);
                      },
                      [&]() {
-                       planner_thread_.updateViewpoints();
                        showViewpointGraph();
                        showViewpointPath();
                      });
@@ -2696,6 +2934,7 @@ void ViewerWidget::setUseFixedColors(bool use_fixed_colors) {
 }
 
 void ViewerWidget::setAlphaParameter(double alpha) {
+  planner_->setViewpointPathTimeConstraint(alpha);
   planner_thread_.setAlpha(alpha);
 }
 
@@ -2901,11 +3140,12 @@ ViewpointPlannerThread::Result ViewpointPlannerThread::runIteration() {
 
   if (operation_ == VIEWPOINT_GRAPH) {
     std::cout << "Running iterations of generateNextViewpoint()" << std::endl;
-    for (std::size_t i = 0; i < 10; ++i) {
-      bool result = planner_->generateNextViewpointEntry();
+    for (std::size_t i = 0; i < 1; ++i) {
+      // TODO
+//      bool result = planner_->generateNextViewpointEntry();
+      bool result = planner_->generateNextViewpointEntry2();
       std::cout << "Result[" << i << "] -> " << result << std::endl;
     }
-    updateViewpointsInternal();
     viewer_widget_->signalViewpointsChanged();
     return Result::CONTINUE;
   }
@@ -2916,23 +3156,30 @@ ViewpointPlannerThread::Result ViewpointPlannerThread::runIteration() {
   else if (operation_ == VIEWPOINT_PATH) {
     std::cout << "Running iterations of findNextViewpointPathEntry()" << std::endl;
     // TODO: set parameter from widget
-    bool result = planner_->findNextViewpointPathEntries(alpha_, beta_);
+    ViewpointPlanner::NextViewpointPathEntryStatus result = planner_->findNextViewpointPathEntries(alpha_, beta_);
     std::cout << "Result -> " << result << std::endl;
-    updateViewpointsInternal();
     viewer_widget_->signalViewpointsChanged();
-    return Result::CONTINUE;
+    if (result == ViewpointPlanner::NO_IMPROVEMENT_IN_OBJECTIVE
+        || result == ViewpointPlanner::NO_VIEWPOINTS_LEFT) {
+      return Result::PAUSE;
+    }
+    else if (result == ViewpointPlanner::TIME_CONSTRAINT_EXCEEDED) {
+      std::cout << "NOTE: Time constraint exceeded" << std::endl;
+      return Result::PAUSE;
+    }
+    else {
+      return Result::CONTINUE;
+    }
   }
   else if (operation_ == VIEWPOINT_PATH_TSP) {
     std::cout << "Solving TSP problem for viewpoint paths" << std::endl;
     planner_->computeViewpointTour();
     std::cout << "Done" << std::endl;
-    updateViewpointsInternal();
     viewer_widget_->signalViewpointsChanged();
     return Result::PAUSE;
   }
   else if (operation_ == VIEWPOINT_UPDATE) {
     std::cout << "Updating display of viewpoints" << std::endl;
-    updateViewpointsInternal();
     viewer_widget_->signalViewpointsChanged();
     return Result::PAUSE;
   }
@@ -2994,6 +3241,10 @@ ViewpointPlannerThread::Result ViewpointPlannerThread::runIteration() {
     auto drawing_handle = planner_->getOffscreenOpenGL().beginDrawing();
     const QMatrix4x4 pvm_matrix = drawing_handle->getPvmMatrixFromViewpoint(planner_->getVirtualCamera(), dump_pose_);
     const QMatrix4x4 vm_matrix = drawing_handle->getVmMatrixFromPose(dump_pose_);
+//    planner_->getOctreeDrawer().setOctree(
+//            planner_->getOctree(),
+//            planner_->getBvhBbox().getMinimum(2),
+//            planner_->getBvhBbox().getMaximum(2));
     planner_->getOctreeDrawer().setOctree(planner_->getOctree());
     planner_->getOctreeDrawer().draw(pvm_matrix, vm_matrix);
     drawing_handle.getImageQt().save("dump/octree_dump.png");
@@ -3029,17 +3280,4 @@ ViewpointPlannerThread::Result ViewpointPlannerThread::runIteration() {
     std::cout << "Giving back stop result" << std::endl;
     return Result::STOP;
   }
-}
-
-void ViewpointPlannerThread::updateViewpoints() {
-//  BH_ASSERT(!this->isRunning() || this->isPaused());
-  std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
-  if (lock) {
-    std::unique_lock<std::mutex> planner_lock = planner_->acquireLock();
-    updateViewpointsInternal();
-  }
-}
-
-void ViewpointPlannerThread::updateViewpointsInternal() {
-  std::lock_guard<std::mutex> lock(viewer_widget_->mutex_);
 }

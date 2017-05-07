@@ -80,6 +80,8 @@ public:
       addOption<FloatType>("virtual_camera_focal_length", &virtual_camera_focal_length);
       addOption<FloatType>("raycast_min_range", &raycast_min_range);
       addOption<FloatType>("raycast_max_range", &raycast_max_range);
+      addOption<FloatType>("drone_velocity", &drone_velocity);
+      addOption<FloatType>("viewpoint_recording_time", &viewpoint_recording_time);
       addOption<Vector3>("drone_bbox_min", &drone_bbox_min);
       addOption<Vector3>("drone_bbox_max", &drone_bbox_max);
       addOption<Vector3>("drone_start_position", &drone_start_position);
@@ -89,6 +91,16 @@ public:
       addOption<FloatType>("pose_sample_min_radius", &pose_sample_min_radius);
       addOption<FloatType>("pose_sample_max_radius", &pose_sample_max_radius);
       addOption<size_t>("pose_sample_num_trials", &pose_sample_num_trials);
+      addOption<bool>("viewpoint_no_raycast", &viewpoint_no_raycast);
+      addOptionalOption<Vector3>("exploration_bbox_min");
+      addOptionalOption<Vector3>("exploration_bbox_max");
+      addOption<FloatType>("viewpoint_exploration_step", &viewpoint_exploration_step);
+      addOption<FloatType>("viewpoint_exploration_step_max", &viewpoint_exploration_step_max);
+      addOption<bool>("viewpoint_exploration_dilation_squared", &viewpoint_exploration_dilation_squared);
+      addOption<FloatType>("viewpoint_exploration_dilation_start_bbox_distance", &viewpoint_exploration_dilation_start_bbox_distance);
+      addOption<FloatType>("viewpoint_exploration_dilation_speed", &viewpoint_exploration_dilation_speed);
+      addOption<FloatType>("viewpoint_exploration_angular_dist_threshold_degrees", &viewpoint_exploration_angular_dist_threshold_degrees);
+      addOption<size_t>("viewpoint_exploration_num_orientations", &viewpoint_exploration_num_orientations);
       addOption<FloatType>("viewpoint_sample_without_reference_probability", &viewpoint_sample_without_reference_probability);
       addOption<size_t>("viewpoint_min_voxel_count", &viewpoint_min_voxel_count);
       addOption<FloatType>("viewpoint_voxel_distance_threshold", &viewpoint_voxel_distance_threshold);
@@ -97,6 +109,8 @@ public:
       addOption<size_t>("viewpoint_sample_motion_and_matching_knn", &viewpoint_sample_motion_and_matching_knn);
       addOption<FloatType>("viewpoint_information_factor", &viewpoint_information_factor);
       addOption<bool>("viewpoint_generate_stereo_pairs", &viewpoint_generate_stereo_pairs);
+      addOption<size_t>("viewpoint_stereo_num_samples", &viewpoint_stereo_num_samples);
+      addOption<size_t>("viewpoint_stereo_max_num_raycast", &viewpoint_stereo_max_num_raycast);
       addOption<FloatType>("triangulation_min_angle_degrees", &triangulation_min_angle_degrees);
       addOption<FloatType>("triangulation_max_angle_degrees", &triangulation_max_angle_degrees);
       addOption<FloatType>("triangulation_max_dist_deviation_ratio", &triangulation_max_dist_deviation_ratio);
@@ -118,6 +132,10 @@ public:
       addOption<FloatType>("viewpoint_motion_penalty_per_graph_vertex", &viewpoint_motion_penalty_per_graph_vertex);
       addOption<size_t>("viewpoint_path_branches", &viewpoint_path_branches);
       addOption<FloatType>("viewpoint_path_initial_distance", &viewpoint_path_initial_distance);
+      addOption<bool>("viewpoint_path_compute_connections_incremental", &viewpoint_path_compute_connections_incremental);
+      addOption<bool>("viewpoint_path_compute_tour_incremental", &viewpoint_path_compute_tour_incremental);
+      addOption<bool>("viewpoint_path_conservative_sparse_matching_incremental", &viewpoint_path_conservative_sparse_matching_incremental);
+      addOption<FloatType>("viewpoint_path_time_constraint", &viewpoint_path_time_constraint);
       addOption<FloatType>("objective_parameter_alpha", &objective_parameter_alpha);
       addOption<FloatType>("objective_parameter_beta", &objective_parameter_beta);
       addOption<FloatType>("voxel_sensor_size_ratio_threshold", &voxel_sensor_size_ratio_threshold);
@@ -183,6 +201,11 @@ public:
     FloatType raycast_min_range = 0;
     FloatType raycast_max_range = 60;
 
+    // Average drone velocity
+    FloatType drone_velocity = FloatType(2.0);
+    // Time to record a single viewpoint
+    FloatType viewpoint_recording_time = FloatType(10.0);
+
     // Drone bounding box
     Vector3 drone_bbox_min = Vector3(-10, -10, -10);
     Vector3 drone_bbox_max = Vector3(10, 10, 10);
@@ -198,12 +221,26 @@ public:
     FloatType pose_sample_min_radius = 2;
     FloatType pose_sample_max_radius = 5;
 
+    // TODO
+    bool viewpoint_no_raycast = false;
+    FloatType viewpoint_exploration_step = 3;
+    FloatType viewpoint_exploration_step_max = std::numeric_limits<FloatType>::max();
+    bool viewpoint_exploration_dilation_squared = true;
+    FloatType viewpoint_exploration_dilation_start_bbox_distance = 0;
+    FloatType viewpoint_exploration_dilation_speed = 2;
+    FloatType viewpoint_exploration_angular_dist_threshold_degrees = 30;
+    size_t viewpoint_exploration_num_orientations = 3;
+
     // Number of trials for viewpoint position sampling
     size_t pose_sample_num_trials = 100;
     // Probability of sampling a new viewpoint independent of a reference viewpoint
     FloatType viewpoint_sample_without_reference_probability = 0.1f;
     // Ensure that every viewpoint is part of a stereo pair
     bool viewpoint_generate_stereo_pairs;
+    // Maximum number of pose samples when searching for stereo pair
+    size_t viewpoint_stereo_num_samples = 20;
+    // Maximum number of raycast operations when searching for stereo pair
+    size_t viewpoint_stereo_max_num_raycast = 5;
     // Minimum voxel count for viewpoints
     size_t viewpoint_min_voxel_count = 100;
     // Distance threshold to voxels (also see 'viewpoint_max_too_close_voxel_ratio')
@@ -267,6 +304,14 @@ public:
     size_t viewpoint_path_branches = 10;
     // Minimum distance between initial viewpoints on viewpoint path branches
     FloatType viewpoint_path_initial_distance = 3;
+    // Whether to compute new connections whenever adding a viewpoint path entry
+    bool viewpoint_path_compute_connections_incremental = false;
+    // Whether to compute a viewpoint path tour whenever adding a viewpoint path entry
+    bool viewpoint_path_compute_tour_incremental = false;
+    // Whether to augment a viewpoint path tour for sparse matching whenever adding a viewpoint path entry
+    bool viewpoint_path_conservative_sparse_matching_incremental = false;
+    // Maximum time constraint for viewpoint path
+    FloatType viewpoint_path_time_constraint = std::numeric_limits<FloatType>::max();
 
     // Objective factor for reconstruction image
     FloatType objective_parameter_alpha = 0;
@@ -565,8 +610,9 @@ public:
     }
 
     FloatType distance() const {
-      const FloatType dist = std::accumulate(
-          se3_motions_.begin(), se3_motions_.end(), FloatType(0), [] (const FloatType value, const SE3Motion& se3_motion) -> FloatType {
+      const FloatType distance = std::accumulate(
+          se3_motions_.begin(), se3_motions_.end(), FloatType(0),
+          [] (const FloatType value, const SE3Motion& se3_motion) -> FloatType {
         // Sanity check
 //#if !BH_RELEASE
 //        BH_ASSERT(se3_motion.poses.size() >= 2);
@@ -577,9 +623,27 @@ public:
 //        }
 //        BH_ASSERT(bh::isApproxEqual(se3_motion.distance, local_dist, FloatType(1e-2)));
 //#endif
-        return value + se3_motion.distance;
+        return value + se3_motion.distance();
       });
-      return dist;
+      return distance;
+    }
+
+    FloatType se3Distance() const {
+      const FloatType se3_distance = std::accumulate(
+              se3_motions_.begin(), se3_motions_.end(), FloatType(0),
+              [] (const FloatType value, const SE3Motion& se3_motion) -> FloatType {
+                return value + se3_motion.se3Distance();
+              });
+      return se3_distance;
+    }
+
+    FloatType cost() const {
+      const FloatType cost = std::accumulate(
+              se3_motions_.begin(), se3_motions_.end(), FloatType(0),
+              [] (const FloatType value, const SE3Motion& se3_motion) -> FloatType {
+                return value + se3_motion.cost();
+              });
+      return cost;
     }
 
     void append(const ViewpointMotion& other) {
@@ -603,7 +667,7 @@ public:
       std::reverse(viewpoint_indices_.begin(), viewpoint_indices_.end());
       std::reverse(se3_motions_.begin(), se3_motions_.end());
       for (SE3Motion& se3_motion : se3_motions_) {
-        std::reverse(se3_motion.poses.begin(), se3_motion.poses.end());
+        se3_motion.reverse();
       }
 #if !BH_RELEASE
       const FloatType dist_after = distance();
@@ -744,6 +808,10 @@ public:
   /// Reset viewpoint paths
   void resetViewpointPaths();
 
+  FloatType getViewpointPathTimeConstraint() const;
+
+  void setViewpointPathTimeConstraint(const FloatType time_constraint);
+
   void saveViewpointGraph(const std::string& filename) const;
 
   void loadViewpointGraph(const std::string& filename);
@@ -863,8 +931,12 @@ public:
   bool isSparseMatchable2(const Viewpoint& viewpoint1, const Viewpoint& viewpoint2) const;
 
   bool isSparseMatchable2(
-          const ViewpointEntryIndex& viewpoint_index1,
-          const ViewpointEntryIndex& viewpoint_index2) const;
+          const ViewpointEntryIndex viewpoint_index1,
+          const ViewpointEntryIndex viewpoint_index2) const;
+
+  bool isSparseMatchable2(
+          const ViewpointEntryIndex viewpoint_index1,
+          const Viewpoint& viewpoint2) const;
 
   bool isSparseMatchable2(
           const Viewpoint& viewpoint1,
@@ -877,8 +949,13 @@ public:
           const FloatType iou_threshold) const;
 
   bool isSparseMatchable2(
-          const ViewpointEntryIndex& viewpoint_index1,
-          const ViewpointEntryIndex& viewpoint_index2,
+          const ViewpointEntryIndex viewpoint_index1,
+          const ViewpointEntryIndex viewpoint_index2,
+          const FloatType iou_threshold) const;
+
+  bool isSparseMatchable2(
+          const ViewpointEntryIndex viewpoint_index1,
+          const Viewpoint& viewpoint2,
           const FloatType iou_threshold) const;
 
   bool isSparseMatchable2(
@@ -888,11 +965,26 @@ public:
           const std::unordered_set<size_t>& visible_voxels2,
           const FloatType iou_threshold) const;
 
+  bool isSparseMatchable2(
+          const ViewpointEntryIndex viewpoint_index1,
+          const Viewpoint& viewpoint2,
+          const std::unordered_set<size_t>& visible_voxels2) const;
+
+  bool isSparseMatchable2(
+          const ViewpointEntryIndex viewpoint_index1,
+          const Viewpoint& viewpoint2,
+          const std::unordered_set<size_t>& visible_voxels2,
+          const FloatType iou_threshold) const;
+
   void augmentedViewpointPathWithSparseMatchingViewpoints(ViewpointPath* viewpoint_path);
 
   void makeViewpointMotionsSparseMatchable(ViewpointPath* viewpoint_path);
 
   ViewpointMotion makeViewpointMotionSparseMatchable(const ViewpointMotion& motion);
+
+  const MotionPlannerType& getMotionPlanner() const {
+    return motion_planner_;
+  }
 
   RegionType getRoi() const {
     return data_->roi_;
@@ -904,6 +996,10 @@ public:
 
   const std::vector<RegionType>& getNoFlyZones() const {
     return data_->no_fly_zones_;
+  }
+
+  BoundingBoxType getExplorationBbox() const {
+    return exploration_bbox_;
   }
 
   BoundingBoxType getPositiveWeightBbox() const {
@@ -962,6 +1058,14 @@ public:
     return viewpoint_entries_;
   }
 
+  const std::vector<ViewpointEntryIndex>& getViewpointExplorationFront() const {
+    return viewpoint_exploration_front_;
+  }
+
+  const size_t getNumOfRealViewpoints() const {
+    return num_real_viewpoints_;
+  }
+
   /// Return viewpoint graph for reading. Mutex needs to be locked.
   const ViewpointGraph& getViewpointGraph() const {
     return viewpoint_graph_;
@@ -1003,6 +1107,10 @@ public:
 //  void addViewpointMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index, Motion&& motion);
   void addViewpointMotion(const ViewpointMotion& motion);
   void addViewpointMotion(ViewpointMotion&& motion);
+
+  bool removeViewpointMotion(const ViewpointEntryIndex from_index, const ViewpointEntryIndex to_index);
+
+  void removeViewpointMotions(const ViewpointEntryIndex index);
 
   /// Return best viewpoint path for reading. Mutex needs to be locked.
   const ViewpointPath& getBestViewpointPath() const;
@@ -1062,7 +1170,8 @@ public:
   Pose::Quaternion sampleBiasedOrientation(const Vector3& pos, const BoundingBoxType& bias_bbox) const;
 
   /// Check if an object can be placed at a position (i.e. is it free space)
-  bool isValidObjectPosition(const Vector3& position, const BoundingBoxType& object_bbox) const;
+  bool isValidObjectPosition(
+          const Vector3& position, const BoundingBoxType& object_bbox, const bool ignore_no_fly_zones = false) const;
 
   /// Find a viewpoint entry with a pose.
   /// Returns whether a matching viewpoint was found and the corresponding index
@@ -1071,16 +1180,108 @@ public:
   /// Generate a new viewpoint entry and add it to the graph.
   bool generateNextViewpointEntry();
 
+  /// Add a viewpoint entry to the graph.
+  ViewpointEntryIndex addViewpointEntry(
+          ViewpointEntry&& viewpoint_entry, const bool ignore_viewpoint_count_grid = false);
+
+  /// Add a viewpoint entry to the graph.
+  ViewpointEntryIndex addViewpointEntry(
+          const ViewpointEntry& viewpoint_entry, const bool ignore_viewpoint_count_grid = false);
+
+  ViewpointEntryIndex addViewpointEntry(const Pose& pose, const bool no_raycast = false);
+
+  // TODO
+  /// Generate a new viewpoint entry and add it to the graph.
+  bool generateNextViewpointEntry2();
+  bool tryToAddViewpointEntry(const Pose& pose, const bool no_raycast = false);
+  bool tryToAddViewpointEntries(const Vector3& position, const bool no_raycast = false);
+
+  FloatType computeExplorationStep(const Vector3& position) const;
+
+  // TODO
+  std::vector<ViewpointEntryIndex> viewpoint_exploration_front_;
+
+  // TODO
+  void computeMatchingStereoViewpoints(
+          const bool ignore_sparse_matching = false,
+          const bool ignore_graph_component = false);
+
+  ViewpointEntryIndex getMatchingStereoViewpointWithoutLock(
+          const ViewpointEntryIndex viewpoint_index,
+          const bool ignore_sparse_matching = false,
+          const bool ignore_graph_component = false);
+
   /// Compute motions between viewpoints and update the graph with their cost.
   void computeViewpointMotions();
+
+  /// Compute motions from a viewpoint to other viewpoint and update the graph with their cost.
+  size_t computeViewpointMotions(const ViewpointEntryIndex from_index, const bool verbose = false);
+
+  bool connectViewpoints(
+          const ViewpointEntryIndex from_viewpoint_index,
+          const ViewpointEntryIndex to_viewpoint_index,
+          const bool ignore_existing_connection = false);
+
+  template <typename Iterator>
+  size_t connectViewpointToOtherViewpoints(
+          const ViewpointEntryIndex from_viewpoint_index,
+          const Iterator to_first,
+          const Iterator to_last,
+          const bool ignore_existing_connections = false);
+
+  template <typename Iterator>
+  size_t connectPathEntryToOtherPathEntries(
+          const ViewpointPathEntry& from_path_entry,
+          const Iterator to_first,
+          const Iterator to_last,
+          const bool ignore_existing_connections = false);
+
+  /// Ensures that a viewpoint on a path is connected by searching for shortest motion paths if necessary
+  size_t connectViewpointPathEntry(const size_t path_entry_index,
+                                   ViewpointPath* viewpoint_path,
+                                   const size_t num_connections_to_try,
+                                   const bool ignore_existing_connections = false);
+
+  /// Ensures that a viewpoint on a path is connected to path entries with lower index
+  size_t connectViewpointPathEntryToLowerEntries(const size_t path_entry_index,
+                                                 ViewpointPath* viewpoint_path,
+                                                 const bool ignore_existing_connections = false);
+
+  /// Ensures that a viewpoint on a path is fully connected by searching for shortest motion paths if necessary
+  bool fullyConnectViewpointPathEntry(const size_t path_entry_index,
+                                      ViewpointPath* viewpoint_path,
+                                      const bool ignore_existing_connections = false);
+
+  /// Ensures that all viewpoints on a path are connected by searching for shortest motion paths if necessary
+  bool ensureFullyConnectedViewpointPath(
+          ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data, const bool recompute_all = false);
 
   /// Compute the novel observation information that a viewpoint will generate
   FloatType evaluateNovelViewpointInformation(
       const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data,
       const ViewpointEntryIndex viewpoint_index);
 
+  enum NextViewpointPathEntryStatus {
+    SUCCESS,
+    NO_VALID_PATH_ENTRY,
+    NO_VIEWPOINTS_LEFT,
+    NO_IMPROVEMENT_IN_OBJECTIVE,
+    NO_STEREO_VIEWPOINT,
+    TIME_CONSTRAINT_EXCEEDED,
+  };
+
+  struct NextViewpointPathEntryResult {
+    NextViewpointPathEntryResult()
+        : has_stereo_entry(false) {}
+
+    NextViewpointPathEntryStatus status;
+    ViewpointPathEntry next_path_entry;
+    bool has_stereo_entry;
+    ViewpointPathEntry stereo_path_entry;
+  };
+
   /// Find the next best viewpoint to add to the viewpoint paths.
-  bool findNextViewpointPathEntries(const FloatType alpha, const FloatType beta);
+  NextViewpointPathEntryStatus findNextViewpointPathEntries(const FloatType alpha, const FloatType beta);
 
   /// Initialize data structures for finding viewpoint paths
   void initializeViewpointPathEntries(const FloatType alpha, const FloatType beta);
@@ -1089,7 +1290,7 @@ public:
   void findInitialViewpointPathEntries(const FloatType alpha, const FloatType beta);
 
   /// Find the next best viewpoint to add to the viewpoint paths and use parameters from options.
-  bool findNextViewpointPathEntries();
+  NextViewpointPathEntryStatus findNextViewpointPathEntries();
 
   bool isValidViewpointPathEntry(
       const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data,
@@ -1101,6 +1302,11 @@ public:
 
   /// Compute the connected components of the graph and return a pair of the component labels and the number of components.
   const std::pair<std::vector<size_t>, size_t>& getConnectedComponents() const;
+
+  /// Compute a viewpoint tour for all paths
+  void computeViewpointTour(ViewpointPath* viewpoint_path,
+                            ViewpointPathComputationData* comp_data,
+                            const bool use_manual_start_position = true);
 
   /// Compute a viewpoint tour for all paths
   void computeViewpointTour(const bool use_manual_start_position = true);
@@ -1126,7 +1332,8 @@ public:
                              const ViewpointPathEntry& new_path_entry,
                              const bool ignore_observed_voxels = false);
 
-  /// Add a path entry to a viewpoint path
+  /// Add a path entry together with a corresponding stereo viewpoint.
+  /// If a stereo viewpoint can be found returns true. Otherwise returns false.
   bool addViewpointPathEntryWithStereoPair(const size_t viewpoint_path_index,
                                            const ViewpointEntryIndex viewpoint_index,
                                            const bool ignore_observed_voxels = false);
@@ -1136,6 +1343,21 @@ public:
   bool addViewpointPathEntryWithStereoPair(const size_t viewpoint_path_index,
                                            const Pose& pose,
                                            const bool ignore_observed_voxels = false);
+
+  /// Get number of multiview-stereo viewpoints in a viewpoint path
+  size_t getNumMVSViewpoints(const ViewpointPath& viewpoint_path) const;
+
+  /// Get number of total (MVS and sparse) viewpoints in a viewpoint path
+  size_t getNumTotalViewpoints(const ViewpointPath& viewpoint_path) const;
+
+  /// Compute time required for viewpoint path
+  FloatType computeViewpointPathTime(const ViewpointPath& viewpoint_path) const;
+
+  /// Report info of current viewpoint paths
+  void reportViewpointPathsStats() const;
+
+  /// Report info on viewpoint path
+  void reportViewpointPathsStats(const ViewpointPath& viewpoint_path) const;
 
   // Visible voxel computation
 
@@ -1322,14 +1544,6 @@ private:
   WeightType computeIncidenceInformationFactor(
       const Viewpoint& viewpoint, const VoxelType* node, const Vector2& screen_coordinates) const;
 
-  /// Add a viewpoint entry to the graph.
-  ViewpointEntryIndex addViewpointEntry(
-          ViewpointEntry&& viewpoint_entry, const bool ignore_viewpoint_count_grid = false);
-
-  /// Add a viewpoint entry to the graph.
-  ViewpointEntryIndex addViewpointEntry(
-          const ViewpointEntry& viewpoint_entry, const bool ignore_viewpoint_count_grid = false);
-
   /// Add a viewpoint entry without acquiring a lock. Returns the index of the new viewpoint entry.
   ViewpointEntryIndex addViewpointEntryWithoutLock(
           ViewpointEntry&& viewpoint_entry, const bool ignore_viewpoint_count_grid = false);
@@ -1337,17 +1551,45 @@ private:
   /// Add a viewpoint entry without acquiring a lock. Returns the index of the new viewpoint entry.
   ViewpointEntryIndex addViewpointEntryWithoutLock(
           const ViewpointEntry& viewpoint_entry, const bool ignore_viewpoint_count_grid = false);
+
+  /// Convenience method to add next viewpoint path entry
+  void addNextViewpointPathEntryResult(ViewpointPath* viewpoint_path,
+                                       ViewpointPathComputationData* comp_data,
+                                       const NextViewpointPathEntryResult& result,
+                                       const bool ignore_observed_voxels = false);
 
   /// Add a path entry to a viewpoint path
-  void addViewpointPathEntryWithoutLock(ViewpointPath *viewpoint_path, ViewpointPathComputationData *comp_data,
-                                        const ViewpointPathEntry &new_path_entry,
-                                        const bool ignore_observed_voxels = false);
+  size_t addViewpointPathEntryWithoutLock(ViewpointPath *viewpoint_path, ViewpointPathComputationData *comp_data,
+                                          const ViewpointPathEntry &new_path_entry,
+                                          const bool ignore_observed_voxels = false);
+
+  /// Updates observed voxel set of a viewpoint path. Returns the novel information.
+  FloatType addObservedVoxelsToViewpointPath(ViewpointPath* viewpoint_path,
+                                                               ViewpointPathComputationData* comp_data,
+                                                               const VoxelWithInformationSet& voxel_set);
 
   /// Add stereo viewpoint to a viewpoint path
-  void addStereoViewpointPathEntryWithoutLock(ViewpointPath *viewpoint_path, ViewpointPathComputationData *comp_data,
-                                              const ViewpointPathEntry &first_path_entry,
-                                              const ViewpointPathEntry &second_path_entry,
-                                              const bool add_second_entry = true);
+  std::pair<size_t, size_t> addStereoViewpointPathEntryWithoutLock(ViewpointPath *viewpoint_path, ViewpointPathComputationData *comp_data,
+                                                                   const ViewpointPathEntry &first_path_entry,
+                                                                   const ViewpointPathEntry &second_path_entry,
+                                                                   const bool ignore_observed_voxels = false,
+                                                                   const bool add_second_entry = true);
+
+  /// Updates the latest viewpoint path entry information.
+  /// Note that modified observed voxel sets can not be undone.
+  void updateLastViewpointPathEntryWithoutLock(ViewpointPath* viewpoint_path,
+                                               ViewpointPathComputationData* comp_data,
+                                               const bool ignore_observed_voxels = false);
+
+  /// Removes the latest viewpoint path entry. Also updates information and clears the tour order.
+  /// Note that modified observed voxel sets can not be undone.
+  void removeLastViewpointPathEntryWithoutLock(ViewpointPath* viewpoint_path,
+                                               ViewpointPathComputationData* comp_data);
+
+  std::pair<bool, ViewpointEntryIndex> findMatchingStereoViewpointWithoutLock(
+          const ViewpointEntryIndex& viewpoint_index,
+          const bool ignore_sparse_matching = false,
+          const bool ignore_graph_component = false);
 
   /// Find a matching viewpoint for stereo matching. If no suitable viewpoint with enough overlap is already in the graph
   /// a new viewpoint is added. Returns a pair indicating whether the stereo viewpoint is already on the path (true) or not (false)
@@ -1359,8 +1601,12 @@ private:
       const bool ignore_sparse_matching = false,
       const bool ignore_graph_component = false);
 
+  std::vector<std::pair<ViewpointEntryIndex, SE3Motion>> findSE3Motions(
+          const Pose& from_pose);
+
   /// Find motion paths from provided viewpoint to neighbors in the viewpoint graph.
-  std::vector<ViewpointMotion> findViewpointMotions(const ViewpointEntryIndex from_index);
+  std::vector<ViewpointMotion> findViewpointMotions(
+          const ViewpointEntryIndex from_index, const bool verbose = false);
 
   /// Checks whether a voxel can be triangulated on the viewpoint path
   std::pair<bool, ViewpointEntryIndex> canVoxelBeTriangulated(const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data,
@@ -1380,8 +1626,13 @@ private:
   std::pair<ViewpointEntryIndex, FloatType> getBestNextViewpoint(
       const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data, const bool randomize) const;
 
+  /// Updates information scores of other viewpoints given a path and returns best next viewpoint.
+  std::pair<ViewpointEntryIndex, FloatType> updateAndGetBestNextViewpoint(
+          ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data,
+          const bool randomize);
+
   /// Find the next best viewpoint to add to a single viewpoint path.
-  bool findNextViewpointPathEntry(
+  NextViewpointPathEntryResult findNextViewpointPathEntry(
       ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data,
       const bool randomize, const FloatType alpha, const FloatType beta);
 
@@ -1393,12 +1644,6 @@ private:
   FloatType computeViewpointPathInformationUpperBound(
       const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data, const size_t max_num_viewpoints) const;
 
-  /// Report info of current viewpoint paths
-  void reportViewpointPathsStats() const;
-
-  /// Report info on viewpoint path
-  void reportViewpointPathsStats(const ViewpointPath& viewpoint_path) const;
-
   /// Report info on viewpoint path
   void reportViewpointPathsStats(
           const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data) const;
@@ -1407,11 +1652,7 @@ private:
   std::vector<size_t> computeApproximateShortestCycle(const ViewpointPath& viewpoint_path, const ViewpointPathComputationData& comp_data);
 
   /// Reorders the viewpoint path to an approx. shortest cycle covering all viewpoints (i.e. TSP solution)
-  void solveApproximateTSP(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data);
-
-  /// Ensures that all viewpoints on a path are connected by searching for shortest motion paths if necessary
-  void ensureConnectedViewpointPath(
-      ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data, const bool recompute_all = false);
+  bool solveApproximateTSP(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data);
 
   /// Uses 2 Opt to improve the viewpoint tour
   void improveViewpointTourWith2Opt(ViewpointPath* viewpoint_path, ViewpointPathComputationData* comp_data);
@@ -1446,6 +1687,7 @@ private:
 
   BoundingBoxType pose_sample_bbox_;
   BoundingBoxType drone_bbox_;
+  BoundingBoxType exploration_bbox_;
   FloatType triangulation_max_cos_angle_;
   FloatType triangulation_min_sin_angle_square_;
   FloatType triangulation_max_sin_angle_square_;
@@ -1472,6 +1714,10 @@ private:
   size_t num_of_failed_viewpoint_entry_samples_;
   // All tentative viewpoints
   ViewpointEntryVector viewpoint_entries_;
+  // Matching stereo viewpoint index for each viewpoint (or -1 if not matching stereo viewpoint)
+  std::vector<ViewpointEntryIndex> stereo_viewpoint_indices_;
+  // Flags indicating whether stereo viewpoint has been computed
+  std::vector<bool> stereo_viewpoint_computed_flags_;
   // Cached visible sparse points and normals
   mutable std::unordered_map<ViewpointEntryIndex, std::unordered_map<reconstruction::Point3DId, Vector3>> cached_visible_sparse_points_;
   // Mutex for cached visible sparse points
@@ -1509,6 +1755,9 @@ private:
   std::vector<ViewpointPathComputationData> viewpoint_paths_data_;
   // Map from triangle index to viewpoints that project features into it
   FeatureViewpointMap feature_viewpoint_map_;
+
+  // Maximum time constraint for viewpoint paths
+  FloatType viewpoint_path_time_constraint_;
 };
 
 BOOST_CLASS_VERSION(ViewpointPlanner::ViewpointPathEntry, 2)

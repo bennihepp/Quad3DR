@@ -93,8 +93,8 @@ rapidjson::Document ViewpointPlanner::getViewpointPathAsJson(const ViewpointPath
         Value json_pose = generate_json_pose_lambda(viewpoint_entry);
         // Retrieve motion to current viewpoint
         const SE3Motion &se3_motion = motion.se3Motions()[i - 1];
-        for (auto path_it = se3_motion.poses.begin(); path_it != se3_motion.poses.end(); ++path_it) {
-          const size_t index = path_it - se3_motion.poses.begin();
+        for (auto path_it = se3_motion.poses().begin(); path_it != se3_motion.poses().end(); ++path_it) {
+          const size_t index = path_it - se3_motion.poses().begin();
           Value json_path_entry = generate_json_path_entry_lambda(index, *path_it);
           json_path_array.PushBack(json_path_entry, allocator);
         }

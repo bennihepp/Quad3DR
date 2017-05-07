@@ -8,6 +8,7 @@
 
 #include "viewpoint_planner.h"
 #include "viewpoint_planner_serialization.h"
+#include <boost/serialization/deque.hpp>
 
 void ViewpointPlanner::saveViewpointGraph(const std::string& filename) const {
   std::cout << "Writing viewpoint graph to " << filename << std::endl;
@@ -18,6 +19,9 @@ void ViewpointPlanner::saveViewpointGraph(const std::string& filename) const {
   ViewpointEntrySaver ves(viewpoint_entries_, data_->occupied_bvh_);
   oa << num_real_viewpoints_;
   oa << ves;
+  oa << stereo_viewpoint_indices_;
+  oa << stereo_viewpoint_computed_flags_;
+  oa << viewpoint_exploration_front_;
   oa << viewpoint_graph_;
   oa << viewpoint_graph_motions_;
   std::cout << "Done" << std::endl;
@@ -33,6 +37,9 @@ void ViewpointPlanner::loadViewpointGraph(const std::string& filename) {
   BH_ASSERT(new_num_real_viewpoints == num_real_viewpoints_);
   ViewpointEntryLoader vel(&viewpoint_entries_, &data_->occupied_bvh_, &virtual_camera_);
   ia >> vel;
+  ia >> stereo_viewpoint_indices_;
+  ia >> stereo_viewpoint_computed_flags_;
+  ia >> viewpoint_exploration_front_;
   viewpoint_graph_.clear();
   ia >> viewpoint_graph_;
   viewpoint_graph_components_valid_ = false;
@@ -41,15 +48,17 @@ void ViewpointPlanner::loadViewpointGraph(const std::string& filename) {
   for (const ViewpointEntry& viewpoint_entry : viewpoint_entries_) {
     viewpoint_ann_.addPoint(viewpoint_entry.viewpoint.pose().getWorldPosition());
   }
-  std::cout << "Regenerating density field" << std::endl;
-  viewpoint_count_grid_.setAllValues(0);
-  for (const ViewpointEntry& viewpoint_entry : viewpoint_entries_) {
-    const Vector3& viewpoint_position = viewpoint_entry.viewpoint.pose().getWorldPosition();
-    if (viewpoint_count_grid_.isInsideGrid(viewpoint_position)) {
-      viewpoint_count_grid_(viewpoint_position) += 1;
-    }
-    else {
-      std::cout << "WARNING: Loaded viewpoint outside of density grid" << std::endl;
+  if (options_.viewpoint_count_grid_enable) {
+    std::cout << "Regenerating density field" << std::endl;
+    viewpoint_count_grid_.setAllValues(0);
+    for (const ViewpointEntry &viewpoint_entry : viewpoint_entries_) {
+      const Vector3 &viewpoint_position = viewpoint_entry.viewpoint.pose().getWorldPosition();
+      if (viewpoint_count_grid_.isInsideGrid(viewpoint_position)) {
+        viewpoint_count_grid_(viewpoint_position) += 1;
+      }
+      else {
+        std::cout << "WARNING: Loaded viewpoint outside of density grid" << std::endl;
+      }
     }
   }
   std::cout << "Loading motions" << std::endl;
@@ -161,7 +170,6 @@ void ViewpointPlanner::saveViewpointPath(const std::string& filename) const {
   }
 }
 
-#pragma GCC optimize("O0")
 void ViewpointPlanner::loadViewpointPath(const std::string& filename) {
   resetViewpointPaths();
   std::unique_lock<std::mutex> lock(mutex_);
@@ -308,46 +316,88 @@ void ViewpointPlanner::loadViewpointPath(const std::string& filename) {
     ViewpointPathComputationData& comp_data = viewpoint_paths_data_[i];
     const ViewpointPath& tmp_viewpoint_path = tmp_viewpoint_paths[i];
     initializeViewpointPathInformations(&viewpoint_path, &comp_data);
-    updateViewpointPathInformations(&viewpoint_path, &comp_data);
     for (const ViewpointPathEntry& path_entry : tmp_viewpoint_path.entries) {
       ViewpointPathEntry new_path_entry = path_entry;
       addViewpointPathEntryWithoutLock(&viewpoint_path, &comp_data, new_path_entry);
     }
+    updateViewpointPathInformations(&viewpoint_path, &comp_data);
     viewpoint_path.order = tmp_viewpoint_path.order;
   }
-  std::cout << "Ensuring connectivity of viewpoints on paths" << std::endl;
-#pragma omp parallel for
+  std::cout << "Checking connectivity of viewpoints on paths" << std::endl;
   for (std::size_t i = 0; i < viewpoint_paths_.size(); ++i) {
-    ViewpointPath& viewpoint_path = viewpoint_paths_[i];
-    ViewpointPathComputationData& comp_data = viewpoint_paths_data_[i];
+    ViewpointPath &viewpoint_path = viewpoint_paths_[i];
+    ViewpointPathComputationData &comp_data = viewpoint_paths_data_[i];
     comp_data.num_connected_entries = 0;
-//    ensureConnectedViewpointPath(&viewpoint_path, &comp_data);
-    for (auto from_it = viewpoint_path.order.begin(); from_it != viewpoint_path.order.end(); ++from_it) {
-      for (auto to_it = viewpoint_path.order.begin(); to_it != from_it; ++to_it) {
-        const ViewpointEntryIndex from_index = viewpoint_path.entries[*from_it].viewpoint_index;
-        const ViewpointEntryIndex to_index = viewpoint_path.entries[*to_it].viewpoint_index;
-        if (!hasViewpointMotion(from_index, to_index)) {
-          if (!isValidObjectPosition(viewpoint_entries_[from_index].viewpoint.pose().getWorldPosition(), drone_bbox_)) {
-            std::cout << "WARNING: Viewpoint " << from_index << " is not a valid position" << std::endl;
-            continue;
-          }
-          if (!isValidObjectPosition(viewpoint_entries_[to_index].viewpoint.pose().getWorldPosition(), drone_bbox_)) {
-            std::cout << "WARNING: Viewpoint " << from_index << " is not a valid position" << std::endl;
-            continue;
-          }
-          std::cout << "Finding motion from " << viewpoint_path.entries[*from_it].viewpoint_index << " to "
-                    << viewpoint_path.entries[*to_it].viewpoint_index << std::endl;
-          const bool found_motion = findAndAddShortestMotion(
-                  from_index, to_index);
-          if (!found_motion) {
-            std::cout << "WARNING: Could not find motion path from viewpoint " << *from_it << " to " << *to_it
-                      << std::endl;
-          }
+    if (viewpoint_path.order.size() > 1) {
+      for (auto it = viewpoint_path.order.begin(); it != viewpoint_path.order.end(); ++it) {
+        auto next_it = it + 1;
+        if (next_it == viewpoint_path.order.end()) {
+          next_it = viewpoint_path.order.begin();
+        }
+        const ViewpointPlanner::ViewpointPathEntry& path_entry = viewpoint_path.entries[*it];
+        const ViewpointPlanner::ViewpointPathEntry& next_path_entry = viewpoint_path.entries[*next_it];
+        if (!hasViewpointMotion(path_entry.viewpoint_index, next_path_entry.viewpoint_index)) {
+          // Add dummy motion
+          std::cout << "WARNING: Adding dummy motion from viewpoint " << path_entry.viewpoint_index
+                    << " to viewpoint " << next_path_entry.viewpoint_index << std::endl;
+          ViewpointPlanner::ViewpointMotion motion(
+                  { path_entry.viewpoint_index, next_path_entry.viewpoint_index },
+                  { ViewpointPlanner::SE3Motion(path_entry.viewpoint.pose(), next_path_entry.viewpoint.pose()) });
+          addViewpointMotion(std::move(motion));
         }
       }
-      ++comp_data.num_connected_entries;
+    }
+    for (auto from_it = viewpoint_path.entries.begin(); from_it != viewpoint_path.entries.end(); ++from_it) {
+      bool connected = true;
+      for (auto to_it = viewpoint_path.entries.begin(); to_it != from_it; ++to_it) {
+        const ViewpointEntryIndex from_index = from_it->viewpoint_index;
+        const ViewpointEntryIndex to_index = to_it->viewpoint_index;
+        if (!hasViewpointMotion(from_index, to_index)) {
+          connected = false;
+          break;
+        }
+      }
+      if (connected) {
+        ++comp_data.num_connected_entries;
+      }
+      else {
+        break;
+      }
     }
   }
+//  std::cout << "Ensuring connectivity of viewpoints on paths" << std::endl;
+//#pragma omp parallel for
+//  for (std::size_t i = 0; i < viewpoint_paths_.size(); ++i) {
+//    ViewpointPath& viewpoint_path = viewpoint_paths_[i];
+//    ViewpointPathComputationData& comp_data = viewpoint_paths_data_[i];
+//    comp_data.num_connected_entries = 0;
+////    ensureConnectedViewpointPath(&viewpoint_path, &comp_data);
+//    for (auto from_it = viewpoint_path.order.begin(); from_it != viewpoint_path.order.end(); ++from_it) {
+//      for (auto to_it = viewpoint_path.order.begin(); to_it != from_it; ++to_it) {
+//        const ViewpointEntryIndex from_index = viewpoint_path.entries[*from_it].viewpoint_index;
+//        const ViewpointEntryIndex to_index = viewpoint_path.entries[*to_it].viewpoint_index;
+//        if (!hasViewpointMotion(from_index, to_index)) {
+//          if (!isValidObjectPosition(viewpoint_entries_[from_index].viewpoint.pose().getWorldPosition(), drone_bbox_)) {
+//            std::cout << "WARNING: Viewpoint " << from_index << " is not a valid position" << std::endl;
+//            continue;
+//          }
+//          if (!isValidObjectPosition(viewpoint_entries_[to_index].viewpoint.pose().getWorldPosition(), drone_bbox_)) {
+//            std::cout << "WARNING: Viewpoint " << from_index << " is not a valid position" << std::endl;
+//            continue;
+//          }
+//          std::cout << "Finding motion from " << viewpoint_path.entries[*from_it].viewpoint_index << " to "
+//                    << viewpoint_path.entries[*to_it].viewpoint_index << std::endl;
+//          const bool found_motion = findAndAddShortestMotion(
+//                  from_index, to_index);
+//          if (!found_motion) {
+//            std::cout << "WARNING: Could not find motion path from viewpoint " << *from_it << " to " << *to_it
+//                      << std::endl;
+//          }
+//        }
+//      }
+//      ++comp_data.num_connected_entries;
+//    }
+//  }
   reportViewpointPathsStats();
   std::cout << "Loaded " << viewpoint_paths_.size() << " viewpoint paths."
       << " The best path has " << getBestViewpointPath().entries.size() << " viewpoints" << std::endl;

@@ -27,36 +27,39 @@ void ViewpointRaycast::setEnableCuda(const bool enable_cuda) {
 
 std::vector<OccupiedTreeType::IntersectionResult>
 ViewpointRaycast::getRaycastHitVoxels(
-        const Viewpoint &viewpoint, const bool remove_duplicates) const {
+        const Viewpoint &viewpoint, const bool remove_duplicates,
+        const bool fail_on_error /*= true*/) const {
   const std::size_t y_start = 0;
   const std::size_t y_end = viewpoint.camera().height();
   const std::size_t x_start = 0;
   const std::size_t x_end = viewpoint.camera().width();
-  return getRaycastHitVoxels(viewpoint, x_start, x_end, y_start, y_end, remove_duplicates);
+  return getRaycastHitVoxels(viewpoint, x_start, x_end, y_start, y_end, remove_duplicates, fail_on_error);
 }
 
 std::vector<OccupiedTreeType::IntersectionResult>
 ViewpointRaycast::getRaycastHitVoxels(
         const Viewpoint &viewpoint, const std::size_t width, const std::size_t height,
-        const bool remove_duplicates) const {
+        const bool remove_duplicates,
+        const bool fail_on_error /*= true*/) const {
   const std::size_t y_start = viewpoint.camera().height() / 2 - height / 2;
   const std::size_t y_end = viewpoint.camera().height() / 2 + height / 2;
   const std::size_t x_start = viewpoint.camera().width() / 2 - width / 2;
   const std::size_t x_end = viewpoint.camera().width() / 2 + width / 2;
-  return getRaycastHitVoxels(viewpoint, x_start, x_end, y_start, y_end, remove_duplicates);
+  return getRaycastHitVoxels(viewpoint, x_start, x_end, y_start, y_end, remove_duplicates, fail_on_error);
 }
 
 std::vector<OccupiedTreeType::IntersectionResult> ViewpointRaycast::getRaycastHitVoxels(
         const Viewpoint &viewpoint,
         const std::size_t x_start, const std::size_t x_end,
         const std::size_t y_start, const std::size_t y_end,
-        const bool remove_duplicates) const {
+        const bool remove_duplicates,
+        const bool fail_on_error /*= true*/) const {
 #if WITH_CUDA
   if (enable_cuda_) {
-    return getRaycastHitVoxelsCuda(viewpoint, x_start, x_end, y_start, y_end, remove_duplicates);
+    return getRaycastHitVoxelsCuda(viewpoint, x_start, x_end, y_start, y_end, remove_duplicates, fail_on_error);
   }
   else {
-    return getRaycastHitVoxelsCpu(viewpoint, x_start, x_end, y_start, y_end, remove_duplicates);
+    return getRaycastHitVoxelsCpu(viewpoint, x_start, x_end, y_start, y_end, remove_duplicates, fail_on_error);
   }
 #else
   return getRaycastHitVoxelsCpu(viewpoint, x_start, x_end, y_start, y_end, remove_duplicates);
@@ -65,23 +68,27 @@ std::vector<OccupiedTreeType::IntersectionResult> ViewpointRaycast::getRaycastHi
 
 std::vector<OccupiedTreeType::IntersectionResultWithScreenCoordinates>
 ViewpointRaycast::getRaycastHitVoxelsWithScreenCoordinates(
-        const Viewpoint &viewpoint, const bool remove_duplicates) const {
+        const Viewpoint &viewpoint, const bool remove_duplicates,
+        const bool fail_on_error /*= true*/) const {
   const std::size_t y_start = 0;
   const std::size_t y_end = viewpoint.camera().height();
   const std::size_t x_start = 0;
   const std::size_t x_end = viewpoint.camera().width();
-  return getRaycastHitVoxelsWithScreenCoordinates(viewpoint, x_start, x_end, y_start, y_end, remove_duplicates);
+  return getRaycastHitVoxelsWithScreenCoordinates(viewpoint, x_start, x_end, y_start, y_end,
+                                                  remove_duplicates, fail_on_error);
 }
 
 std::vector<OccupiedTreeType::IntersectionResultWithScreenCoordinates>
 ViewpointRaycast::getRaycastHitVoxelsWithScreenCoordinates(
         const Viewpoint &viewpoint, const std::size_t width, const std::size_t height,
-        const bool remove_duplicates) const {
+        const bool remove_duplicates,
+        const bool fail_on_error /*= true*/) const {
   const std::size_t y_start = viewpoint.camera().height() / 2 - height / 2;
   const std::size_t y_end = viewpoint.camera().height() / 2 + height / 2;
   const std::size_t x_start = viewpoint.camera().width() / 2 - width / 2;
   const std::size_t x_end = viewpoint.camera().width() / 2 + width / 2;
-  return getRaycastHitVoxelsWithScreenCoordinates(viewpoint, x_start, x_end, y_start, y_end, remove_duplicates);
+  return getRaycastHitVoxelsWithScreenCoordinates(viewpoint, x_start, x_end, y_start, y_end,
+                                                  remove_duplicates, fail_on_error);
 }
 
 std::vector<OccupiedTreeType::IntersectionResultWithScreenCoordinates>
@@ -89,13 +96,16 @@ ViewpointRaycast::getRaycastHitVoxelsWithScreenCoordinates(
         const Viewpoint &viewpoint,
         const std::size_t x_start, const std::size_t x_end,
         const std::size_t y_start, const std::size_t y_end,
-        const bool remove_duplicates) const {
+        const bool remove_duplicates,
+        const bool fail_on_error /*= true*/) const {
 #if WITH_CUDA
   if (enable_cuda_) {
-    return getRaycastHitVoxelsWithScreenCoordinatesCuda(viewpoint, x_start, x_end, y_start, y_end, remove_duplicates);
+    return getRaycastHitVoxelsWithScreenCoordinatesCuda(viewpoint, x_start, x_end, y_start, y_end,
+                                                        remove_duplicates, fail_on_error);
   }
   else {
-    return getRaycastHitVoxelsWithScreenCoordinatesCpu(viewpoint, x_start, x_end, y_start, y_end, remove_duplicates);
+    return getRaycastHitVoxelsWithScreenCoordinatesCpu(viewpoint, x_start, x_end, y_start, y_end,
+                                                       remove_duplicates, fail_on_error);
   }
 #else
   return getRaycastHitVoxelsWithScreenCoordinatesCpu(viewpoint, x_start, x_end, y_start, y_end, remove_duplicates);
@@ -106,7 +116,8 @@ std::vector<OccupiedTreeType::IntersectionResult> ViewpointRaycast::getRaycastHi
         const Viewpoint &viewpoint,
         const std::size_t x_start, const std::size_t x_end,
         const std::size_t y_start, const std::size_t y_end,
-        const bool remove_duplicates) const {
+        const bool remove_duplicates,
+        const bool fail_on_error /*= true*/) const {
   const std::size_t width = x_end - x_start;
   const std::size_t height = y_end - y_start;
   std::vector<OccupiedTreeType::IntersectionResult> raycast_results;
@@ -157,7 +168,8 @@ ViewpointRaycast::getRaycastHitVoxelsWithScreenCoordinatesCpu(
         const Viewpoint &viewpoint,
         const std::size_t x_start, const std::size_t x_end,
         const std::size_t y_start, const std::size_t y_end,
-        const bool remove_duplicates) const {
+        const bool remove_duplicates,
+        const bool fail_on_error /*= true*/) const {
   const std::size_t width = x_end - x_start;
   const std::size_t height = y_end - y_start;
   std::vector<OccupiedTreeType::IntersectionResultWithScreenCoordinates> raycast_results;
@@ -213,7 +225,8 @@ ViewpointRaycast::getRaycastHitVoxelsCuda(
         const Viewpoint &viewpoint,
         const std::size_t x_start, const std::size_t x_end,
         const std::size_t y_start, const std::size_t y_end,
-        const bool remove_duplicates) const {
+        const bool remove_duplicates,
+        const bool fail_on_error /*= true*/) const {
   ait::Timer timer;
 
   // Perform raycast
@@ -224,7 +237,8 @@ ViewpointRaycast::getRaycastHitVoxelsCuda(
                   viewpoint.pose().getTransformationImageToWorld(),
                   x_start, x_end,
                   y_start, y_end,
-                  min_range_, max_range_);
+                  min_range_, max_range_,
+                  fail_on_error);
   if (remove_duplicates) {
     removeDuplicateRaycastHitVoxels(&raycast_results);
   }
@@ -242,11 +256,11 @@ ViewpointRaycast::getRaycastHitVoxelsWithScreenCoordinatesCuda(
         const Viewpoint &viewpoint,
         const std::size_t x_start, const std::size_t x_end,
         const std::size_t y_start, const std::size_t y_end,
-        const bool remove_duplicates) const {
+        const bool remove_duplicates,
+        const bool fail_on_error /*= true*/) const {
   ait::Timer timer;
 
   // Perform raycast
-  const bool fail_on_error = true;
   using ResultType = OccupiedTreeType::IntersectionResultWithScreenCoordinates;
   std::vector<ResultType> raycast_results =
           bvh_tree_->raycastWithScreenCoordinatesCuda(
