@@ -13,6 +13,7 @@
 
 #include <bh/eigen.h>
 #include <bh/vision/cameras.h>
+#include <bh/string_utils.h>
 #include "../reconstruction/dense_reconstruction.h"
 
 #include <opencv2/core.hpp>
@@ -51,6 +52,7 @@ std::pair<bool, boost::program_options::variables_map> process_commandline(int a
       ("dense", po::bool_switch()->default_value(true), "Make a dense tree by inserting unknown nodes")
       ("no-display", po::bool_switch()->default_value(false), "Do not show depth maps")
       ("set-all-unknown", po::bool_switch()->default_value(false), "Set all occupied voxels to unknown voxels")
+      ("colmap-fusion-file", po::value<string>(), "Colmap MVS fusion.cfg file to specify which depth maps to use")
       ;
 
     po::options_description options;
@@ -105,18 +107,55 @@ int main(int argc, char** argv) {
 
   FloatType max_range = vm["max-range"].as<FloatType>();
 
-  std::size_t num_frames_to_extract = reconstruction.getImages().size();
-  if (vm.count("num-frames") > 0) {
-    num_frames_to_extract = std::min(num_frames_to_extract, vm["num-frames"].as<std::size_t>());
+  std::vector<reconstruction::ImageId> images_to_integrate;
+  if (vm.count("colmap-fusion-file") > 0) {
+    const string fusion_filename = vm["colmap-fusion-file"].as<string>();
+    std::ifstream fusion_file(fusion_filename);
+    BH_ASSERT(fusion_file);
+    string line;
+    while (std::getline(fusion_file, line)) {
+      bh::trim(line);
+
+      if (line.empty() || line[0] == '#') {
+        continue;
+      }
+
+      const string image_name = line;
+      const auto it = std::find_if(
+              reconstruction.getImages().begin(),
+              reconstruction.getImages().end(),
+              [&image_name](const std::pair<reconstruction::ImageId, reconstruction::ImageColmap>& entry) {
+                return entry.second.name() == image_name;
+              });
+      BH_ASSERT(it != reconstruction.getImages().end());
+      const reconstruction::ImageId image_id = it->first;
+      std::cout << "Using image " << image_name << " (" << image_id << ")" << std::endl;
+      images_to_integrate.push_back(image_id);
+    }
   }
-  std::cout << "Total number of frames to integrate: " << num_frames_to_extract << std::endl;
-  auto it = reconstruction.getImages().cbegin();
-  for (std::size_t i = 0; i < num_frames_to_extract; ++i, ++it) {
-    const reconstruction::ImageId image_id = it->first;
-    const reconstruction::ImageColmap& image = it->second;
+  else {
+      std::transform(reconstruction.getImages().begin(), reconstruction.getImages().end(),
+                     std::back_inserter(images_to_integrate),
+                     [&](const std::pair<reconstruction::ImageId, reconstruction::ImageColmap>& entry) {
+                       return entry.first;
+                     });
+      std::sort(images_to_integrate.begin(), images_to_integrate.end());
+  }
+
+  if (vm.count("num-frames") > 0) {
+    const size_t num_frames_to_integrate = std::min(images_to_integrate.size(), vm["num-frames"].as<std::size_t>());
+    images_to_integrate.resize(num_frames_to_integrate);
+  }
+  std::cout << "Total number of frames to integrate: " << images_to_integrate.size() << std::endl;
+
+  for (auto it = images_to_integrate.begin(); it != images_to_integrate.end(); ++it) {
+    const reconstruction::ImageId image_id = *it;
+    const reconstruction::ImageColmap& image = reconstruction.getImages().at(image_id);
     const reconstruction::PinholeCameraColmap& camera = reconstruction.getCameras().at(image.camera_id());
 
-    cout << "Integrating frame " << (i+1) << " of " << reconstruction.getImages().size() << endl;
+    cout << "Integrating frame " << (it - images_to_integrate.begin() + 1) << " of " << images_to_integrate.size()
+         << " (image ID " << image_id << ")" << endl;
+
     DenseReconstruction::DepthMap depth_map =
         reconstruction.readDepthMap(image_id, DenseReconstruction::DenseMapType::GEOMETRIC_FUSED);
 
