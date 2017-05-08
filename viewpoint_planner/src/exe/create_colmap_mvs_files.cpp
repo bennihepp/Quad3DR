@@ -156,6 +156,7 @@ public:
       addOptionRequired<string>("drone_reconstruction_file", &drone_reconstruction_file);
       addOption<string>("output_path", &output_path);
       addOption<bool>("use_patch_match_auto", &use_patch_match_auto);
+      addOption<bool>("patch_match_all", &patch_match_all);
       addOption<size_t>("patch_match_neighbor_overlap", &patch_match_neighbor_overlap);
       addOption<string>("patch_match_auto_config", &patch_match_auto_config);
       addOption<bool>("fuse_neighbor_images", &fuse_neighbor_images);
@@ -168,6 +169,7 @@ public:
     string drone_reconstruction_file;
     string output_path = "colmap_mvs";
     bool use_patch_match_auto = false;
+    bool patch_match_all = false;
     size_t patch_match_neighbor_overlap = 5;
     string patch_match_auto_config = "__auto__, 5";
     bool fuse_neighbor_images = true;
@@ -186,22 +188,31 @@ public:
   ~CreateColmapMVSFiles() {
   }
 
-
-  std::vector<std::pair<string, std::time_t>> getImageFilenamesAndTimestamps() const {
+  std::vector<std::pair<string, std::time_t>> getImageFilenamesAndTimestamps(const std::string& path) const {
     std::vector<std::pair<string, std::time_t>> images;
-    boostfs::path images_path(options_.images_path);
+    boostfs::path images_path(path);
     try {
       if (!boostfs::exists(images_path)) {
         throw bh::Error("Path to images does not exist");
       }
       if (!boostfs::is_directory(images_path)) {
         throw bh::Error("Path to images is not a directory");
-      }
+      };
       for (auto it = boostfs::directory_iterator(images_path); it != boostfs::directory_iterator(); ++it) {
         if (boostfs::is_regular_file(it->status())) {
           const string filename = bh::pathRelativeTo(images_path, it->path()).string();
           const std::time_t timestamp = boost::filesystem::last_write_time(it->path());
           images.push_back(std::make_pair(filename, timestamp));
+        }
+        else if (boostfs::is_directory(it->status())) {
+          const std::vector<std::pair<string, std::time_t>> sub_images = getImageFilenamesAndTimestamps(it->path().string());
+          for (const std::pair<string, std::time_t>& entry : sub_images) {
+            BH_PRINT_VALUE(it->path().string());
+            BH_PRINT_VALUE(images_path.string());
+            const boost::filesystem::path relative_path = bh::pathRelativeTo(images_path, it->path(), false);
+            const std::string merged_path = (relative_path/ entry.first).string();
+            images.push_back(std::make_pair(merged_path, entry.second));
+          }
         }
       }
     }
@@ -213,6 +224,10 @@ public:
                 return a.second < b.second;
               });
     return images;
+  }
+
+  std::vector<std::pair<string, std::time_t>> getImageFilenamesAndTimestamps() const {
+    return getImageFilenamesAndTimestamps(options_.images_path);
   }
 
   // TODO: Extract to separate file
@@ -244,9 +259,12 @@ public:
 
   std::vector<std::tuple<ImageId, FloatType, bool>> readDroneReconstructionFile() const {
     std::vector<std::tuple<ImageId, FloatType, bool>> entries;
+    if (options_.drone_reconstruction_file.empty()) {
+      return entries;
+    }
     std::ifstream ifs(options_.drone_reconstruction_file);
     if (!ifs) {
-      throw bh::Error(string("Unable to open image prior file: " ) + options_.drone_reconstruction_file);
+      throw bh::Error(string("Unable to open drone reconstruction file: " ) + options_.drone_reconstruction_file);
     }
     while (ifs) {
       std::string line;
@@ -451,30 +469,70 @@ public:
 //    }
 
     std::vector<size_t> best_image_matches;
-    size_t image_match_index_lower_bound = 0;
-    for (size_t i = 0; i < drone_entries.size(); ++i) {
-      const bool mvs_viewpoint = std::get<2>(drone_entries[i]);
-      if (!mvs_viewpoint) {
-        best_image_matches.push_back((size_t)-1);
-        continue;
-      }
-      best_image_matches.push_back(std::min(i, images.size() - 1));
-    }
-
     std::vector<size_t> matched_drone_entry_indices;
     size_t matched_mvs_images = 0;
-    for (size_t i = 0; i < best_image_matches.size(); ++i) {
-      const size_t image_index = best_image_matches[i];
-      if (image_index == (size_t)-1) {
-        continue;
+    std::unordered_set<size_t> mvs_image_indices_set;
+
+    if (drone_entries.empty()) {
+      for (size_t i = 0; i < images.size(); ++i) {
+        const bool mvs_viewpoint = true;
+        best_image_matches.push_back(i);
       }
-      const FloatType image_seconds = images_seconds[image_index];
-      const FloatType record_seconds = std::get<1>(drone_entries[i]);
-      const FloatType dt = image_seconds - record_seconds;
-      std::cout << "Image " << image_index << " matched to entry " << i << " (dt=" << dt << ")" << std::endl;
-      matched_drone_entry_indices.push_back(i);
-      if (std::get<2>(drone_entries[i])) {
+
+      size_t matched_mvs_images = 0;
+      for (size_t i = 0; i < best_image_matches.size(); ++i) {
+        const size_t image_index = best_image_matches[i];
+        if (image_index == (size_t) -1) {
+          continue;
+        }
+        const FloatType image_seconds = images_seconds[image_index];
+        std::cout << "Image " << image_index << " matched to entry " << i << std::endl;
+        matched_drone_entry_indices.push_back(i);
         ++matched_mvs_images;
+      }
+
+      for (size_t i = 0; i < best_image_matches.size(); ++i) {
+        mvs_image_indices_set.emplace(i);
+      }
+      ++matched_mvs_images;
+    }
+    else {
+      size_t image_match_index_lower_bound = 0;
+      for (size_t i = 0; i < drone_entries.size(); ++i) {
+        const bool mvs_viewpoint = std::get<2>(drone_entries[i]);
+        if (!mvs_viewpoint) {
+          best_image_matches.push_back((size_t) -1);
+          continue;
+        }
+        best_image_matches.push_back(std::min(i, images.size() - 1));
+      }
+
+      for (size_t i = 0; i < best_image_matches.size(); ++i) {
+        const size_t image_index = best_image_matches[i];
+        if (image_index == (size_t) -1) {
+          continue;
+        }
+        const FloatType image_seconds = images_seconds[image_index];
+        const FloatType record_seconds = std::get<1>(drone_entries[i]);
+        const FloatType dt = image_seconds - record_seconds;
+        std::cout << "Image " << image_index << " matched to entry " << i << " (dt=" << dt << ")" << std::endl;
+        matched_drone_entry_indices.push_back(i);
+        if (std::get<2>(drone_entries[i])) {
+          ++matched_mvs_images;
+        }
+      }
+
+      for (size_t i = 0; i < matched_drone_entry_indices.size(); ++i) {
+        const size_t drone_entry_index = matched_drone_entry_indices[i];
+        const size_t image_index = best_image_matches[drone_entry_index];
+        const size_t entry_index = viewpoint_path.order[drone_entry_index];
+        const bool mvs_viewpoint = viewpoint_path.entries[entry_index].mvs_viewpoint;
+        if (!drone_entries.empty()) {
+          BH_ASSERT(std::get<2>(drone_entries[drone_entry_index]) == mvs_viewpoint);
+        }
+        if (mvs_viewpoint) {
+          mvs_image_indices_set.emplace(image_index);
+        }
       }
     }
     std::cout << "Matched " << matched_drone_entry_indices.size() << " images" << std::endl;
@@ -485,27 +543,24 @@ public:
     }
     BH_ASSERT(boostfs::is_directory(options_.output_path));
 
-    std::unordered_set<size_t> mvs_image_indices_set;
-    for (size_t i = 0; i < matched_drone_entry_indices.size(); ++i) {
-      const size_t drone_entry_index = matched_drone_entry_indices[i];
-      const size_t image_index = best_image_matches[drone_entry_index];
-      const size_t entry_index = viewpoint_path.order[drone_entry_index];
-      const bool mvs_viewpoint = viewpoint_path.entries[entry_index].mvs_viewpoint;
-      BH_ASSERT(std::get<2>(drone_entries[drone_entry_index]) == mvs_viewpoint);
-      if (mvs_viewpoint) {
-        mvs_image_indices_set.emplace(image_index);
-      }
-    }
-
     {
+      std::vector<size_t> images_processed;
 //      std::unordered_set<size_t> all_neighbor_image_indices;
       std::ofstream ofs_photometric(bh::joinPaths(options_.output_path, "patch-match-photometric.cfg"));
       std::ofstream ofs_geometric(bh::joinPaths(options_.output_path, "patch-match-geometric.cfg"));
       for (size_t i = 0; i < matched_drone_entry_indices.size(); ++i) {
-        const size_t drone_entry_index = matched_drone_entry_indices[i];
-        const size_t image_index = best_image_matches[drone_entry_index];
-        const size_t entry_index = viewpoint_path.order[drone_entry_index];
-        const bool mvs_viewpoint = viewpoint_path.entries[entry_index].mvs_viewpoint;
+        size_t image_index;
+        bool mvs_viewpoint;
+        if (drone_entries.empty()) {
+          image_index = i;
+          mvs_viewpoint = true;
+        }
+        else {
+          const size_t drone_entry_index = matched_drone_entry_indices[i];
+          image_index = best_image_matches[drone_entry_index];
+          const size_t entry_index = viewpoint_path.order[drone_entry_index];
+          mvs_viewpoint = viewpoint_path.entries[entry_index].mvs_viewpoint;
+        }
         if (mvs_viewpoint) {
           if (options_.use_patch_match_auto) {
             ofs_photometric << images[image_index].first << std::endl;
@@ -515,53 +570,67 @@ public:
           }
           else {
             std::vector<size_t> neighbor_image_indices;
-            neighbor_image_indices.push_back(image_index);
-            for (int j = 1; j < options_.patch_match_neighbor_overlap; ++j) {
-              int neighbor_image_index = ((int)image_index) - j;
-              if (neighbor_image_index < 0) {
-                neighbor_image_index += images.size();
-              }
-              if (neighbor_image_index != image_index) {
-                neighbor_image_indices.push_back(neighbor_image_index);
+            if (options_.patch_match_all) {
+              for (int j = 0; j < images.size(); ++j) {
+                neighbor_image_indices.push_back(j);
               }
             }
-            for (int j = 1; j < options_.patch_match_neighbor_overlap; ++j) {
-              int neighbor_image_index = ((int)image_index) + j;
-              if (neighbor_image_index >= images.size()) {
-                neighbor_image_index -= images.size();
+            else {
+              neighbor_image_indices.push_back(image_index);
+              for (int j = 1; j < options_.patch_match_neighbor_overlap; ++j) {
+                int neighbor_image_index = ((int)image_index) - j;
+                if (neighbor_image_index < 0) {
+                  neighbor_image_index += images.size();
+                }
+                if (neighbor_image_index != image_index) {
+                  neighbor_image_indices.push_back(neighbor_image_index);
+                }
               }
-              if (neighbor_image_index != image_index) {
-                neighbor_image_indices.push_back(neighbor_image_index);
+              for (int j = 1; j < options_.patch_match_neighbor_overlap; ++j) {
+                int neighbor_image_index = ((int)image_index) + j;
+                if (neighbor_image_index >= images.size()) {
+                  neighbor_image_index -= images.size();
+                }
+                if (neighbor_image_index != image_index) {
+                  neighbor_image_indices.push_back(neighbor_image_index);
+                }
               }
             }
             for (size_t j = 0; j < neighbor_image_indices.size(); ++j) {
               const size_t neighbor_image_index = neighbor_image_indices[j];
+              if (std::find(images_processed.begin(), images_processed.end(), neighbor_image_index) != images_processed.end()) {
+                continue;
+              }
+              images_processed.push_back(neighbor_image_index);
               ofs_photometric << images[neighbor_image_index].first << std::endl;
               if (neighbor_image_index == image_index || options_.fuse_neighbor_images) {
                 ofs_geometric << images[neighbor_image_index].first << std::endl;
               }
+              size_t print_count = 0;
               for (size_t k = 0; k < neighbor_image_indices.size(); ++k) {
-                if (j == k) {
+                const size_t neighbor_image_index_k = neighbor_image_indices[k];
+                if (neighbor_image_index_k == neighbor_image_index) {
                   continue;
                 }
-                if (j > 0) {
+                if (print_count > 0) {
                   ofs_photometric << ", ";
-                  if (neighbor_image_index == image_index || options_.fuse_neighbor_images) {
+                  if (neighbor_image_index_k == image_index || options_.fuse_neighbor_images) {
                     ofs_geometric << ", ";
                   }
                 }
-                const string neighbor_image_filename = images[neighbor_image_index].first;
+                const string neighbor_image_filename = images[neighbor_image_index_k].first;
                 ofs_photometric << neighbor_image_filename;
-                if (neighbor_image_index == image_index || options_.fuse_neighbor_images) {
+                if (neighbor_image_index_k == image_index || options_.fuse_neighbor_images) {
                   ofs_geometric << neighbor_image_filename;
                 }
+                ++print_count;
               }
+              ofs_photometric << std::endl;
               if (neighbor_image_index == image_index || options_.fuse_neighbor_images) {
                 ofs_geometric << std::endl;
               }
 //              all_neighbor_image_indices.emplace(neighbor_image_index);
             }
-            ofs_photometric << std::endl;
 //            const size_t order_index = drone_entry_index;
 //            const std::vector<size_t> mvs_neighbor_indices
 //                    = getMVSNeighborIndices(viewpoint_path, order_index, options_.patch_match_neighbor_overlap);
@@ -591,11 +660,19 @@ public:
     {
       std::ofstream ofs(bh::joinPaths(options_.output_path, "fusion.cfg"));
       for (size_t i = 0; i < matched_drone_entry_indices.size(); ++i) {
-        const size_t drone_entry_index = matched_drone_entry_indices[i];
-        const size_t image_index = best_image_matches[drone_entry_index];
-        const size_t entry_index = viewpoint_path.order[drone_entry_index];
-        const bool mvs_viewpoint = viewpoint_path.entries[entry_index].mvs_viewpoint;
-        BH_ASSERT(std::get<2>(drone_entries[drone_entry_index]) == mvs_viewpoint);
+        size_t image_index;
+        bool mvs_viewpoint;
+        if (drone_entries.empty()) {
+          image_index = i;
+          mvs_viewpoint = true;
+        }
+        else {
+          const size_t drone_entry_index = matched_drone_entry_indices[i];
+          image_index = best_image_matches[drone_entry_index];
+          const size_t entry_index = viewpoint_path.order[drone_entry_index];
+          mvs_viewpoint = viewpoint_path.entries[entry_index].mvs_viewpoint;
+          BH_ASSERT(std::get<2>(drone_entries[drone_entry_index]) == mvs_viewpoint);
+        }
         if (mvs_viewpoint) {
           ofs << images[image_index].first << std::endl;
           mvs_image_indices_set.emplace(image_index);
