@@ -19,6 +19,7 @@
 #include <bh/eigen.h>
 #include <bh/utilities.h>
 #include <bh/math/utilities.h>
+#include <bh/math/histogram.h>
 #include <bh/config_options.h>
 #include <bh/eigen_options.h>
 #include <bh/math/geometry.h>
@@ -26,8 +27,6 @@
 #include <bh/nn/approximate_nearest_neighbor.h>
 
 #include <bh/mLib/mLib.h>
-
-#pragma GCC optimize("O0")
 
 using std::cout;
 using std::cerr;
@@ -105,8 +104,20 @@ public:
   };
 
   std::tuple<MeshDataType, MeshDataType> evaluate(const MeshDataType& gt_mesh, const PointCloudType& input_point_cloud) const {
-    const size_t min_num_correspondences_for_coverage = 1;
-    const FloatType dist_square_truncation = options_.dist_truncation * options_.dist_truncation;
+    std::vector<FloatType> triangle_areas;
+    triangle_areas.reserve(gt_mesh.m_FaceIndicesVertices.size());
+#pragma omp parallel for
+    for (std::size_t i = 0; i < gt_mesh.m_FaceIndicesVertices.size(); ++i) {
+      const MeshDataType::Indices::Face &face = gt_mesh.m_FaceIndicesVertices[i];
+      BH_ASSERT_STR(face.size() == 3, "Mesh faces need to have a valence of 3");
+
+      Triangle tri(
+              bh::MLibUtilities::convertMlibToEigen(gt_mesh.m_Vertices[face[0]]),
+              bh::MLibUtilities::convertMlibToEigen(gt_mesh.m_Vertices[face[1]]),
+              bh::MLibUtilities::convertMlibToEigen(gt_mesh.m_Vertices[face[2]]));
+      const FloatType area = std::sqrt(tri.computeTriangleAreaSquare());
+      triangle_areas.push_back(area);
+    }
 
     std::vector<Vector3> eigen_point_cloud;
     eigen_point_cloud.reserve(input_point_cloud.m_points.size());
@@ -152,9 +163,13 @@ public:
 
 //    point_cloud_ann.
 
+    const FloatType max_correspondence_dist = options_.max_correspondence_distance;
+    const size_t max_results = options_.max_radius_search_results;
+
     std::vector<size_t> num_correspondences(gt_mesh.m_FaceIndicesVertices.size(), 0);
     std::vector<FloatType> dist_square_closest_point(gt_mesh.m_FaceIndicesVertices.size(), std::numeric_limits<FloatType>::max());
     std::vector<Vector3> closest_point(gt_mesh.m_FaceIndicesVertices.size());
+#pragma omp parallel for
     for (std::size_t i = 0; i < gt_mesh.m_FaceIndicesVertices.size(); ++i) {
 //      if (i != 9012) {
 //        continue;
@@ -175,8 +190,6 @@ public:
 
 //      const FloatType radius = std::max(max_length, options_.max_correspondence_distance);
 //      const FloatType radius_square = radius * radius;
-      const FloatType max_correspondence_dist = options_.max_correspondence_distance;
-      const size_t max_results = options_.max_radius_search_results;
       std::vector<size_t> indices;
       std::vector<FloatType> distances;
 //      point_cloud_ann.radiusSearch(center, radius_square, max_results, &indices, &distances);
@@ -197,25 +210,28 @@ public:
         const bool projects_onto_triangle = tri.doesPointProjectOntoTriangle(point);
         if (projects_onto_triangle) {
           const FloatType distance_to_triangle = tri.distanceToSurface(point);
+          const FloatType distance_to_triangle_square = distance_to_triangle * distance_to_triangle;
+          if (distance_to_triangle_square <= dist_square_closest_point[i]) {
+            dist_square_closest_point[i] = distance_to_triangle_square;
+            closest_point[i] = point;
+          }
           if (std::abs(distance_to_triangle) <= max_correspondence_dist) {
             ++num_correspondences[i];
-            const FloatType distance_to_triangle_square = distance_to_triangle * distance_to_triangle;
-            if (distance_to_triangle_square <= dist_square_closest_point[i]) {
-              dist_square_closest_point[i] = distance_to_triangle_square;
-              closest_point[i] = point;
-            }
           }
         }
       }
     }
 
-    const FloatType sum_dist_square = std::accumulate(dist_square_closest_point.begin(), dist_square_closest_point.end(), FloatType(0),
+    const size_t min_num_correspondences_for_coverage = 1;
+    const FloatType dist_square_truncation = options_.dist_truncation * options_.dist_truncation;
+
+    const FloatType sum_trunc_dist_square = std::accumulate(dist_square_closest_point.begin(), dist_square_closest_point.end(), FloatType(0),
                                                     [&] (const FloatType value, const FloatType dist_square) {
       const FloatType dist_square_truncated = std::min(dist_square, dist_square_truncation);
       return value + dist_square_truncated;
     });
-    const FloatType average_dist_square = sum_dist_square / dist_square_closest_point.size();
-    cout << "average_dist_square = " << average_dist_square << endl;
+    const FloatType average_trunc_dist_square = sum_trunc_dist_square / dist_square_closest_point.size();
+    cout << "average_trunc_dist_square = " << average_trunc_dist_square << endl;
 
     const size_t num_covered_triangles = std::count_if(num_correspondences.begin(), num_correspondences.end(),
                                                        [&] (const size_t num_correspondence) {
@@ -225,11 +241,47 @@ public:
     cout << "coverage_ratio = " << coverage_ratio << endl;
 
     // TODO: Compute covered area
-//    const FloatType coverage_area_ratio = covered_area / FloatType(total_area);
+    FloatType covered_area= 0;
+    FloatType total_area = 0;
+    for (size_t i = 0; i < triangle_areas.size(); ++i) {
+      if (num_correspondences[i] >= min_num_correspondences_for_coverage) {
+        covered_area += triangle_areas[i];
+      }
+      total_area += triangle_areas[i];
+    }
+    const FloatType coverage_area_ratio = covered_area / FloatType(total_area);
+    cout << "coverage_area_ratio = " << coverage_area_ratio << endl;
 
+    // Compute histogram of truncated squared distances
+//    std::vector<FloatType> dist_square_trunc_closest_point;
+//    std::transform(dist_square_closest_point.begin(), dist_square_closest_point.end(),
+//                   std::back_inserter(dist_square_trunc_closest_point),
+//                   [&](const FloatType dist_square) {
+//                     return std::min(dist_square, dist_square_truncation);
+//                   });
     const size_t num_bins = 10;
-    const std::vector<FloatType> histogram_bins(num_bins);
-    // TODO
+    std::vector<FloatType> histogram_bins;
+    for (size_t i = 0; i < num_bins; ++i) {
+      const FloatType factor = i / FloatType(num_bins);
+      histogram_bins.push_back(factor * dist_square_truncation);
+    }
+    const std::vector<size_t> histogram = bh::computeHistogram(
+            dist_square_closest_point.begin(), dist_square_closest_point.end(),
+            histogram_bins.begin(), histogram_bins.end());
+    cout << "Histogram of distances:" << endl;
+    for (size_t i = 0; i < histogram_bins.size(); ++i) {
+      const FloatType bin_low = std::sqrt(histogram_bins[i]);
+      FloatType bin_high;
+      if (i + 1< histogram_bins.size()) {
+        bin_high = std::sqrt(histogram_bins[i + 1]);
+      }
+      else {
+        bin_high = std::numeric_limits<FloatType>::infinity();
+      }
+      const size_t count = histogram[i];
+      const FloatType relative_count = count / (FloatType)dist_square_closest_point.size();
+      cout << "  Bin [" << bin_low << ", " << bin_high << "): " << relative_count << endl;
+    }
 
     // Copy mesh and add different colors for covered and non-covered triangles
     MeshDataType negative_output_mesh;
@@ -248,8 +300,8 @@ public:
     for (size_t i = 0; i < gt_mesh.m_Vertices.size(); ++i) {
       negative_output_mesh.m_Vertices.push_back(gt_mesh.m_Vertices[i]);
       positive_output_mesh.m_Vertices.push_back(gt_mesh.m_Vertices[i]);
-      negative_output_mesh.m_Colors.push_back(ml::vec4<FloatType>(1, 0, 0, 1));
-      positive_output_mesh.m_Colors.push_back(ml::vec4<FloatType>(0, 1, 0, 1));
+      negative_output_mesh.m_Colors.push_back(ml::vec4<FloatType>(0.8, 0, 0, 1));
+      positive_output_mesh.m_Colors.push_back(ml::vec4<FloatType>(0, 0.8, 0, 1));
     }
     return std::make_tuple(std::move(negative_output_mesh), std::move(positive_output_mesh));
   }
